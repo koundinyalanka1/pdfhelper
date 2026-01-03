@@ -502,23 +502,11 @@ class _CropScreen extends StatefulWidget {
 class _CropScreenState extends State<_CropScreen> {
   final CropController _cropController = CropController();
   bool _isCropping = false;
-  bool _isImageLoading = true;
   double? _aspectRatio;
 
   void _onCrop() {
     setState(() => _isCropping = true);
     _cropController.crop();
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    // Give the widget time to render
-    Future.delayed(const Duration(milliseconds: 100), () {
-      if (mounted) {
-        setState(() => _isImageLoading = false);
-      }
-    });
   }
 
   @override
@@ -564,36 +552,34 @@ class _CropScreenState extends State<_CropScreen> {
           children: [
             // Crop area
             Expanded(
-              child: Container(
-                margin: const EdgeInsets.all(16),
-                color: const Color(0xFF16213E),
-                child: _isImageLoading
-                    ? const Center(
-                        child: CircularProgressIndicator(
-                          color: Color(0xFF00D9FF),
-                        ),
-                      )
-                    : Crop(
-                        image: widget.imageBytes,
-                        controller: _cropController,
-                        aspectRatio: _aspectRatio,
-                        baseColor: const Color(0xFF16213E),
-                        maskColor: Colors.black.withValues(alpha: 0.7),
-                        initialSize: 0.9,
-                        cornerDotBuilder: (size, edgeAlignment) => Container(
-                          width: size,
-                          height: size,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF00D9FF),
-                            borderRadius: BorderRadius.circular(size / 2),
-                            border: Border.all(color: Colors.white, width: 2),
-                          ),
-                        ),
-                        onCropped: (croppedImage) {
-                          setState(() => _isCropping = false);
-                          Navigator.pop(context, croppedImage);
-                        },
-                      ),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Crop(
+                  image: widget.imageBytes,
+                  controller: _cropController,
+                  aspectRatio: _aspectRatio,
+                  baseColor: Colors.black,
+                  maskColor: Colors.black.withValues(alpha: 0.7),
+                  initialSize: 0.9,
+                  onStatusChanged: (status) {
+                    if (status == CropStatus.cropping) {
+                      setState(() => _isCropping = true);
+                    }
+                  },
+                  cornerDotBuilder: (size, edgeAlignment) => Container(
+                    width: size,
+                    height: size,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF00D9FF),
+                      borderRadius: BorderRadius.circular(size / 2),
+                      border: Border.all(color: Colors.white, width: 2),
+                    ),
+                  ),
+                  onCropped: (croppedImage) {
+                    setState(() => _isCropping = false);
+                    Navigator.pop(context, croppedImage);
+                  },
+                ),
               ),
             ),
 

@@ -3,6 +3,8 @@ import 'merge_pdf_screen.dart';
 import 'convert_screen.dart';
 import 'split_pdf_screen.dart';
 import 'settings_screen.dart';
+import '../main.dart';
+import '../providers/theme_provider.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -21,6 +23,9 @@ class _HomeScreenState extends State<HomeScreen> {
     const SettingsScreen(),
   ];
 
+  bool get _isDarkMode => PDFHelperApp.of(context)?.themeProvider.isDarkMode ?? true;
+  AppColors get _colors => AppColors(_isDarkMode);
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -30,10 +35,10 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
-          color: const Color(0xFF16213E),
+          color: _colors.bottomNavBackground,
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.3),
+              color: _colors.shadowColor,
               blurRadius: 20,
               offset: const Offset(0, -5),
             ),
@@ -60,6 +65,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildNavItem(int index, IconData icon, String label) {
     final isSelected = _currentIndex == index;
     final Color activeColor = _getActiveColor(index);
+    final Color inactiveColor = _isDarkMode ? Colors.white54 : Colors.black45;
 
     return GestureDetector(
       onTap: () {
@@ -80,14 +86,14 @@ class _HomeScreenState extends State<HomeScreen> {
           children: [
             Icon(
               icon,
-              color: isSelected ? activeColor : Colors.white54,
+              color: isSelected ? activeColor : inactiveColor,
               size: 26,
             ),
             const SizedBox(height: 4),
             Text(
               label,
               style: TextStyle(
-                color: isSelected ? activeColor : Colors.white54,
+                color: isSelected ? activeColor : inactiveColor,
                 fontSize: 12,
                 fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
               ),

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'screens/splash_screen.dart';
+import 'providers/theme_provider.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -15,27 +16,47 @@ void main() {
   runApp(const PDFHelperApp());
 }
 
-class PDFHelperApp extends StatelessWidget {
+class PDFHelperApp extends StatefulWidget {
   const PDFHelperApp({super.key});
+
+  // Static method to access state from anywhere
+  static _PDFHelperAppState? of(BuildContext context) {
+    return context.findAncestorStateOfType<_PDFHelperAppState>();
+  }
+
+  @override
+  State<PDFHelperApp> createState() => _PDFHelperAppState();
+}
+
+class _PDFHelperAppState extends State<PDFHelperApp> {
+  final ThemeProvider _themeProvider = ThemeProvider();
+
+  ThemeProvider get themeProvider => _themeProvider;
+
+  @override
+  void initState() {
+    super.initState();
+    _themeProvider.addListener(_onThemeChanged);
+  }
+
+  @override
+  void dispose() {
+    _themeProvider.removeListener(_onThemeChanged);
+    super.dispose();
+  }
+
+  void _onThemeChanged() {
+    setState(() {});
+  }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'PDF Helper',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFFE94560),
-          brightness: Brightness.dark,
-        ),
-        scaffoldBackgroundColor: const Color(0xFF1A1A2E),
-        appBarTheme: const AppBarTheme(
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          centerTitle: true,
-        ),
-      ),
+      theme: _themeProvider.lightTheme,
+      darkTheme: _themeProvider.darkTheme,
+      themeMode: _themeProvider.isDarkMode ? ThemeMode.dark : ThemeMode.light,
       home: const SplashScreen(),
     );
   }
