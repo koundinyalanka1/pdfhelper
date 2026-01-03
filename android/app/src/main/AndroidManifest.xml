@@ -42,12 +42,6 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
-        
-        <!-- Image Cropper Activity -->
-        <activity
-            android:name="com.yalantis.ucrop.UCropActivity"
-            android:screenOrientation="portrait"
-            android:theme="@style/ucrop_Theme"/>
             
         <!-- File Provider for sharing files -->
         <provider

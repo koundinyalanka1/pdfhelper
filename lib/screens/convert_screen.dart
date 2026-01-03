@@ -29,7 +29,6 @@ class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserv
   Offset? _focusPoint;
   bool _showFocusIndicator = false;
   Timer? _focusTimer;
-  bool _isFocusing = false;
 
   @override
   void initState() {
@@ -92,9 +91,12 @@ class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserv
   }
 
   Future<void> _onTapToFocus(TapUpDetails details, Size previewSize) async {
-    if (_cameraController == null || !_cameraController!.value.isInitialized || _isFocusing) {
+    if (_cameraController == null || !_cameraController!.value.isInitialized) {
       return;
     }
+
+    // Cancel any existing focus timer to allow immediate refocus
+    _focusTimer?.cancel();
 
     final Offset tapPosition = details.localPosition;
     
@@ -105,7 +107,6 @@ class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserv
     setState(() {
       _focusPoint = tapPosition;
       _showFocusIndicator = true;
-      _isFocusing = true;
     });
 
     try {
@@ -124,12 +125,10 @@ class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserv
     }
 
     // Hide focus indicator after delay
-    _focusTimer?.cancel();
-    _focusTimer = Timer(const Duration(milliseconds: 1200), () {
+    _focusTimer = Timer(const Duration(milliseconds: 1500), () {
       if (mounted) {
         setState(() {
           _showFocusIndicator = false;
-          _isFocusing = false;
         });
       }
     });

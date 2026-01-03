@@ -27,7 +27,7 @@ dependencies:
   
   # Image processing
   image: ^4.3.0
-  image_cropper: ^9.0.0
+  crop_your_image: ^1.1.0
   
   # Permissions
   permission_handler: ^11.3.1

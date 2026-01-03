@@ -3,7 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
-import 'package:image_cropper/image_cropper.dart';
+import 'package:crop_your_image/crop_your_image.dart';
 import 'package:path_provider/path_provider.dart';
 
 enum ScanFilter {
@@ -122,53 +122,22 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
   }
 
   Future<void> _cropImage() async {
-    try {
-      final croppedFile = await ImageCropper().cropImage(
-        sourcePath: _currentImagePath,
-        uiSettings: [
-          AndroidUiSettings(
-            toolbarTitle: 'Crop Document',
-            toolbarColor: const Color(0xFF16213E),
-            toolbarWidgetColor: Colors.white,
-            statusBarColor: const Color(0xFF16213E),
-            backgroundColor: Colors.black,
-            activeControlsWidgetColor: const Color(0xFF00D9FF),
-            cropFrameColor: const Color(0xFF00D9FF),
-            cropGridColor: Colors.white54,
-            initAspectRatio: CropAspectRatioPreset.original,
-            lockAspectRatio: false,
-            hideBottomControls: false,
-            dimmedLayerColor: Colors.black.withValues(alpha: 0.7),
-            showCropGrid: true,
-            aspectRatioPresets: [
-              CropAspectRatioPreset.original,
-              CropAspectRatioPreset.square,
-              CropAspectRatioPreset.ratio3x2,
-              CropAspectRatioPreset.ratio4x3,
-              CropAspectRatioPreset.ratio16x9,
-            ],
-          ),
-          IOSUiSettings(
-            title: 'Crop Document',
-            doneButtonTitle: 'Done',
-            cancelButtonTitle: 'Cancel',
-            aspectRatioPresets: [
-              CropAspectRatioPreset.original,
-              CropAspectRatioPreset.square,
-              CropAspectRatioPreset.ratio3x2,
-              CropAspectRatioPreset.ratio4x3,
-              CropAspectRatioPreset.ratio16x9,
-            ],
-          ),
-        ],
-      );
+    if (_originalImageBytes == null) return;
+    
+    final result = await Navigator.push<Uint8List>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => _CropScreen(imageBytes: _originalImageBytes!),
+      ),
+    );
 
-      if (croppedFile != null) {
+    if (result != null) {
+      try {
         // Save cropped image
         final Directory appDir = await getApplicationDocumentsDirectory();
         final String fileName = 'cropped_${DateTime.now().millisecondsSinceEpoch}.jpg';
         final String savedPath = '${appDir.path}/$fileName';
-        await File(croppedFile.path).copy(savedPath);
+        await File(savedPath).writeAsBytes(result);
 
         // Delete old file if different
         if (_currentImagePath != widget.imagePath) {
@@ -182,21 +151,20 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
         // Update state
         setState(() {
           _currentImagePath = savedPath;
+          _originalImageBytes = result;
+          _processedImageBytes = result;
           _selectedFilter = ScanFilter.original;
         });
-
-        // Reload the image
-        await _loadOriginalImage();
-      }
-    } catch (e) {
-      debugPrint('Error cropping image: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error cropping: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+      } catch (e) {
+        debugPrint('Error saving cropped image: $e');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Error cropping: $e'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
       }
     }
   }
@@ -510,6 +478,189 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Pure Flutter crop screen that respects all phone boundaries
+class _CropScreen extends StatefulWidget {
+  final Uint8List imageBytes;
+
+  const _CropScreen({required this.imageBytes});
+
+  @override
+  State<_CropScreen> createState() => _CropScreenState();
+}
+
+class _CropScreenState extends State<_CropScreen> {
+  final CropController _cropController = CropController();
+  bool _isCropping = false;
+  double? _aspectRatio;
+
+  void _onCrop() {
+    setState(() => _isCropping = true);
+    _cropController.crop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF16213E),
+        leading: IconButton(
+          icon: const Icon(Icons.close, color: Colors.white),
+          onPressed: () => Navigator.pop(context),
+        ),
+        title: const Text(
+          'Crop Document',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+        ),
+        centerTitle: true,
+        actions: [
+          TextButton(
+            onPressed: _isCropping ? null : _onCrop,
+            child: _isCropping
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      color: Color(0xFF00D9FF),
+                      strokeWidth: 2,
+                    ),
+                  )
+                : const Text(
+                    'Done',
+                    style: TextStyle(
+                      color: Color(0xFF00D9FF),
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: Column(
+          children: [
+            // Crop area
+            Expanded(
+              child: Container(
+                margin: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF16213E),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: Crop(
+                    image: widget.imageBytes,
+                    controller: _cropController,
+                    aspectRatio: _aspectRatio,
+                    baseColor: const Color(0xFF16213E),
+                    maskColor: Colors.black.withValues(alpha: 0.7),
+                    cornerDotBuilder: (size, edgeAlignment) => Container(
+                      width: size,
+                      height: size,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF00D9FF),
+                        borderRadius: BorderRadius.circular(size / 2),
+                        border: Border.all(color: Colors.white, width: 2),
+                      ),
+                    ),
+                    onCropped: (croppedImage) {
+                      setState(() => _isCropping = false);
+                      Navigator.pop(context, croppedImage);
+                    },
+                  ),
+                ),
+              ),
+            ),
+
+            // Aspect ratio controls
+            Container(
+              padding: const EdgeInsets.only(
+                top: 16,
+                bottom: 16,
+                left: 16,
+                right: 16,
+              ),
+              decoration: const BoxDecoration(
+                color: Color(0xFF16213E),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
+              ),
+              child: Column(
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 12),
+                    child: Text(
+                      'Aspect Ratio',
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        _buildAspectButton('Free', null),
+                        _buildAspectButton('1:1', 1.0),
+                        _buildAspectButton('4:3', 4 / 3),
+                        _buildAspectButton('3:2', 3 / 2),
+                        _buildAspectButton('16:9', 16 / 9),
+                        _buildAspectButton('A4', 210 / 297),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAspectButton(String label, double? ratio) {
+    final isSelected = _aspectRatio == ratio;
+
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          _aspectRatio = ratio;
+        });
+        if (ratio != null) {
+          _cropController.aspectRatio = ratio;
+        } else {
+          _cropController.aspectRatio = null;
+        }
+      },
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? const Color(0xFF00D9FF)
+              : Colors.white.withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isSelected ? const Color(0xFF00D9FF) : Colors.white24,
+            width: 1.5,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: isSelected ? Colors.white : Colors.white70,
+            fontSize: 13,
+            fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+          ),
         ),
       ),
     );
