@@ -22,6 +22,9 @@ dependencies:
   path_provider: ^2.1.5
   open_file: ^3.5.10
   
+  # Camera
+  camera: ^0.11.0+2
+  
   # Permissions
   permission_handler: ^11.3.1
   

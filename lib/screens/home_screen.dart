@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'merge_pdf_screen.dart';
-import 'image_to_pdf_screen.dart';
+import 'convert_screen.dart';
 import 'split_pdf_screen.dart';
 import 'settings_screen.dart';
 
@@ -16,7 +16,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   final List<Widget> _screens = [
     const MergePdfScreen(),
-    const ImageToPdfScreen(),
+    const ConvertScreen(),
     const SplitPdfScreen(),
     const SettingsScreen(),
   ];
@@ -41,12 +41,12 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         child: SafeArea(
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
                 _buildNavItem(0, Icons.merge_rounded, 'Merge'),
-                _buildNavItem(1, Icons.image_rounded, 'Image'),
+                _buildNavItem(1, Icons.camera_alt_rounded, 'Convert'),
                 _buildNavItem(2, Icons.content_cut_rounded, 'Split'),
                 _buildNavItem(3, Icons.settings_rounded, 'Settings'),
               ],
@@ -70,32 +70,28 @@ class _HomeScreenState extends State<HomeScreen> {
       behavior: HitTestBehavior.opaque,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
-        padding: EdgeInsets.symmetric(
-          horizontal: isSelected ? 20 : 15,
-          vertical: 10,
-        ),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: BoxDecoration(
           color: isSelected ? activeColor.withValues(alpha: 0.15) : Colors.transparent,
           borderRadius: BorderRadius.circular(15),
         ),
-        child: Row(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
             Icon(
               icon,
               color: isSelected ? activeColor : Colors.white54,
-              size: 24,
+              size: 26,
             ),
-            if (isSelected) ...[
-              const SizedBox(width: 8),
-              Text(
-                label,
-                style: TextStyle(
-                  color: activeColor,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                ),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: TextStyle(
+                color: isSelected ? activeColor : Colors.white54,
+                fontSize: 12,
+                fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
               ),
-            ],
+            ),
           ],
         ),
       ),
@@ -107,7 +103,7 @@ class _HomeScreenState extends State<HomeScreen> {
       case 0:
         return const Color(0xFFE94560); // Merge - Red/Pink
       case 1:
-        return const Color(0xFF00D9FF); // Image - Cyan
+        return const Color(0xFF00D9FF); // Convert - Cyan
       case 2:
         return const Color(0xFFFFC107); // Split - Amber
       case 3:
@@ -117,4 +113,3 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 }
-
