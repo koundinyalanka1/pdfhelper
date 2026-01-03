@@ -646,26 +646,6 @@ class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserv
               ),
             ),
 
-          // Document frame guide
-          if (_isCameraInitialized)
-            Positioned(
-              top: topPadding + 100,
-              left: 30,
-              right: 30,
-              bottom: bottomPadding + 140,
-              child: IgnorePointer(
-                child: Container(
-                  decoration: BoxDecoration(
-                    border: Border.all(
-                      color: const Color(0xFF00D9FF).withValues(alpha: 0.5),
-                      width: 2,
-                    ),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-              ),
-            ),
-
           // Top bar
           Positioned(
             top: 0,

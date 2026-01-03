@@ -15,4 +15,12 @@
     <style name="NormalTheme" parent="@android:style/Theme.Black.NoTitleBar">
         <item name="android:windowBackground">?android:colorBackground</item>
     </style>
+    
+    <!-- UCrop theme for image cropper with proper system bar handling -->
+    <style name="ucrop_Theme" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="android:statusBarColor">#FF16213E</item>
+        <item name="android:navigationBarColor">#FF16213E</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+    </style>
 </resources>

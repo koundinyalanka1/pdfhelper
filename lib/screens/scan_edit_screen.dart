@@ -58,12 +58,16 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
             toolbarTitle: 'Crop Document',
             toolbarColor: const Color(0xFF16213E),
             toolbarWidgetColor: Colors.white,
+            statusBarColor: const Color(0xFF16213E),
             backgroundColor: Colors.black,
             activeControlsWidgetColor: const Color(0xFF00D9FF),
             cropFrameColor: const Color(0xFF00D9FF),
             cropGridColor: Colors.white54,
             initAspectRatio: CropAspectRatioPreset.original,
             lockAspectRatio: false,
+            hideBottomControls: false,
+            dimmedLayerColor: Colors.black.withValues(alpha: 0.7),
+            showCropGrid: true,
             aspectRatioPresets: [
               CropAspectRatioPreset.original,
               CropAspectRatioPreset.square,
@@ -74,6 +78,8 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
           ),
           IOSUiSettings(
             title: 'Crop Document',
+            doneButtonTitle: 'Done',
+            cancelButtonTitle: 'Cancel',
             aspectRatioPresets: [
               CropAspectRatioPreset.original,
               CropAspectRatioPreset.square,
