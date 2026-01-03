@@ -25,6 +25,9 @@ dependencies:
   # Camera
   camera: ^0.11.0+2
   
+  # Image processing
+  image: ^4.3.0
+  
   # Permissions
   permission_handler: ^11.3.1
   

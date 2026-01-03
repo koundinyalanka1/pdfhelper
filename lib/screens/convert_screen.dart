@@ -5,6 +5,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import '../services/pdf_service.dart';
+import 'scan_edit_screen.dart';
 
 class ConvertScreen extends StatefulWidget {
   const ConvertScreen({super.key});
@@ -114,19 +115,32 @@ class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserv
       final String savedPath = '${appDir.path}/$fileName';
       await File(image.path).copy(savedPath);
 
-      setState(() {
-        _capturedImages.add(savedPath);
-      });
-
       // Restore torch if it was on
       if (_isFlashOn) {
         await _cameraController!.setFlashMode(FlashMode.torch);
       }
 
-      _showSnackBar('Image captured! (${_capturedImages.length} total)');
+      setState(() => _isCapturing = false);
+
+      // Navigate to edit screen
+      if (mounted) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => ScanEditScreen(
+              imagePath: savedPath,
+              onSave: (processedPath) {
+                setState(() {
+                  _capturedImages.add(processedPath);
+                });
+                _showSnackBar('Page added! (${_capturedImages.length} total)');
+              },
+            ),
+          ),
+        );
+      }
     } catch (e) {
       _showSnackBar('Error capturing image: $e', isError: true);
-    } finally {
       setState(() => _isCapturing = false);
     }
   }
@@ -140,17 +154,39 @@ class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserv
       if (images.isNotEmpty) {
         final Directory appDir = await getApplicationDocumentsDirectory();
         
-        for (var image in images) {
-          final String fileName = 'picked_${DateTime.now().millisecondsSinceEpoch}_${images.indexOf(image)}.jpg';
+        // Process each image through the edit screen
+        for (int i = 0; i < images.length; i++) {
+          final image = images[i];
+          final String fileName = 'picked_${DateTime.now().millisecondsSinceEpoch}_$i.jpg';
           final String savedPath = '${appDir.path}/$fileName';
           await File(image.path).copy(savedPath);
           
-          setState(() {
-            _capturedImages.add(savedPath);
-          });
+          if (mounted && i == 0) {
+            // Open edit screen for first image, add rest directly
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => ScanEditScreen(
+                  imagePath: savedPath,
+                  onSave: (processedPath) {
+                    setState(() {
+                      _capturedImages.add(processedPath);
+                    });
+                  },
+                ),
+              ),
+            );
+          } else {
+            // Add remaining images directly
+            setState(() {
+              _capturedImages.add(savedPath);
+            });
+          }
         }
 
-        _showSnackBar('${images.length} image(s) added!');
+        if (images.length > 1) {
+          _showSnackBar('${images.length} image(s) added! First one opened for editing.');
+        }
       }
     } catch (e) {
       _showSnackBar('Error selecting images: $e', isError: true);
@@ -191,7 +227,7 @@ class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserv
           ],
         ),
         content: Text(
-          '${_capturedImages.length} image(s) converted to PDF!',
+          '${_capturedImages.length} page(s) converted to PDF!',
           style: const TextStyle(color: Colors.white70),
         ),
         actions: [
@@ -248,6 +284,23 @@ class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserv
     });
   }
 
+  void _editImage(int index) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ScanEditScreen(
+          imagePath: _capturedImages[index],
+          onSave: (processedPath) {
+            setState(() {
+              _capturedImages[index] = processedPath;
+            });
+            _showSnackBar('Page updated!');
+          },
+        ),
+      ),
+    );
+  }
+
   void _showPreviewSheet() {
     showModalBottomSheet(
       context: context,
@@ -256,158 +309,211 @@ class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserv
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
       ),
-      builder: (context) => DraggableScrollableSheet(
-        initialChildSize: 0.7,
-        minChildSize: 0.5,
-        maxChildSize: 0.95,
-        expand: false,
-        builder: (context, scrollController) => Column(
-          children: [
-            Container(
-              margin: const EdgeInsets.only(top: 12),
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.white24,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(20),
-              child: Row(
-                children: [
-                  const Text(
-                    'Scanned Pages',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 20,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const Spacer(),
-                  Text(
-                    '${_capturedImages.length} pages',
-                    style: const TextStyle(
-                      color: Color(0xFF00D9FF),
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Expanded(
-              child: GridView.builder(
-                controller: scrollController,
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 3,
-                  crossAxisSpacing: 10,
-                  mainAxisSpacing: 10,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) => DraggableScrollableSheet(
+          initialChildSize: 0.7,
+          minChildSize: 0.5,
+          maxChildSize: 0.95,
+          expand: false,
+          builder: (context, scrollController) => Column(
+            children: [
+              Container(
+                margin: const EdgeInsets.only(top: 12),
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(2),
                 ),
-                itemCount: _capturedImages.length,
-                itemBuilder: (context, index) {
-                  return Stack(
-                    children: [
-                      Container(
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(12),
-                          image: DecorationImage(
-                            image: FileImage(File(_capturedImages[index])),
-                            fit: BoxFit.cover,
-                          ),
-                        ),
-                      ),
-                      Positioned(
-                        bottom: 5,
-                        left: 5,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 4,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.7),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Text(
-                            '${index + 1}',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                      ),
-                      Positioned(
-                        top: 5,
-                        right: 5,
-                        child: GestureDetector(
-                          onTap: () {
-                            _removeImage(index);
-                            if (_capturedImages.isEmpty) {
-                              Navigator.pop(context);
-                            } else {
-                              setState(() {});
-                            }
-                          },
-                          child: Container(
-                            padding: const EdgeInsets.all(4),
-                            decoration: BoxDecoration(
-                              color: Colors.red.withValues(alpha: 0.8),
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Icon(
-                              Icons.close,
-                              color: Colors.white,
-                              size: 16,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  );
-                },
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(20),
-              child: SizedBox(
-                width: double.infinity,
-                height: 55,
-                child: ElevatedButton(
-                  onPressed: _isProcessing
-                      ? null
-                      : () {
-                          Navigator.pop(context);
-                          _convertToPdf();
-                        },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF00D9FF),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(15),
+              Padding(
+                padding: const EdgeInsets.all(20),
+                child: Row(
+                  children: [
+                    const Text(
+                      'Scanned Pages',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
+                    const Spacer(),
+                    Text(
+                      '${_capturedImages.length} pages',
+                      style: const TextStyle(
+                        color: Color(0xFF00D9FF),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // Tip text
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF00D9FF).withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(10),
                   ),
                   child: const Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(Icons.picture_as_pdf_rounded, color: Colors.white),
+                      Icon(Icons.touch_app, color: Color(0xFF00D9FF), size: 20),
                       SizedBox(width: 10),
-                      Text(
-                        'Create PDF',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 17,
-                          fontWeight: FontWeight.w600,
+                      Expanded(
+                        child: Text(
+                          'Tap a page to edit filters',
+                          style: TextStyle(
+                            color: Color(0xFF00D9FF),
+                            fontSize: 13,
+                          ),
                         ),
                       ),
                     ],
                   ),
                 ),
               ),
-            ),
-          ],
+              const SizedBox(height: 15),
+              Expanded(
+                child: GridView.builder(
+                  controller: scrollController,
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 3,
+                    crossAxisSpacing: 10,
+                    mainAxisSpacing: 10,
+                  ),
+                  itemCount: _capturedImages.length,
+                  itemBuilder: (context, index) {
+                    return GestureDetector(
+                      onTap: () {
+                        Navigator.pop(context);
+                        _editImage(index);
+                      },
+                      child: Stack(
+                        children: [
+                          Container(
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: Colors.white24,
+                                width: 1,
+                              ),
+                              image: DecorationImage(
+                                image: FileImage(File(_capturedImages[index])),
+                                fit: BoxFit.cover,
+                              ),
+                            ),
+                          ),
+                          // Edit indicator
+                          Positioned(
+                            bottom: 5,
+                            left: 5,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withValues(alpha: 0.7),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    '${index + 1}',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  const Icon(
+                                    Icons.edit,
+                                    color: Colors.white70,
+                                    size: 12,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          // Delete button
+                          Positioned(
+                            top: 5,
+                            right: 5,
+                            child: GestureDetector(
+                              onTap: () {
+                                _removeImage(index);
+                                if (_capturedImages.isEmpty) {
+                                  Navigator.pop(context);
+                                } else {
+                                  setModalState(() {});
+                                  setState(() {});
+                                }
+                              },
+                              child: Container(
+                                padding: const EdgeInsets.all(4),
+                                decoration: BoxDecoration(
+                                  color: Colors.red.withValues(alpha: 0.8),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(
+                                  Icons.close,
+                                  color: Colors.white,
+                                  size: 16,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(20),
+                child: SizedBox(
+                  width: double.infinity,
+                  height: 55,
+                  child: ElevatedButton(
+                    onPressed: _isProcessing
+                        ? null
+                        : () {
+                            Navigator.pop(context);
+                            _convertToPdf();
+                          },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF00D9FF),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(15),
+                      ),
+                    ),
+                    child: const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.picture_as_pdf_rounded, color: Colors.white),
+                        SizedBox(width: 10),
+                        Text(
+                          'Create PDF',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 17,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -436,6 +542,21 @@ class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserv
                     style: TextStyle(color: Colors.white70),
                   ),
                 ],
+              ),
+            ),
+
+          // Document frame guide
+          if (_isCameraInitialized)
+            Positioned.fill(
+              child: Container(
+                margin: const EdgeInsets.symmetric(horizontal: 30, vertical: 120),
+                decoration: BoxDecoration(
+                  border: Border.all(
+                    color: const Color(0xFF00D9FF).withValues(alpha: 0.5),
+                    width: 2,
+                  ),
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
             ),
 
