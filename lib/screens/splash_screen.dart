@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'home_screen.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -13,6 +14,7 @@ class _SplashScreenState extends State<SplashScreen>
   late AnimationController _controller;
   late Animation<double> _fadeAnimation;
   late Animation<double> _scaleAnimation;
+  String _statusText = 'Your PDF Toolkit';
 
   @override
   void initState() {
@@ -37,11 +39,56 @@ class _SplashScreenState extends State<SplashScreen>
     );
 
     _controller.forward();
+    _initializeApp();
+  }
+
+  Future<void> _initializeApp() async {
+    // Wait for animation to start
+    await Future.delayed(const Duration(milliseconds: 800));
+    
+    // Request permissions
+    await _requestPermissions();
+    
+    // Small delay before navigation
+    await Future.delayed(const Duration(milliseconds: 500));
+    
     _navigateToHome();
   }
 
-  void _navigateToHome() async {
-    await Future.delayed(const Duration(milliseconds: 2500));
+  Future<void> _requestPermissions() async {
+    if (mounted) {
+      setState(() {
+        _statusText = 'Requesting permissions...';
+      });
+    }
+
+    // Request camera permission
+    final cameraStatus = await Permission.camera.request();
+    
+    // Request storage permissions based on Android version
+    if (await Permission.photos.isGranted == false) {
+      await Permission.photos.request();
+    }
+    
+    // For older Android versions
+    if (await Permission.storage.isGranted == false) {
+      await Permission.storage.request();
+    }
+
+    if (mounted) {
+      if (cameraStatus.isGranted) {
+        setState(() {
+          _statusText = 'Ready to go!';
+        });
+      } else {
+        setState(() {
+          _statusText = 'Some permissions denied';
+        });
+      }
+    }
+  }
+
+  void _navigateToHome() {
     if (mounted) {
       Navigator.pushReplacement(
         context,
@@ -120,13 +167,17 @@ class _SplashScreenState extends State<SplashScreen>
                         ),
                       ),
                       const SizedBox(height: 10),
-                      Text(
-                        'Your PDF Toolkit',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w300,
-                          color: Colors.white.withValues(alpha: 0.7),
-                          letterSpacing: 4,
+                      AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 300),
+                        child: Text(
+                          _statusText,
+                          key: ValueKey(_statusText),
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w300,
+                            color: Colors.white.withValues(alpha: 0.7),
+                            letterSpacing: 2,
+                          ),
                         ),
                       ),
                       const SizedBox(height: 60),
@@ -151,4 +202,3 @@ class _SplashScreenState extends State<SplashScreen>
     );
   }
 }
-
