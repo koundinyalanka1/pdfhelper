@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
 import 'package:image_cropper/image_cropper.dart';
@@ -11,6 +12,77 @@ enum ScanFilter {
   blackWhite,
   sharpen,
   brighten,
+}
+
+/// Data class for passing to isolate
+class _ImageProcessData {
+  final Uint8List imageBytes;
+  final ScanFilter filter;
+  
+  _ImageProcessData(this.imageBytes, this.filter);
+}
+
+/// Top-level function for isolate processing
+Uint8List _processImageInIsolate(_ImageProcessData data) {
+  final img.Image? image = img.decodeImage(data.imageBytes);
+  if (image == null) return data.imageBytes;
+
+  img.Image processed;
+
+  switch (data.filter) {
+    case ScanFilter.document:
+      processed = _applyDocumentFilterStatic(image);
+      break;
+    case ScanFilter.blackWhite:
+      processed = _applyBlackWhiteFilterStatic(image);
+      break;
+    case ScanFilter.sharpen:
+      processed = _applySharpenFilterStatic(image);
+      break;
+    case ScanFilter.brighten:
+      processed = _applyBrightenFilterStatic(image);
+      break;
+    default:
+      processed = image;
+  }
+
+  return Uint8List.fromList(img.encodeJpg(processed, quality: 95));
+}
+
+img.Image _applyDocumentFilterStatic(img.Image image) {
+  img.Image result = img.copyResize(image, width: image.width);
+  result = img.contrast(result, contrast: 130);
+  result = img.adjustColor(result, brightness: 1.1);
+  result = img.adjustColor(result, saturation: 0.8);
+  result = img.convolution(result, filter: [
+    0, -0.5, 0,
+    -0.5, 3, -0.5,
+    0, -0.5, 0,
+  ], div: 1);
+  return result;
+}
+
+img.Image _applyBlackWhiteFilterStatic(img.Image image) {
+  img.Image result = img.grayscale(image);
+  result = img.contrast(result, contrast: 150);
+  result = img.adjustColor(result, brightness: 1.15);
+  return result;
+}
+
+img.Image _applySharpenFilterStatic(img.Image image) {
+  img.Image result = img.convolution(image, filter: [
+    0, -1, 0,
+    -1, 5, -1,
+    0, -1, 0,
+  ], div: 1);
+  result = img.contrast(result, contrast: 110);
+  return result;
+}
+
+img.Image _applyBrightenFilterStatic(img.Image image) {
+  img.Image result = img.adjustColor(image, brightness: 1.25);
+  result = img.contrast(result, contrast: 115);
+  return result;
 }
 
 class ScanEditScreen extends StatefulWidget {
@@ -143,7 +215,11 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
       if (filter == ScanFilter.original) {
         resultBytes = _originalImageBytes!;
       } else {
-        resultBytes = await _processImage(_originalImageBytes!, filter);
+        // Process image in background isolate
+        resultBytes = await compute(
+          _processImageInIsolate,
+          _ImageProcessData(_originalImageBytes!, filter),
+        );
       }
 
       if (mounted) {
@@ -160,96 +236,6 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
         });
       }
     }
-  }
-
-  Future<Uint8List> _processImage(Uint8List imageBytes, ScanFilter filter) async {
-    // Decode image
-    final img.Image? image = img.decodeImage(imageBytes);
-    if (image == null) return imageBytes;
-
-    img.Image processed;
-
-    switch (filter) {
-      case ScanFilter.document:
-        // Document/White filter - enhance contrast, brightness for text
-        processed = _applyDocumentFilter(image);
-        break;
-      case ScanFilter.blackWhite:
-        // Black & White with high contrast
-        processed = _applyBlackWhiteFilter(image);
-        break;
-      case ScanFilter.sharpen:
-        // Sharpen for text clarity
-        processed = _applySharpenFilter(image);
-        break;
-      case ScanFilter.brighten:
-        // Brighten the image
-        processed = _applyBrightenFilter(image);
-        break;
-      default:
-        processed = image;
-    }
-
-    // Encode back to bytes
-    return Uint8List.fromList(img.encodeJpg(processed, quality: 95));
-  }
-
-  img.Image _applyDocumentFilter(img.Image image) {
-    // Document enhancement: increase contrast, adjust levels for text
-    img.Image result = img.copyResize(image, width: image.width);
-    
-    // Increase contrast
-    result = img.contrast(result, contrast: 130);
-    
-    // Adjust brightness slightly
-    result = img.adjustColor(result, brightness: 1.1);
-    
-    // Increase saturation slightly to reduce color cast
-    result = img.adjustColor(result, saturation: 0.8);
-    
-    // Apply slight sharpening for text
-    result = img.convolution(result, filter: [
-      0, -0.5, 0,
-      -0.5, 3, -0.5,
-      0, -0.5, 0,
-    ], div: 1);
-    
-    return result;
-  }
-
-  img.Image _applyBlackWhiteFilter(img.Image image) {
-    // Convert to grayscale with high contrast
-    img.Image result = img.grayscale(image);
-    
-    // High contrast for text
-    result = img.contrast(result, contrast: 150);
-    
-    // Brighten slightly
-    result = img.adjustColor(result, brightness: 1.15);
-    
-    return result;
-  }
-
-  img.Image _applySharpenFilter(img.Image image) {
-    // Apply sharpening convolution
-    img.Image result = img.convolution(image, filter: [
-      0, -1, 0,
-      -1, 5, -1,
-      0, -1, 0,
-    ], div: 1);
-    
-    // Slight contrast boost
-    result = img.contrast(result, contrast: 110);
-    
-    return result;
-  }
-
-  img.Image _applyBrightenFilter(img.Image image) {
-    // Brighten and slightly increase contrast
-    img.Image result = img.adjustColor(image, brightness: 1.25);
-    result = img.contrast(result, contrast: 115);
-    
-    return result;
   }
 
   Future<void> _saveAndReturn() async {
