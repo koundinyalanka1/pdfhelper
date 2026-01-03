@@ -14,46 +14,45 @@ enum ScanFilter {
   brighten,
 }
 
-/// Data class for passing to isolate
-class _ImageProcessData {
+/// Data class for passing to isolate - must be a simple class with primitives
+class ImageFilterRequest {
   final Uint8List imageBytes;
-  final ScanFilter filter;
+  final int filterIndex; // Use int instead of enum for isolate compatibility
   
-  _ImageProcessData(this.imageBytes, this.filter);
+  ImageFilterRequest(this.imageBytes, this.filterIndex);
 }
 
 /// Top-level function for isolate processing
-Uint8List _processImageInIsolate(_ImageProcessData data) {
-  final img.Image? image = img.decodeImage(data.imageBytes);
-  if (image == null) return data.imageBytes;
+Uint8List processImageInBackground(ImageFilterRequest request) {
+  final img.Image? image = img.decodeImage(request.imageBytes);
+  if (image == null) return request.imageBytes;
 
   img.Image processed;
 
-  switch (data.filter) {
-    case ScanFilter.document:
-      processed = _applyDocumentFilterStatic(image);
+  switch (request.filterIndex) {
+    case 1: // document
+      processed = applyDocumentFilter(image);
       break;
-    case ScanFilter.blackWhite:
-      processed = _applyBlackWhiteFilterStatic(image);
+    case 2: // blackWhite
+      processed = applyBlackWhiteFilter(image);
       break;
-    case ScanFilter.sharpen:
-      processed = _applySharpenFilterStatic(image);
+    case 3: // sharpen
+      processed = applySharpenFilter(image);
       break;
-    case ScanFilter.brighten:
-      processed = _applyBrightenFilterStatic(image);
+    case 4: // brighten
+      processed = applyBrightenFilter(image);
       break;
     default:
       processed = image;
   }
 
-  return Uint8List.fromList(img.encodeJpg(processed, quality: 95));
+  return Uint8List.fromList(img.encodeJpg(processed, quality: 100));
 }
 
-img.Image _applyDocumentFilterStatic(img.Image image) {
-  img.Image result = img.copyResize(image, width: image.width);
-  result = img.contrast(result, contrast: 130);
-  result = img.adjustColor(result, brightness: 1.1);
-  result = img.adjustColor(result, saturation: 0.8);
+img.Image applyDocumentFilter(img.Image image) {
+  // Document enhancement: increase contrast and slight sharpening
+  img.Image result = img.contrast(image, contrast: 130);
+  result = img.adjustColor(result, brightness: 1.1, saturation: 0.8);
   result = img.convolution(result, filter: [
     0, -0.5, 0,
     -0.5, 3, -0.5,
@@ -62,14 +61,14 @@ img.Image _applyDocumentFilterStatic(img.Image image) {
   return result;
 }
 
-img.Image _applyBlackWhiteFilterStatic(img.Image image) {
+img.Image applyBlackWhiteFilter(img.Image image) {
   img.Image result = img.grayscale(image);
   result = img.contrast(result, contrast: 150);
   result = img.adjustColor(result, brightness: 1.15);
   return result;
 }
 
-img.Image _applySharpenFilterStatic(img.Image image) {
+img.Image applySharpenFilter(img.Image image) {
   img.Image result = img.convolution(image, filter: [
     0, -1, 0,
     -1, 5, -1,
@@ -79,7 +78,7 @@ img.Image _applySharpenFilterStatic(img.Image image) {
   return result;
 }
 
-img.Image _applyBrightenFilterStatic(img.Image image) {
+img.Image applyBrightenFilter(img.Image image) {
   img.Image result = img.adjustColor(image, brightness: 1.25);
   result = img.contrast(result, contrast: 115);
   return result;
@@ -183,10 +182,10 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
       if (filter == ScanFilter.original) {
         resultBytes = _originalImageBytes!;
       } else {
-        // Process image in background isolate
+        // Process image in background isolate using int index for better serialization
         resultBytes = await compute(
-          _processImageInIsolate,
-          _ImageProcessData(_originalImageBytes!, filter),
+          processImageInBackground,
+          ImageFilterRequest(_originalImageBytes!, filter.index),
         );
       }
 
@@ -202,6 +201,12 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
         setState(() {
           _isProcessing = false;
         });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Filter error: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
       }
     }
   }
@@ -604,17 +609,22 @@ class _CropScreenState extends State<_CropScreen> {
                       ),
                     ),
                   ),
-                  SingleChildScrollView(
+                    SingleChildScrollView(
                     scrollDirection: Axis.horizontal,
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
+                        // Free first
                         _buildAspectButton('Free', null),
+                        // Paper sizes
+                        _buildAspectButton('A4', 210 / 297),
+                        _buildAspectButton('Letter', 8.5 / 11),
+                        _buildAspectButton('Legal', 8.5 / 14),
+                        _buildAspectButton('A5', 148 / 210),
+                        // Common ratios
                         _buildAspectButton('1:1', 1.0),
                         _buildAspectButton('4:3', 4 / 3),
                         _buildAspectButton('3:2', 3 / 2),
-                        _buildAspectButton('16:9', 16 / 9),
-                        _buildAspectButton('A4', 210 / 297),
                       ],
                     ),
                   ),
