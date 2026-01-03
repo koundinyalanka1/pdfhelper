@@ -145,9 +145,10 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
             ),
         ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
           children: [
             // Upload area
             GestureDetector(
@@ -382,7 +383,8 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
                         ),
                 ),
               ),
-          ],
+            ],
+          ),
         ),
       ),
     );

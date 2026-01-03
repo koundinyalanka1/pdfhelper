@@ -388,7 +388,10 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
 
           // Bottom controls
           Container(
-            padding: const EdgeInsets.symmetric(vertical: 16),
+            padding: EdgeInsets.only(
+              top: 16,
+              bottom: MediaQuery.of(context).padding.bottom + 16,
+            ),
             decoration: const BoxDecoration(
               color: Color(0xFF16213E),
               borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
@@ -466,7 +469,6 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
                     ],
                   ),
                 ),
-                const SizedBox(height: 10),
               ],
             ),
           ),

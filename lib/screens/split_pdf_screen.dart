@@ -171,9 +171,10 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
         ),
         centerTitle: true,
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Column(
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(20),
+          child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Upload area
@@ -514,7 +515,8 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
                 ),
               ),
             ],
-          ],
+            ],
+          ),
         ),
       ),
     );
