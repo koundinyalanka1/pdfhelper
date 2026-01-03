@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:image_picker/image_picker.dart';
@@ -23,6 +24,11 @@ class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserv
   bool _isCapturing = false;
   final List<String> _capturedImages = [];
   final ImagePicker _imagePicker = ImagePicker();
+  
+  // Focus related
+  Offset? _focusPoint;
+  bool _showFocusIndicator = false;
+  Timer? _focusTimer;
 
   @override
   void initState() {
@@ -35,6 +41,7 @@ class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserv
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _cameraController?.dispose();
+    _focusTimer?.cancel();
     super.dispose();
   }
 
@@ -64,6 +71,9 @@ class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserv
 
         await _cameraController!.initialize();
         
+        // Set auto focus mode
+        await _cameraController!.setFocusMode(FocusMode.auto);
+        
         if (mounted) {
           setState(() {
             _isCameraInitialized = true;
@@ -72,6 +82,40 @@ class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserv
       }
     } catch (e) {
       debugPrint('Error initializing camera: $e');
+    }
+  }
+
+  Future<void> _onTapToFocus(TapDownDetails details, BoxConstraints constraints) async {
+    if (_cameraController == null || !_cameraController!.value.isInitialized) {
+      return;
+    }
+
+    final Offset tapPosition = details.localPosition;
+    final double x = tapPosition.dx / constraints.maxWidth;
+    final double y = tapPosition.dy / constraints.maxHeight;
+
+    try {
+      // Set focus and exposure point
+      await _cameraController!.setFocusPoint(Offset(x, y));
+      await _cameraController!.setExposurePoint(Offset(x, y));
+
+      // Show focus indicator
+      setState(() {
+        _focusPoint = tapPosition;
+        _showFocusIndicator = true;
+      });
+
+      // Hide focus indicator after delay
+      _focusTimer?.cancel();
+      _focusTimer = Timer(const Duration(milliseconds: 1500), () {
+        if (mounted) {
+          setState(() {
+            _showFocusIndicator = false;
+          });
+        }
+      });
+    } catch (e) {
+      debugPrint('Error setting focus: $e');
     }
   }
 
@@ -365,7 +409,7 @@ class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserv
                       SizedBox(width: 10),
                       Expanded(
                         child: Text(
-                          'Tap a page to edit filters',
+                          'Tap a page to edit, crop & apply filters',
                           style: TextStyle(
                             color: Color(0xFF00D9FF),
                             fontSize: 13,
@@ -525,10 +569,50 @@ class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserv
       backgroundColor: Colors.black,
       body: Stack(
         children: [
-          // Camera Preview
+          // Camera Preview with tap to focus
           if (_isCameraInitialized && _cameraController != null)
             Positioned.fill(
-              child: CameraPreview(_cameraController!),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  return GestureDetector(
+                    onTapDown: (details) => _onTapToFocus(details, constraints),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        CameraPreview(_cameraController!),
+                        // Focus indicator
+                        if (_showFocusIndicator && _focusPoint != null)
+                          Positioned(
+                            left: _focusPoint!.dx - 40,
+                            top: _focusPoint!.dy - 40,
+                            child: AnimatedOpacity(
+                              opacity: _showFocusIndicator ? 1.0 : 0.0,
+                              duration: const Duration(milliseconds: 300),
+                              child: Container(
+                                width: 80,
+                                height: 80,
+                                decoration: BoxDecoration(
+                                  border: Border.all(
+                                    color: const Color(0xFF00D9FF),
+                                    width: 2,
+                                  ),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: const Center(
+                                  child: Icon(
+                                    Icons.center_focus_strong,
+                                    color: Color(0xFF00D9FF),
+                                    size: 30,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  );
+                },
+              ),
             )
           else
             const Center(
@@ -556,6 +640,37 @@ class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserv
                     width: 2,
                   ),
                   borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
+
+          // Tap to focus hint
+          if (_isCameraInitialized)
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 70,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.5),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.touch_app, color: Colors.white70, size: 16),
+                      SizedBox(width: 6),
+                      Text(
+                        'Tap to focus',
+                        style: TextStyle(
+                          color: Colors.white70,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),

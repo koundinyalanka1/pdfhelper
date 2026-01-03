@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
+import 'package:image_cropper/image_cropper.dart';
 import 'package:path_provider/path_provider.dart';
 
 enum ScanFilter {
@@ -31,19 +32,95 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
   bool _isProcessing = false;
   Uint8List? _processedImageBytes;
   Uint8List? _originalImageBytes;
+  String _currentImagePath = '';
 
   @override
   void initState() {
     super.initState();
+    _currentImagePath = widget.imagePath;
     _loadOriginalImage();
   }
 
   Future<void> _loadOriginalImage() async {
-    final bytes = await File(widget.imagePath).readAsBytes();
+    final bytes = await File(_currentImagePath).readAsBytes();
     setState(() {
       _originalImageBytes = bytes;
       _processedImageBytes = bytes;
     });
+  }
+
+  Future<void> _cropImage() async {
+    try {
+      final croppedFile = await ImageCropper().cropImage(
+        sourcePath: _currentImagePath,
+        uiSettings: [
+          AndroidUiSettings(
+            toolbarTitle: 'Crop Document',
+            toolbarColor: const Color(0xFF16213E),
+            toolbarWidgetColor: Colors.white,
+            backgroundColor: Colors.black,
+            activeControlsWidgetColor: const Color(0xFF00D9FF),
+            cropFrameColor: const Color(0xFF00D9FF),
+            cropGridColor: Colors.white54,
+            initAspectRatio: CropAspectRatioPreset.original,
+            lockAspectRatio: false,
+            aspectRatioPresets: [
+              CropAspectRatioPreset.original,
+              CropAspectRatioPreset.square,
+              CropAspectRatioPreset.ratio3x2,
+              CropAspectRatioPreset.ratio4x3,
+              CropAspectRatioPreset.ratio16x9,
+            ],
+          ),
+          IOSUiSettings(
+            title: 'Crop Document',
+            aspectRatioPresets: [
+              CropAspectRatioPreset.original,
+              CropAspectRatioPreset.square,
+              CropAspectRatioPreset.ratio3x2,
+              CropAspectRatioPreset.ratio4x3,
+              CropAspectRatioPreset.ratio16x9,
+            ],
+          ),
+        ],
+      );
+
+      if (croppedFile != null) {
+        // Save cropped image
+        final Directory appDir = await getApplicationDocumentsDirectory();
+        final String fileName = 'cropped_${DateTime.now().millisecondsSinceEpoch}.jpg';
+        final String savedPath = '${appDir.path}/$fileName';
+        await File(croppedFile.path).copy(savedPath);
+
+        // Delete old file if different
+        if (_currentImagePath != widget.imagePath) {
+          try {
+            await File(_currentImagePath).delete();
+          } catch (e) {
+            debugPrint('Could not delete old file: $e');
+          }
+        }
+
+        // Update state
+        setState(() {
+          _currentImagePath = savedPath;
+          _selectedFilter = ScanFilter.original;
+        });
+
+        // Reload the image
+        await _loadOriginalImage();
+      }
+    } catch (e) {
+      debugPrint('Error cropping image: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error cropping: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _applyFilter(ScanFilter filter) async {
@@ -182,13 +259,18 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
       
       await File(savedPath).writeAsBytes(_processedImageBytes!);
       
-      // Delete original if different
-      if (savedPath != widget.imagePath) {
+      // Delete temporary files
+      if (_currentImagePath != widget.imagePath) {
         try {
-          await File(widget.imagePath).delete();
+          await File(_currentImagePath).delete();
         } catch (e) {
-          debugPrint('Could not delete original: $e');
+          debugPrint('Could not delete temp file: $e');
         }
+      }
+      try {
+        await File(widget.imagePath).delete();
+      } catch (e) {
+        debugPrint('Could not delete original: $e');
       }
 
       widget.onSave(savedPath);
@@ -221,6 +303,9 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
             // Delete the captured image and go back
             try {
               File(widget.imagePath).deleteSync();
+              if (_currentImagePath != widget.imagePath) {
+                File(_currentImagePath).deleteSync();
+              }
             } catch (e) {
               debugPrint('Error deleting: $e');
             }
@@ -285,7 +370,7 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
                               ),
                               SizedBox(height: 16),
                               Text(
-                                'Applying filter...',
+                                'Processing...',
                                 style: TextStyle(
                                   color: Colors.white,
                                   fontSize: 16,
@@ -301,17 +386,44 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
             ),
           ),
 
-          // Filter options
+          // Bottom controls
           Container(
-            padding: const EdgeInsets.symmetric(vertical: 20),
+            padding: const EdgeInsets.symmetric(vertical: 16),
             decoration: const BoxDecoration(
               color: Color(0xFF16213E),
               borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
             ),
             child: Column(
               children: [
+                // Crop button
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                  child: SizedBox(
+                    width: double.infinity,
+                    height: 50,
+                    child: OutlinedButton.icon(
+                      onPressed: _isProcessing ? null : _cropImage,
+                      icon: const Icon(Icons.crop_rounded, color: Color(0xFF00D9FF)),
+                      label: const Text(
+                        'Crop Image',
+                        style: TextStyle(
+                          color: Color(0xFF00D9FF),
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Color(0xFF00D9FF), width: 1.5),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                
                 const Padding(
-                  padding: EdgeInsets.only(bottom: 16),
+                  padding: EdgeInsets.only(top: 8, bottom: 12),
                   child: Text(
                     'Select Filter',
                     style: TextStyle(
@@ -409,4 +521,3 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
     );
   }
 }
-
