@@ -168,6 +168,28 @@ List<List<int>> splitPdfAllPagesIsolate(Uint8List pdfBytes) {
 }
 
 class PdfService {
+  /// Merge PDFs from pre-loaded bytes (fastest - no file I/O)
+  static Future<String?> mergePdfsFromBytes(List<Uint8List> pdfBytesList) async {
+    if (pdfBytesList.length < 2) return null;
+
+    try {
+      // Process merge in background isolate (bytes already loaded)
+      final List<int> outputBytes = await compute(
+        mergePdfsFastIsolate,
+        MergeRequest(pdfBytesList),
+      );
+
+      // Save the merged document
+      final String outputPath = await _getOutputPath('merged_pdf');
+      await File(outputPath).writeAsBytes(outputBytes, flush: true);
+
+      return outputPath;
+    } catch (e) {
+      debugPrint('Error merging PDFs: $e');
+      return null;
+    }
+  }
+
   /// Merge multiple PDF files into one - OPTIMIZED
   static Future<String?> mergePdfs(List<String> pdfPaths) async {
     if (pdfPaths.length < 2) return null;
@@ -180,17 +202,7 @@ class PdfService {
       
       final List<Uint8List> pdfBytesList = await Future.wait(readFutures);
 
-      // Process merge in background isolate
-      final List<int> outputBytes = await compute(
-        mergePdfsFastIsolate,
-        MergeRequest(pdfBytesList),
-      );
-
-      // Save the merged document
-      final String outputPath = await _getOutputPath('merged_pdf');
-      await File(outputPath).writeAsBytes(outputBytes, flush: true);
-
-      return outputPath;
+      return mergePdfsFromBytes(pdfBytesList);
     } catch (e) {
       debugPrint('Error merging PDFs: $e');
       return null;

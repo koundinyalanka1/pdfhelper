@@ -1,11 +1,16 @@
+import 'dart:io';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:pdfx/pdfx.dart';
+import 'package:syncfusion_flutter_pdf/pdf.dart' as sync_pdf;
 import '../services/pdf_service.dart';
 import '../providers/theme_provider.dart';
+
+typedef SyncPdfDocument = sync_pdf.PdfDocument;
 
 class SelectedPdfFile {
   final String path;
@@ -13,6 +18,7 @@ class SelectedPdfFile {
   final int pageCount;
   final int fileSize;
   Uint8List? thumbnail;
+  Uint8List? cachedBytes; // Cache PDF bytes for faster merge
 
   SelectedPdfFile({
     required this.path,
@@ -20,6 +26,7 @@ class SelectedPdfFile {
     required this.pageCount,
     required this.fileSize,
     this.thumbnail,
+    this.cachedBytes,
   });
 }
 
@@ -71,13 +78,16 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
 
   Future<void> _addPdfFile(String path, String name, int size) async {
     try {
-      // Get page count
-      final int pageCount = await PdfService.getPageCount(path);
+      // Read file bytes once and cache them
+      final Uint8List pdfBytes = await File(path).readAsBytes();
+      
+      // Get page count from cached bytes
+      final int pageCount = await compute(_getPageCountFromBytes, pdfBytes);
       
       // Generate thumbnail of first page
       Uint8List? thumbnail;
       try {
-        final pdfDoc = await PdfDocument.openFile(path);
+        final pdfDoc = await PdfDocument.openData(pdfBytes);
         final page = await pdfDoc.getPage(1);
         final pageImage = await page.render(
           width: page.width * 0.3,
@@ -99,11 +109,20 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
           pageCount: pageCount,
           fileSize: size,
           thumbnail: thumbnail,
+          cachedBytes: pdfBytes, // Cache for merge
         ));
       });
     } catch (e) {
       debugPrint('Error adding PDF: $e');
     }
+  }
+  
+  // Isolate function for getting page count
+  static int _getPageCountFromBytes(Uint8List bytes) {
+    final doc = SyncPdfDocument(inputBytes: bytes);
+    final count = doc.pages.count;
+    doc.dispose();
+    return count;
   }
 
   Future<void> _mergePdfs() async {
@@ -112,8 +131,17 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
     setState(() => _isProcessing = true);
 
     try {
-      final List<String> paths = _selectedFiles.map((f) => f.path).toList();
-      final String? outputPath = await PdfService.mergePdfs(paths);
+      // Use cached bytes if available, otherwise read from file
+      final List<Uint8List> pdfBytesList = [];
+      for (final file in _selectedFiles) {
+        if (file.cachedBytes != null) {
+          pdfBytesList.add(file.cachedBytes!);
+        } else {
+          pdfBytesList.add(await File(file.path).readAsBytes());
+        }
+      }
+
+      final String? outputPath = await PdfService.mergePdfsFromBytes(pdfBytesList);
 
       if (outputPath != null) {
         setState(() {
