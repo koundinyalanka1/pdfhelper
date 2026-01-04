@@ -44,6 +44,17 @@ class NotificationService {
     }
   }
 
+  /// Check if notification permission is granted
+  Future<bool> hasPermission() async {
+    if (Platform.isAndroid) {
+      final status = await Permission.notification.status;
+      _hasPermission = status.isGranted;
+      return _hasPermission;
+    }
+    return true;
+  }
+
+  /// Request notification permission and return if granted
   Future<bool> requestPermission() async {
     if (Platform.isAndroid) {
       final status = await Permission.notification.request();

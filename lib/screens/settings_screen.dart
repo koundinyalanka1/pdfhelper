@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../providers/theme_provider.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -14,9 +15,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
   ThemeProvider? get _themeProvider => ThemeNotifier.maybeOf(context);
   bool get _isDarkMode => _themeProvider?.isDarkMode ?? true;
   bool get _autoSave => _themeProvider?.autoSave ?? true;
-  bool get _notifications => _themeProvider?.notifications ?? true;
+  bool get _notifications => _themeProvider?.notifications ?? false;
   String get _saveLocation => _themeProvider?.saveLocation ?? 'Downloads';
   AppColors get _colors => AppColors(_isDarkMode);
+
+  Future<void> _handleNotificationToggle(bool value) async {
+    if (_themeProvider == null) return;
+    
+    final success = await _themeProvider!.setNotifications(value);
+    
+    if (!success && value && mounted) {
+      // Permission was denied when trying to turn on
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Notification permission denied. Please enable in device settings.'),
+          backgroundColor: Colors.orange,
+          action: SnackBarAction(
+            label: 'Settings',
+            textColor: Colors.white,
+            onPressed: () {
+              // Open app settings using permission_handler
+              openAppSettings();
+            },
+          ),
+        ),
+      );
+    }
+  }
+
 
   @override
   Widget build(BuildContext context) {
@@ -125,10 +151,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _buildDivider(),
                 _buildSwitchTile(
                   'Notifications',
-                  'Get notified when operations complete',
+                  _notifications 
+                      ? 'Get notified when operations complete'
+                      : 'Tap to enable notifications',
                   Icons.notifications_rounded,
                   _notifications,
-                  (value) => _themeProvider?.setNotifications(value),
+                  (value) => _handleNotificationToggle(value),
                 ),
               ]),
               const SizedBox(height: 25),

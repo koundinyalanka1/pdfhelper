@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
+import '../services/notification_service.dart';
 
 class ThemeProvider extends ChangeNotifier {
   static const String _themeKey = 'isDarkMode';
@@ -13,7 +14,7 @@ class ThemeProvider extends ChangeNotifier {
   bool _isDarkMode = true;
   bool _isInitialized = false;
   bool _autoSave = true;
-  bool _notifications = true;
+  bool _notifications = false; // Default to false, will be set based on permission
   String _saveLocation = 'Downloads';
   
   bool get isDarkMode => _isDarkMode;
@@ -30,8 +31,19 @@ class ThemeProvider extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     _isDarkMode = prefs.getBool(_themeKey) ?? true;
     _autoSave = prefs.getBool(_autoSaveKey) ?? true;
-    _notifications = prefs.getBool(_notificationsKey) ?? true;
     _saveLocation = prefs.getString(_saveLocationKey) ?? 'Downloads';
+    
+    // Check if notification permission is granted
+    // Only enable notifications setting if user has granted permission
+    final hasNotificationPermission = await NotificationService().hasPermission();
+    final savedNotificationPref = prefs.getBool(_notificationsKey) ?? true;
+    _notifications = hasNotificationPermission && savedNotificationPref;
+    
+    // Sync saved preference if permission was revoked
+    if (!hasNotificationPermission && savedNotificationPref) {
+      await prefs.setBool(_notificationsKey, false);
+    }
+    
     _isInitialized = true;
     _updateSystemUI();
     notifyListeners();
@@ -65,13 +77,25 @@ class ThemeProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> setNotifications(bool value) async {
-    if (_notifications == value) return;
+  /// Set notifications - requests permission if turning on
+  /// Returns true if setting was changed successfully
+  Future<bool> setNotifications(bool value) async {
+    if (_notifications == value) return true;
+    
+    // If turning on, request permission first
+    if (value) {
+      final granted = await NotificationService().requestPermission();
+      if (!granted) {
+        // Permission denied, don't turn on
+        return false;
+      }
+    }
     
     _notifications = value;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_notificationsKey, value);
     notifyListeners();
+    return true;
   }
 
   /// Get the auto-save directory path based on settings
