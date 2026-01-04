@@ -1,64 +1,77 @@
 import 'dart:io';
-import 'dart:typed_data';
 import 'dart:ui';
 import 'package:flutter/foundation.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:open_file/open_file.dart';
 
-/// Data class for merge operation
-class _MergeData {
-  final List<Uint8List> pdfBytes;
-  _MergeData(this.pdfBytes);
+/// Data class for merge operation - contains raw bytes list
+class MergeRequest {
+  final List<Uint8List> pdfBytesList;
+  MergeRequest(this.pdfBytesList);
 }
 
 /// Data class for image to PDF operation  
-class _ImageToPdfData {
+class ImageToPdfRequest {
   final List<Uint8List> imageBytes;
-  _ImageToPdfData(this.imageBytes);
+  ImageToPdfRequest(this.imageBytes);
 }
 
 /// Data class for split operation
-class _SplitData {
+class SplitRequest {
   final Uint8List pdfBytes;
   final int startPage;
   final int endPage;
-  _SplitData(this.pdfBytes, this.startPage, this.endPage);
+  SplitRequest(this.pdfBytes, this.startPage, this.endPage);
 }
 
-/// Isolate function for merging PDFs
-List<int> _mergePdfsInIsolate(_MergeData data) {
-  final PdfDocument mergedDocument = PdfDocument();
-  PdfSection? section;
-
-  for (Uint8List bytes in data.pdfBytes) {
-    final PdfDocument sourceDocument = PdfDocument(inputBytes: bytes);
-
-    for (int i = 0; i < sourceDocument.pages.count; i++) {
-      final PdfTemplate template = sourceDocument.pages[i].createTemplate();
-
-      if (section == null || section.pageSettings.size != template.size) {
-        section = mergedDocument.sections!.add();
-        section.pageSettings.size = template.size;
-        section.pageSettings.margins.all = 0;
+/// OPTIMIZED: Fast merge using sections for proper page sizing
+List<int> mergePdfsFastIsolate(MergeRequest request) {
+  if (request.pdfBytesList.isEmpty) return [];
+  
+  final PdfDocument outputDoc = PdfDocument();
+  
+  // Remove default empty page
+  if (outputDoc.pages.count > 0) {
+    outputDoc.pages.removeAt(0);
+  }
+  
+  // Track current section for same-sized pages
+  PdfSection? currentSection;
+  Size? currentSize;
+  
+  for (final Uint8List pdfBytes in request.pdfBytesList) {
+    final PdfDocument sourceDoc = PdfDocument(inputBytes: pdfBytes);
+    
+    for (int i = 0; i < sourceDoc.pages.count; i++) {
+      final PdfTemplate template = sourceDoc.pages[i].createTemplate();
+      final Size templateSize = template.size;
+      
+      // Create new section if page size differs
+      if (currentSection == null || currentSize != templateSize) {
+        currentSection = outputDoc.sections!.add();
+        currentSection.pageSettings.size = templateSize;
+        currentSection.pageSettings.margins.all = 0;
+        currentSize = templateSize;
       }
-
-      section.pages.add().graphics.drawPdfTemplate(template, Offset.zero);
+      
+      // Add page and draw template
+      currentSection.pages.add().graphics.drawPdfTemplate(template, Offset.zero);
     }
-
-    sourceDocument.dispose();
+    
+    sourceDoc.dispose();
   }
 
-  final List<int> outputBytes = mergedDocument.saveSync();
-  mergedDocument.dispose();
-  return outputBytes;
+  final List<int> result = outputDoc.saveSync();
+  outputDoc.dispose();
+  return result;
 }
 
-/// Isolate function for converting images to PDF
-List<int> _imagesToPdfInIsolate(_ImageToPdfData data) {
+/// Optimized isolate function for converting images to PDF
+List<int> imagesToPdfIsolate(ImageToPdfRequest request) {
   final PdfDocument document = PdfDocument();
 
-  for (Uint8List imageBytes in data.imageBytes) {
+  for (Uint8List imageBytes in request.imageBytes) {
     final PdfBitmap image = PdfBitmap(imageBytes);
     final PdfPage page = document.pages.add();
     final Size pageSize = page.getClientSize();
@@ -91,27 +104,30 @@ List<int> _imagesToPdfInIsolate(_ImageToPdfData data) {
 }
 
 /// Isolate function for splitting PDF by range
-List<int>? _splitPdfByRangeInIsolate(_SplitData data) {
-  final PdfDocument sourceDocument = PdfDocument(inputBytes: data.pdfBytes);
+List<int>? splitPdfByRangeIsolate(SplitRequest request) {
+  final PdfDocument sourceDocument = PdfDocument(inputBytes: request.pdfBytes);
   final int totalPages = sourceDocument.pages.count;
   
-  if (data.startPage < 1 || data.endPage > totalPages || data.startPage > data.endPage) {
+  if (request.startPage < 1 || request.endPage > totalPages || request.startPage > request.endPage) {
     sourceDocument.dispose();
     return null;
   }
 
   final PdfDocument newDocument = PdfDocument();
-  PdfSection? section;
+  
+  // Remove default page
+  if (newDocument.pages.count > 0) {
+    newDocument.pages.removeAt(0);
+  }
 
-  for (int i = data.startPage - 1; i < data.endPage; i++) {
-    final PdfTemplate template = sourceDocument.pages[i].createTemplate();
-
-    if (section == null || section.pageSettings.size != template.size) {
-      section = newDocument.sections!.add();
-      section.pageSettings.size = template.size;
-      section.pageSettings.margins.all = 0;
-    }
-
+  for (int i = request.startPage - 1; i < request.endPage; i++) {
+    final PdfPage sourcePage = sourceDocument.pages[i];
+    final PdfTemplate template = sourcePage.createTemplate();
+    
+    final PdfSection section = newDocument.sections!.add();
+    section.pageSettings.size = template.size;
+    section.pageSettings.margins.all = 0;
+    
     section.pages.add().graphics.drawPdfTemplate(template, Offset.zero);
   }
 
@@ -122,14 +138,21 @@ List<int>? _splitPdfByRangeInIsolate(_SplitData data) {
 }
 
 /// Isolate function for splitting PDF into all pages
-List<List<int>> _splitPdfAllPagesInIsolate(Uint8List pdfBytes) {
+List<List<int>> splitPdfAllPagesIsolate(Uint8List pdfBytes) {
   List<List<int>> results = [];
   final PdfDocument sourceDocument = PdfDocument(inputBytes: pdfBytes);
   final int totalPages = sourceDocument.pages.count;
 
   for (int i = 0; i < totalPages; i++) {
     final PdfDocument singlePageDoc = PdfDocument();
-    final PdfTemplate template = sourceDocument.pages[i].createTemplate();
+    
+    // Remove default page
+    if (singlePageDoc.pages.count > 0) {
+      singlePageDoc.pages.removeAt(0);
+    }
+    
+    final PdfPage sourcePage = sourceDocument.pages[i];
+    final PdfTemplate template = sourcePage.createTemplate();
 
     final PdfSection section = singlePageDoc.sections!.add();
     section.pageSettings.size = template.size;
@@ -145,26 +168,27 @@ List<List<int>> _splitPdfAllPagesInIsolate(Uint8List pdfBytes) {
 }
 
 class PdfService {
-  /// Merge multiple PDF files into one
+  /// Merge multiple PDF files into one - OPTIMIZED
   static Future<String?> mergePdfs(List<String> pdfPaths) async {
     if (pdfPaths.length < 2) return null;
 
     try {
-      // Read all PDF bytes first (IO on main thread is fine)
-      List<Uint8List> pdfBytes = [];
-      for (String path in pdfPaths) {
-        pdfBytes.add(await File(path).readAsBytes());
-      }
+      // Read all PDF files in PARALLEL for speed
+      final List<Future<Uint8List>> readFutures = pdfPaths
+          .map((path) => File(path).readAsBytes())
+          .toList();
+      
+      final List<Uint8List> pdfBytesList = await Future.wait(readFutures);
 
-      // Process in background isolate
+      // Process merge in background isolate
       final List<int> outputBytes = await compute(
-        _mergePdfsInIsolate,
-        _MergeData(pdfBytes),
+        mergePdfsFastIsolate,
+        MergeRequest(pdfBytesList),
       );
 
       // Save the merged document
       final String outputPath = await _getOutputPath('merged_pdf');
-      await File(outputPath).writeAsBytes(outputBytes);
+      await File(outputPath).writeAsBytes(outputBytes, flush: true);
 
       return outputPath;
     } catch (e) {
@@ -178,21 +202,22 @@ class PdfService {
     if (imagePaths.isEmpty) return null;
 
     try {
-      // Read all image bytes first
-      List<Uint8List> imageBytes = [];
-      for (String path in imagePaths) {
-        imageBytes.add(await File(path).readAsBytes());
-      }
+      // Read all image files in PARALLEL
+      final List<Future<Uint8List>> readFutures = imagePaths
+          .map((path) => File(path).readAsBytes())
+          .toList();
+      
+      final List<Uint8List> imageBytes = await Future.wait(readFutures);
 
       // Process in background isolate
       final List<int> outputBytes = await compute(
-        _imagesToPdfInIsolate,
-        _ImageToPdfData(imageBytes),
+        imagesToPdfIsolate,
+        ImageToPdfRequest(imageBytes),
       );
 
       // Save the document
       final String outputPath = await _getOutputPath('images_to_pdf');
-      await File(outputPath).writeAsBytes(outputBytes);
+      await File(outputPath).writeAsBytes(outputBytes, flush: true);
 
       return outputPath;
     } catch (e) {
@@ -209,8 +234,8 @@ class PdfService {
 
       // Process in background isolate
       final List<int>? outputBytes = await compute(
-        _splitPdfByRangeInIsolate,
-        _SplitData(bytes, startPage, endPage),
+        splitPdfByRangeIsolate,
+        SplitRequest(bytes, startPage, endPage),
       );
 
       if (outputBytes == null) return null;
@@ -218,7 +243,7 @@ class PdfService {
       // Save the new document
       final String outputPath =
           await _getOutputPath('split_${startPage}_to_$endPage');
-      await File(outputPath).writeAsBytes(outputBytes);
+      await File(outputPath).writeAsBytes(outputBytes, flush: true);
 
       return outputPath;
     } catch (e) {
@@ -236,16 +261,19 @@ class PdfService {
 
       // Process in background isolate
       final List<List<int>> results = await compute(
-        _splitPdfAllPagesInIsolate,
+        splitPdfAllPagesIsolate,
         bytes,
       );
 
-      // Save each page
+      // Save each page in parallel
+      final List<Future<void>> saveFutures = [];
       for (int i = 0; i < results.length; i++) {
         final String outputPath = await _getOutputPath('page_${i + 1}');
-        await File(outputPath).writeAsBytes(results[i]);
         outputPaths.add(outputPath);
+        saveFutures.add(File(outputPath).writeAsBytes(results[i], flush: true));
       }
+      await Future.wait(saveFutures);
+      
     } catch (e) {
       debugPrint('Error splitting PDF into pages: $e');
     }
