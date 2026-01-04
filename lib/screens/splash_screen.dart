@@ -75,6 +75,11 @@ class _SplashScreenState extends State<SplashScreen>
       await Permission.storage.request();
     }
 
+    // Request notification permission (Android 13+)
+    if (await Permission.notification.isGranted == false) {
+      await Permission.notification.request();
+    }
+
     if (mounted) {
       if (cameraStatus.isGranted) {
         setState(() {

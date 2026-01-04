@@ -6,6 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:pdfx/pdfx.dart';
 import '../services/pdf_service.dart';
+import '../services/notification_service.dart';
 import '../providers/theme_provider.dart';
 
 class SplitPdfScreen extends StatefulWidget {
@@ -176,8 +177,18 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
         setState(() => _splitProgress = 0.9);
         
         if (outputPath != null) {
+          // Auto-save if enabled
+          String? autoSavedPath;
+          final themeProvider = ThemeNotifier.maybeOf(context);
+          if (themeProvider != null && themeProvider.autoSave) {
+            autoSavedPath = await themeProvider.autoSaveFile(outputPath, 'extracted');
+          }
+          // Show notification if enabled
+          if (themeProvider != null && themeProvider.notifications) {
+            NotificationService().showSplitComplete(sortedPages.length);
+          }
           setState(() => _splitProgress = 1.0);
-          _showSuccessDialog([outputPath]);
+          _showSuccessDialog([outputPath], autoSavedPath != null ? [autoSavedPath] : null);
         } else {
           _showSnackBar('Failed to extract pages', isError: true);
         }
@@ -206,8 +217,18 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
         setState(() => _splitProgress = 0.9);
 
         if (outputPath != null) {
+          // Auto-save if enabled
+          String? autoSavedPath;
+          final themeProvider = ThemeNotifier.maybeOf(context);
+          if (themeProvider != null && themeProvider.autoSave) {
+            autoSavedPath = await themeProvider.autoSaveFile(outputPath, 'split');
+          }
+          // Show notification if enabled
+          if (themeProvider != null && themeProvider.notifications) {
+            NotificationService().showSplitComplete(toPage - fromPage + 1);
+          }
           setState(() => _splitProgress = 1.0);
-          _showSuccessDialog([outputPath]);
+          _showSuccessDialog([outputPath], autoSavedPath != null ? [autoSavedPath] : null);
         } else {
           _showSnackBar('Failed to split PDF', isError: true);
         }
@@ -224,8 +245,22 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
         setState(() => _splitProgress = 0.9);
 
         if (outputPaths.isNotEmpty) {
+          // Auto-save all pages if enabled
+          List<String>? autoSavedPaths;
+          final themeProvider = ThemeNotifier.maybeOf(context);
+          if (themeProvider != null && themeProvider.autoSave) {
+            autoSavedPaths = [];
+            for (int i = 0; i < outputPaths.length; i++) {
+              final saved = await themeProvider.autoSaveFile(outputPaths[i], 'page_${i + 1}');
+              if (saved != null) autoSavedPaths.add(saved);
+            }
+          }
+          // Show notification if enabled
+          if (themeProvider != null && themeProvider.notifications) {
+            NotificationService().showSplitComplete(outputPaths.length);
+          }
           setState(() => _splitProgress = 1.0);
-          _showSuccessDialog(outputPaths);
+          _showSuccessDialog(outputPaths, autoSavedPaths);
         } else {
           _showSnackBar('Failed to split PDF', isError: true);
         }
@@ -240,11 +275,15 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
     }
   }
 
-  void _showSuccessDialog(List<String> filePaths) {
+  void _showSuccessDialog(List<String> filePaths, [List<String>? autoSavedPaths]) {
     // Clear selection after success
     setState(() {
       _selectedPages.clear();
     });
+    
+    final themeProvider = ThemeNotifier.maybeOf(context);
+    final saveLocation = themeProvider?.saveLocation ?? 'Downloads';
+    final hasAutoSaved = autoSavedPaths != null && autoSavedPaths.isNotEmpty;
     
     showDialog(
       context: context,
@@ -258,11 +297,43 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
             Text('Success!', style: TextStyle(color: _colors.textPrimary)),
           ],
         ),
-        content: Text(
-          filePaths.length == 1
-              ? 'PDF split successfully!'
-              : '${filePaths.length} pages extracted successfully!',
-          style: TextStyle(color: _colors.textSecondary),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              filePaths.length == 1
+                  ? 'PDF split successfully!'
+                  : '${filePaths.length} pages extracted successfully!',
+              style: TextStyle(color: _colors.textSecondary),
+            ),
+            if (hasAutoSaved) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF4CAF50).withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.folder_rounded, color: Color(0xFF4CAF50), size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Saved to $saveLocation/PDFHelper',
+                        style: const TextStyle(
+                          color: Color(0xFF4CAF50),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
         ),
         actions: [
           TextButton(
@@ -272,8 +343,10 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
           TextButton(
             onPressed: () {
               Navigator.pop(context);
+              // Share auto-saved files if available
+              final shareFiles = hasAutoSaved ? autoSavedPaths : filePaths;
               Share.shareXFiles(
-                filePaths.map((p) => XFile(p)).toList(),
+                shareFiles.map((p) => XFile(p)).toList(),
                 text: 'Split PDF',
               );
             },
@@ -283,7 +356,9 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
             ElevatedButton(
               onPressed: () {
                 Navigator.pop(context);
-                PdfService.openPdf(filePaths.first);
+                // Open auto-saved file if available
+                final openFile = hasAutoSaved ? autoSavedPaths.first : filePaths.first;
+                PdfService.openPdf(openFile);
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFFFFC107),

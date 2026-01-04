@@ -6,6 +6,8 @@ import 'package:image_picker/image_picker.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import '../services/pdf_service.dart';
+import '../services/notification_service.dart';
+import '../providers/theme_provider.dart';
 import 'scan_edit_screen.dart';
 
 class ConvertScreen extends StatefulWidget {
@@ -264,7 +266,17 @@ class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserv
       final String? outputPath = await PdfService.imagesToPdf(_capturedImages);
 
       if (outputPath != null) {
-        _showSuccessDialog(outputPath);
+        // Auto-save if enabled
+        String? autoSavedPath;
+        final themeProvider = ThemeNotifier.maybeOf(context);
+        if (themeProvider != null && themeProvider.autoSave) {
+          autoSavedPath = await themeProvider.autoSaveFile(outputPath, 'scanned');
+        }
+        // Show notification if enabled
+        if (themeProvider != null && themeProvider.notifications) {
+          NotificationService().showScanComplete(_capturedImages.length);
+        }
+        _showSuccessDialog(outputPath, autoSavedPath);
       } else {
         _showSnackBar('Failed to create PDF', isError: true);
       }
@@ -275,22 +287,59 @@ class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserv
     }
   }
 
-  void _showSuccessDialog(String filePath) {
+  void _showSuccessDialog(String filePath, [String? autoSavedPath]) {
+    final themeProvider = ThemeNotifier.maybeOf(context);
+    final saveLocation = themeProvider?.saveLocation ?? 'Downloads';
+    final isDark = themeProvider?.isDarkMode ?? true;
+    final colors = AppColors(isDark);
+    
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF16213E),
+        backgroundColor: colors.cardBackground,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Row(
+        title: Row(
           children: [
-            Icon(Icons.check_circle, color: Color(0xFF4CAF50), size: 28),
-            SizedBox(width: 10),
-            Text('Success!', style: TextStyle(color: Colors.white)),
+            const Icon(Icons.check_circle, color: Color(0xFF4CAF50), size: 28),
+            const SizedBox(width: 10),
+            Text('Success!', style: TextStyle(color: colors.textPrimary)),
           ],
         ),
-        content: Text(
-          '${_capturedImages.length} page(s) converted to PDF!',
-          style: const TextStyle(color: Colors.white70),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${_capturedImages.length} page(s) converted to PDF!',
+              style: TextStyle(color: colors.textSecondary),
+            ),
+            if (autoSavedPath != null) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF4CAF50).withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.folder_rounded, color: Color(0xFF4CAF50), size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Saved to $saveLocation/PDFHelper',
+                        style: const TextStyle(
+                          color: Color(0xFF4CAF50),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
         ),
         actions: [
           TextButton(
@@ -300,19 +349,20 @@ class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserv
                 _capturedImages.clear();
               });
             },
-            child: const Text('New Scan', style: TextStyle(color: Colors.white54)),
+            child: Text('New Scan', style: TextStyle(color: colors.textSecondary)),
           ),
           TextButton(
             onPressed: () {
               Navigator.pop(context);
-              Share.shareXFiles([XFile(filePath)], text: 'Scanned PDF');
+              final shareFile = autoSavedPath ?? filePath;
+              Share.shareXFiles([XFile(shareFile)], text: 'Scanned PDF');
             },
             child: const Text('Share', style: TextStyle(color: Color(0xFFE94560))),
           ),
           ElevatedButton(
             onPressed: () {
               Navigator.pop(context);
-              PdfService.openPdf(filePath);
+              PdfService.openPdf(autoSavedPath ?? filePath);
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFF00D9FF),

@@ -38,6 +38,9 @@ dependencies:
   
   # Settings persistence
   shared_preferences: ^2.3.5
+  
+  # Notifications
+  flutter_local_notifications: ^18.0.1
 
 dev_dependencies:
   flutter_test:

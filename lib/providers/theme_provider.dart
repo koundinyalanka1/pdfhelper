@@ -1,23 +1,37 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:path_provider/path_provider.dart';
 
 class ThemeProvider extends ChangeNotifier {
   static const String _themeKey = 'isDarkMode';
+  static const String _autoSaveKey = 'autoSave';
+  static const String _saveLocationKey = 'saveLocation';
+  static const String _notificationsKey = 'notifications';
   
   bool _isDarkMode = true;
   bool _isInitialized = false;
+  bool _autoSave = true;
+  bool _notifications = true;
+  String _saveLocation = 'Downloads';
   
   bool get isDarkMode => _isDarkMode;
   bool get isInitialized => _isInitialized;
+  bool get autoSave => _autoSave;
+  bool get notifications => _notifications;
+  String get saveLocation => _saveLocation;
 
   ThemeProvider() {
-    _loadTheme();
+    _loadSettings();
   }
 
-  Future<void> _loadTheme() async {
+  Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
     _isDarkMode = prefs.getBool(_themeKey) ?? true;
+    _autoSave = prefs.getBool(_autoSaveKey) ?? true;
+    _notifications = prefs.getBool(_notificationsKey) ?? true;
+    _saveLocation = prefs.getString(_saveLocationKey) ?? 'Downloads';
     _isInitialized = true;
     _updateSystemUI();
     notifyListeners();
@@ -31,6 +45,94 @@ class ThemeProvider extends ChangeNotifier {
     await prefs.setBool(_themeKey, isDark);
     _updateSystemUI();
     notifyListeners();
+  }
+
+  Future<void> setAutoSave(bool value) async {
+    if (_autoSave == value) return;
+    
+    _autoSave = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_autoSaveKey, value);
+    notifyListeners();
+  }
+
+  Future<void> setSaveLocation(String location) async {
+    if (_saveLocation == location) return;
+    
+    _saveLocation = location;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_saveLocationKey, location);
+    notifyListeners();
+  }
+
+  Future<void> setNotifications(bool value) async {
+    if (_notifications == value) return;
+    
+    _notifications = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_notificationsKey, value);
+    notifyListeners();
+  }
+
+  /// Get the auto-save directory path based on settings
+  Future<String?> getAutoSavePath() async {
+    if (!_autoSave) return null;
+    
+    try {
+      if (Platform.isAndroid) {
+        // On Android, save to Downloads or Documents in external storage
+        if (_saveLocation == 'Downloads') {
+          final dir = Directory('/storage/emulated/0/Download');
+          if (await dir.exists()) {
+            return '${dir.path}/PDFHelper';
+          }
+        } else if (_saveLocation == 'Documents') {
+          final dir = Directory('/storage/emulated/0/Documents');
+          if (await dir.exists()) {
+            return '${dir.path}/PDFHelper';
+          }
+        }
+        // Fallback to external storage directory
+        final extDir = await getExternalStorageDirectory();
+        return extDir?.path;
+      } else if (Platform.isIOS) {
+        final docDir = await getApplicationDocumentsDirectory();
+        return docDir.path;
+      }
+    } catch (e) {
+      debugPrint('Error getting auto-save path: $e');
+    }
+    return null;
+  }
+
+  /// Auto-save a file to the configured location
+  Future<String?> autoSaveFile(String sourcePath, String prefix) async {
+    if (!_autoSave) return null;
+    
+    try {
+      final savePath = await getAutoSavePath();
+      if (savePath == null) return null;
+      
+      // Create directory if it doesn't exist
+      final saveDir = Directory(savePath);
+      if (!await saveDir.exists()) {
+        await saveDir.create(recursive: true);
+      }
+      
+      // Generate unique filename
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final fileName = '${prefix}_$timestamp.pdf';
+      final destPath = '$savePath/$fileName';
+      
+      // Copy file to save location
+      final sourceFile = File(sourcePath);
+      await sourceFile.copy(destPath);
+      
+      return destPath;
+    } catch (e) {
+      debugPrint('Error auto-saving file: $e');
+      return null;
+    }
   }
 
   void _updateSystemUI() {

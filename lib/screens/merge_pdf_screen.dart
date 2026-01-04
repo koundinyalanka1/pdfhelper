@@ -8,6 +8,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:pdfx/pdfx.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart' as sync_pdf;
 import '../services/pdf_service.dart';
+import '../services/notification_service.dart';
 import '../providers/theme_provider.dart';
 
 typedef SyncPdfDocument = sync_pdf.PdfDocument;
@@ -207,16 +208,28 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
       final String? outputPath = await PdfService.mergePdfsFromBytes(pdfBytesList);
 
       setState(() {
-        _mergeProgress = 0.95;
-        _mergeStatus = 'Finishing...';
+        _mergeProgress = 0.9;
+        _mergeStatus = 'Saving...';
       });
 
       if (outputPath != null) {
+        // Auto-save to user-accessible location if enabled
+        String? autoSavedPath;
+        final themeProvider = ThemeNotifier.maybeOf(context);
+        if (themeProvider != null && themeProvider.autoSave) {
+          autoSavedPath = await themeProvider.autoSaveFile(outputPath, 'merged');
+        }
+        
+        // Show notification if enabled
+        if (themeProvider != null && themeProvider.notifications) {
+          NotificationService().showMergeComplete(_totalPages);
+        }
+        
         setState(() {
           _mergeProgress = 1.0;
           _selectedFiles.clear();
         });
-        _showSuccessDialog(outputPath);
+        _showSuccessDialog(outputPath, autoSavedPath);
       } else {
         _showSnackBar('Failed to merge PDFs', isError: true);
       }
@@ -230,7 +243,10 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
     }
   }
 
-  void _showSuccessDialog(String filePath) {
+  void _showSuccessDialog(String filePath, [String? autoSavedPath]) {
+    final themeProvider = ThemeNotifier.maybeOf(context);
+    final saveLocation = themeProvider?.saveLocation ?? 'Downloads';
+    
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -243,9 +259,41 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
             Text('Success!', style: TextStyle(color: _colors.textPrimary)),
           ],
         ),
-        content: Text(
-          'PDFs merged successfully!',
-          style: TextStyle(color: _colors.textSecondary),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'PDFs merged successfully!',
+              style: TextStyle(color: _colors.textSecondary),
+            ),
+            if (autoSavedPath != null) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF4CAF50).withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.folder_rounded, color: Color(0xFF4CAF50), size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Saved to $saveLocation/PDFHelper',
+                        style: const TextStyle(
+                          color: Color(0xFF4CAF50),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
         ),
         actions: [
           TextButton(
@@ -255,14 +303,17 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
           TextButton(
             onPressed: () {
               Navigator.pop(context);
-              Share.shareXFiles([XFile(filePath)], text: 'Merged PDF');
+              // Share the auto-saved file if available, otherwise use original
+              final shareFile = autoSavedPath ?? filePath;
+              Share.shareXFiles([XFile(shareFile)], text: 'Merged PDF');
             },
             child: const Text('Share', style: TextStyle(color: Color(0xFF00D9FF))),
           ),
           ElevatedButton(
             onPressed: () {
               Navigator.pop(context);
-              PdfService.openPdf(filePath);
+              // Open the auto-saved file if available, otherwise use original
+              PdfService.openPdf(autoSavedPath ?? filePath);
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFFE94560),

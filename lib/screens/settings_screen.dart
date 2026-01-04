@@ -9,13 +9,13 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  bool _autoSave = true;
-  bool _notifications = false;
   String _outputQuality = 'High';
-  String _defaultSaveLocation = 'Downloads';
 
   ThemeProvider? get _themeProvider => ThemeNotifier.maybeOf(context);
   bool get _isDarkMode => _themeProvider?.isDarkMode ?? true;
+  bool get _autoSave => _themeProvider?.autoSave ?? true;
+  bool get _notifications => _themeProvider?.notifications ?? true;
+  String get _saveLocation => _themeProvider?.saveLocation ?? 'Downloads';
   AppColors get _colors => AppColors(_isDarkMode);
 
   @override
@@ -117,18 +117,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
               _buildSettingsCard([
                 _buildSwitchTile(
                   'Auto Save',
-                  'Automatically save converted files',
+                  'Save files to $_saveLocation folder',
                   Icons.save_rounded,
                   _autoSave,
-                  (value) => setState(() => _autoSave = value),
+                  (value) => _themeProvider?.setAutoSave(value),
                 ),
                 _buildDivider(),
                 _buildSwitchTile(
                   'Notifications',
-                  'Get notified when conversion is complete',
+                  'Get notified when operations complete',
                   Icons.notifications_rounded,
                   _notifications,
-                  (value) => setState(() => _notifications = value),
+                  (value) => _themeProvider?.setNotifications(value),
                 ),
               ]),
               const SizedBox(height: 25),
@@ -148,11 +148,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _buildDivider(),
                 _buildDropdownTile(
                   'Save Location',
-                  'Default save location',
+                  'Auto-save destination',
                   Icons.folder_rounded,
-                  _defaultSaveLocation,
-                  ['Downloads', 'Documents', 'Custom'],
-                  (value) => setState(() => _defaultSaveLocation = value!),
+                  _saveLocation,
+                  ['Downloads', 'Documents'],
+                  (value) => _themeProvider?.setSaveLocation(value!),
                 ),
               ]),
               const SizedBox(height: 25),
@@ -179,13 +179,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   'Terms of Service',
                   'Read terms of service',
                   Icons.description_rounded,
-                  () {},
-                ),
-                _buildDivider(),
-                _buildActionTile(
-                  'Contact Support',
-                  'Get help with issues',
-                  Icons.support_agent_rounded,
                   () {},
                 ),
               ]),
