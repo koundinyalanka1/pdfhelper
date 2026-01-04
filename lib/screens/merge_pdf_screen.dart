@@ -1,15 +1,26 @@
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:pdfx/pdfx.dart';
 import '../services/pdf_service.dart';
 import '../providers/theme_provider.dart';
 
 class SelectedPdfFile {
   final String path;
   final String name;
+  final int pageCount;
+  final int fileSize;
+  Uint8List? thumbnail;
 
-  SelectedPdfFile({required this.path, required this.name});
+  SelectedPdfFile({
+    required this.path,
+    required this.name,
+    required this.pageCount,
+    required this.fileSize,
+    this.thumbnail,
+  });
 }
 
 class MergePdfScreen extends StatefulWidget {
@@ -22,9 +33,16 @@ class MergePdfScreen extends StatefulWidget {
 class _MergePdfScreenState extends State<MergePdfScreen> {
   final List<SelectedPdfFile> _selectedFiles = [];
   bool _isProcessing = false;
+  bool _isLoadingFiles = false;
 
   bool get _isDarkMode => ThemeNotifier.maybeOf(context)?.isDarkMode ?? true;
   AppColors get _colors => AppColors(_isDarkMode);
+
+  String _formatFileSize(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
 
   Future<void> _pickPdfFiles() async {
     try {
@@ -34,42 +52,57 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
         allowMultiple: true,
       );
 
-      if (result != null) {
-        setState(() {
-          for (var file in result.files) {
-            if (file.path != null) {
-              _selectedFiles.add(SelectedPdfFile(
-                path: file.path!,
-                name: file.name,
-              ));
-            }
+      if (result != null && result.files.isNotEmpty) {
+        setState(() => _isLoadingFiles = true);
+
+        for (var file in result.files) {
+          if (file.path != null) {
+            await _addPdfFile(file.path!, file.name, file.size);
           }
-        });
+        }
+
+        setState(() => _isLoadingFiles = false);
       }
     } catch (e) {
+      setState(() => _isLoadingFiles = false);
       _showSnackBar('Error selecting files: $e', isError: true);
     }
   }
 
-  void _moveItem(int oldIndex, int newIndex) {
-    if (newIndex < 0 || newIndex >= _selectedFiles.length) return;
-    
-    HapticFeedback.lightImpact();
-    setState(() {
-      final item = _selectedFiles.removeAt(oldIndex);
-      _selectedFiles.insert(newIndex, item);
-    });
-  }
+  Future<void> _addPdfFile(String path, String name, int size) async {
+    try {
+      // Get page count
+      final int pageCount = await PdfService.getPageCount(path);
+      
+      // Generate thumbnail of first page
+      Uint8List? thumbnail;
+      try {
+        final pdfDoc = await PdfDocument.openFile(path);
+        final page = await pdfDoc.getPage(1);
+        final pageImage = await page.render(
+          width: page.width * 0.3,
+          height: page.height * 0.3,
+          format: PdfPageImageFormat.jpeg,
+          quality: 70,
+        );
+        thumbnail = pageImage?.bytes;
+        await page.close();
+        await pdfDoc.close();
+      } catch (e) {
+        debugPrint('Error generating thumbnail: $e');
+      }
 
-  void _moveUp(int index) {
-    if (index > 0) {
-      _moveItem(index, index - 1);
-    }
-  }
-
-  void _moveDown(int index) {
-    if (index < _selectedFiles.length - 1) {
-      _moveItem(index, index + 1);
+      setState(() {
+        _selectedFiles.add(SelectedPdfFile(
+          path: path,
+          name: name,
+          pageCount: pageCount,
+          fileSize: size,
+          thumbnail: thumbnail,
+        ));
+      });
+    } catch (e) {
+      debugPrint('Error adding PDF: $e');
     }
   }
 
@@ -83,7 +116,6 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
       final String? outputPath = await PdfService.mergePdfs(paths);
 
       if (outputPath != null) {
-        // Clear the queue after successful merge
         setState(() {
           _selectedFiles.clear();
         });
@@ -151,6 +183,8 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
     );
   }
 
+  int get _totalPages => _selectedFiles.fold(0, (sum, file) => sum + file.pageCount);
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -177,23 +211,22 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
         ],
       ),
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            children: [
-              // Upload area
-              GestureDetector(
-                onTap: _isProcessing ? null : _pickPdfFiles,
+        child: Column(
+          children: [
+            // Add files button
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 10, 20, 10),
+              child: GestureDetector(
+                onTap: (_isProcessing || _isLoadingFiles) ? null : _pickPdfFiles,
                 child: Container(
                   width: double.infinity,
-                  height: 150,
+                  height: _selectedFiles.isEmpty ? 140 : 70,
                   decoration: BoxDecoration(
                     color: _colors.cardBackground,
-                    borderRadius: BorderRadius.circular(20),
+                    borderRadius: BorderRadius.circular(16),
                     border: Border.all(
                       color: const Color(0xFFE94560).withValues(alpha: 0.3),
                       width: 2,
-                      style: BorderStyle.solid,
                     ),
                     boxShadow: [
                       BoxShadow(
@@ -203,62 +236,126 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
                       ),
                     ],
                   ),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFE94560).withValues(alpha: 0.1),
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(
-                          Icons.add_circle_outline_rounded,
-                          size: 40,
-                          color: Color(0xFFE94560),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      Text(
-                        'Tap to select PDF files',
-                        style: TextStyle(
-                          color: _colors.textSecondary,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ],
-                  ),
+                  child: _isLoadingFiles
+                      ? Center(
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  color: Color(0xFFE94560),
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Text(
+                                'Loading PDFs...',
+                                style: TextStyle(
+                                  color: _colors.textSecondary,
+                                  fontSize: 14,
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                      : _selectedFiles.isEmpty
+                          ? Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(14),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFE94560).withValues(alpha: 0.1),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: const Icon(
+                                    Icons.add_circle_outline_rounded,
+                                    size: 36,
+                                    color: Color(0xFFE94560),
+                                  ),
+                                ),
+                                const SizedBox(height: 10),
+                                Text(
+                                  'Tap to select PDF files',
+                                  style: TextStyle(
+                                    color: _colors.textSecondary,
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ],
+                            )
+                          : Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(10),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFE94560).withValues(alpha: 0.1),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: const Icon(
+                                    Icons.add_rounded,
+                                    size: 24,
+                                    color: Color(0xFFE94560),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Text(
+                                  'Add more PDFs',
+                                  style: TextStyle(
+                                    color: _colors.textSecondary,
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ],
+                            ),
                 ),
               ),
-              const SizedBox(height: 20),
-              
-              // Selected files header with hint
-              if (_selectedFiles.isNotEmpty) ...[
-                Row(
+            ),
+
+            // Stats bar
+            if (_selectedFiles.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                child: Row(
                   children: [
                     Text(
-                      'Selected Files',
+                      'Selected PDFs',
                       style: TextStyle(
                         color: _colors.textPrimary,
-                        fontSize: 18,
+                        fontSize: 16,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
                     const Spacer(),
-                    Text(
-                      '${_selectedFiles.length} files',
-                      style: const TextStyle(
-                        color: Color(0xFFE94560),
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE94560).withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        '${_selectedFiles.length} files • $_totalPages pages',
+                        style: const TextStyle(
+                          color: Color(0xFFE94560),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 8),
-                // Reorder hint
-                Container(
+              ),
+
+            // Hint
+            if (_selectedFiles.length > 1)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   decoration: BoxDecoration(
                     color: const Color(0xFF00D9FF).withValues(alpha: 0.1),
@@ -266,233 +363,240 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
                   ),
                   child: Row(
                     children: [
-                      Icon(
+                      const Icon(
                         Icons.swap_vert_rounded,
-                        size: 18,
-                        color: const Color(0xFF00D9FF),
+                        size: 16,
+                        color: Color(0xFF00D9FF),
                       ),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          'Use arrows or drag to reorder PDFs',
+                          'Long press and drag to reorder',
                           style: TextStyle(
                             color: const Color(0xFF00D9FF),
                             fontSize: 12,
-                            fontWeight: FontWeight.w500,
                           ),
                         ),
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(height: 12),
-              ],
-              
-              // File list
-              Expanded(
-                child: _selectedFiles.isEmpty
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.folder_open_rounded,
-                              size: 80,
+              ),
+
+            const SizedBox(height: 10),
+
+            // PDF grid with previews
+            Expanded(
+              child: _selectedFiles.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.folder_open_rounded,
+                            size: 70,
+                            color: _colors.textTertiary,
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            'No files selected',
+                            style: TextStyle(
                               color: _colors.textTertiary,
+                              fontSize: 15,
                             ),
-                            const SizedBox(height: 15),
-                            Text(
-                              'No files selected',
-                              style: TextStyle(
-                                color: _colors.textTertiary,
-                                fontSize: 16,
-                              ),
-                            ),
-                          ],
-                        ),
-                      )
-                    : ReorderableListView.builder(
-                        itemCount: _selectedFiles.length,
-                        proxyDecorator: (child, index, animation) {
-                          return AnimatedBuilder(
-                            animation: animation,
-                            builder: (context, child) {
-                              final double elevation = Tween<double>(begin: 0, end: 8)
-                                  .animate(animation)
-                                  .value;
-                              return Material(
-                                elevation: elevation,
-                                borderRadius: BorderRadius.circular(15),
-                                shadowColor: const Color(0xFFE94560).withValues(alpha: 0.4),
-                                child: child,
-                              );
-                            },
-                            child: child,
-                          );
-                        },
-                        onReorder: (oldIndex, newIndex) {
-                          HapticFeedback.mediumImpact();
-                          setState(() {
-                            if (newIndex > oldIndex) newIndex--;
-                            final item = _selectedFiles.removeAt(oldIndex);
-                            _selectedFiles.insert(newIndex, item);
-                          });
-                        },
-                        itemBuilder: (context, index) {
-                          final bool isFirst = index == 0;
-                          final bool isLast = index == _selectedFiles.length - 1;
-                          
-                          return Container(
-                            key: ValueKey('${_selectedFiles[index].path}_$index'),
-                            margin: const EdgeInsets.only(bottom: 10),
+                          ),
+                        ],
+                      ),
+                    )
+                  : ReorderableListView.builder(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      itemCount: _selectedFiles.length,
+                      proxyDecorator: (child, index, animation) {
+                        return AnimatedBuilder(
+                          animation: animation,
+                          builder: (context, child) {
+                            final double elevation = Tween<double>(begin: 0, end: 8)
+                                .animate(animation)
+                                .value;
+                            return Material(
+                              elevation: elevation,
+                              borderRadius: BorderRadius.circular(16),
+                              shadowColor: const Color(0xFFE94560).withValues(alpha: 0.4),
+                              child: child,
+                            );
+                          },
+                          child: child,
+                        );
+                      },
+                      onReorder: (oldIndex, newIndex) {
+                        HapticFeedback.mediumImpact();
+                        setState(() {
+                          if (newIndex > oldIndex) newIndex--;
+                          final item = _selectedFiles.removeAt(oldIndex);
+                          _selectedFiles.insert(newIndex, item);
+                        });
+                      },
+                      itemBuilder: (context, index) {
+                        final file = _selectedFiles[index];
+                        
+                        return ReorderableDragStartListener(
+                          key: ValueKey('${file.path}_$index'),
+                          index: index,
+                          child: Container(
+                            margin: const EdgeInsets.only(bottom: 12),
                             decoration: BoxDecoration(
                               color: _colors.cardBackground,
-                              borderRadius: BorderRadius.circular(15),
+                              borderRadius: BorderRadius.circular(16),
                               boxShadow: [
                                 BoxShadow(
                                   color: _colors.shadowColor,
-                                  blurRadius: 5,
+                                  blurRadius: 8,
                                   offset: const Offset(0, 2),
                                 ),
                               ],
                             ),
-                            child: Material(
-                              color: Colors.transparent,
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                                child: Row(
-                                  children: [
-                                    // Order number badge
-                                    Container(
-                                      width: 32,
-                                      height: 32,
-                                      decoration: BoxDecoration(
-                                        color: const Color(0xFFE94560),
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: Center(
-                                        child: Text(
-                                          '${index + 1}',
-                                          style: const TextStyle(
-                                            color: Colors.white,
-                                            fontSize: 14,
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                        ),
-                                      ),
+                            child: Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Row(
+                                children: [
+                                  // Order badge
+                                  Container(
+                                    width: 28,
+                                    height: 28,
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFE94560),
+                                      borderRadius: BorderRadius.circular(8),
                                     ),
-                                    const SizedBox(width: 12),
-                                    
-                                    // PDF icon
-                                    Container(
-                                      padding: const EdgeInsets.all(8),
-                                      decoration: BoxDecoration(
-                                        color: const Color(0xFFE94560).withValues(alpha: 0.1),
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: const Icon(
-                                        Icons.picture_as_pdf_rounded,
-                                        color: Color(0xFFE94560),
-                                        size: 20,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 12),
-                                    
-                                    // File name
-                                    Expanded(
+                                    child: Center(
                                       child: Text(
-                                        _selectedFiles[index].name,
-                                        style: TextStyle(
-                                          color: _colors.textPrimary,
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w500,
-                                        ),
-                                        overflow: TextOverflow.ellipsis,
-                                        maxLines: 1,
-                                      ),
-                                    ),
-                                    
-                                    // Move up button
-                                    IconButton(
-                                      onPressed: isFirst ? null : () => _moveUp(index),
-                                      icon: Icon(
-                                        Icons.keyboard_arrow_up_rounded,
-                                        color: isFirst 
-                                            ? _colors.textTertiary 
-                                            : const Color(0xFF00D9FF),
-                                      ),
-                                      constraints: const BoxConstraints(
-                                        minWidth: 36,
-                                        minHeight: 36,
-                                      ),
-                                      padding: EdgeInsets.zero,
-                                      splashRadius: 20,
-                                    ),
-                                    
-                                    // Move down button
-                                    IconButton(
-                                      onPressed: isLast ? null : () => _moveDown(index),
-                                      icon: Icon(
-                                        Icons.keyboard_arrow_down_rounded,
-                                        color: isLast 
-                                            ? _colors.textTertiary 
-                                            : const Color(0xFF00D9FF),
-                                      ),
-                                      constraints: const BoxConstraints(
-                                        minWidth: 36,
-                                        minHeight: 36,
-                                      ),
-                                      padding: EdgeInsets.zero,
-                                      splashRadius: 20,
-                                    ),
-                                    
-                                    // Delete button
-                                    IconButton(
-                                      onPressed: () {
-                                        HapticFeedback.lightImpact();
-                                        setState(() {
-                                          _selectedFiles.removeAt(index);
-                                        });
-                                      },
-                                      icon: Icon(
-                                        Icons.close_rounded,
-                                        color: Colors.red.shade400,
-                                        size: 20,
-                                      ),
-                                      constraints: const BoxConstraints(
-                                        minWidth: 36,
-                                        minHeight: 36,
-                                      ),
-                                      padding: EdgeInsets.zero,
-                                      splashRadius: 20,
-                                    ),
-                                    
-                                    // Drag handle
-                                    ReorderableDragStartListener(
-                                      index: index,
-                                      child: Container(
-                                        padding: const EdgeInsets.all(8),
-                                        child: Icon(
-                                          Icons.drag_indicator_rounded,
-                                          color: _colors.textTertiary,
+                                        '${index + 1}',
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.bold,
                                         ),
                                       ),
                                     ),
-                                  ],
-                                ),
+                                  ),
+                                  const SizedBox(width: 12),
+
+                                  // Thumbnail
+                                  Container(
+                                    width: 60,
+                                    height: 80,
+                                    decoration: BoxDecoration(
+                                      color: _isDarkMode 
+                                          ? Colors.white.withValues(alpha: 0.1)
+                                          : Colors.grey.shade200,
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
+                                        color: _colors.divider,
+                                        width: 1,
+                                      ),
+                                    ),
+                                    child: ClipRRect(
+                                      borderRadius: BorderRadius.circular(7),
+                                      child: file.thumbnail != null
+                                          ? Image.memory(
+                                              file.thumbnail!,
+                                              fit: BoxFit.cover,
+                                            )
+                                          : Center(
+                                              child: Icon(
+                                                Icons.picture_as_pdf_rounded,
+                                                color: const Color(0xFFE94560),
+                                                size: 28,
+                                              ),
+                                            ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+
+                                  // File info
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          file.name,
+                                          style: TextStyle(
+                                            color: _colors.textPrimary,
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                        const SizedBox(height: 6),
+                                        Row(
+                                          children: [
+                                            Container(
+                                              padding: const EdgeInsets.symmetric(
+                                                horizontal: 8,
+                                                vertical: 3,
+                                              ),
+                                              decoration: BoxDecoration(
+                                                color: const Color(0xFFE94560).withValues(alpha: 0.1),
+                                                borderRadius: BorderRadius.circular(6),
+                                              ),
+                                              child: Text(
+                                                '${file.pageCount} page${file.pageCount != 1 ? 's' : ''}',
+                                                style: const TextStyle(
+                                                  color: Color(0xFFE94560),
+                                                  fontSize: 11,
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 8),
+                                            Text(
+                                              _formatFileSize(file.fileSize),
+                                              style: TextStyle(
+                                                color: _colors.textTertiary,
+                                                fontSize: 11,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+
+                                  // Delete button
+                                  IconButton(
+                                    onPressed: () {
+                                      HapticFeedback.lightImpact();
+                                      setState(() {
+                                        _selectedFiles.removeAt(index);
+                                      });
+                                    },
+                                    icon: Icon(
+                                      Icons.close_rounded,
+                                      color: Colors.red.shade400,
+                                      size: 20,
+                                    ),
+                                    constraints: const BoxConstraints(
+                                      minWidth: 40,
+                                      minHeight: 40,
+                                    ),
+                                    padding: EdgeInsets.zero,
+                                  ),
+                                ],
                               ),
                             ),
-                          );
-                        },
-                      ),
-              ),
-              
-              // Merge button
-              if (_selectedFiles.length >= 2)
-                Container(
+                          ),
+                        );
+                      },
+                    ),
+            ),
+
+            // Merge button
+            if (_selectedFiles.length >= 2)
+              Padding(
+                padding: const EdgeInsets.all(20),
+                child: SizedBox(
                   width: double.infinity,
                   height: 56,
-                  margin: const EdgeInsets.only(top: 16),
                   child: ElevatedButton(
                     onPressed: _isProcessing ? null : _mergePdfs,
                     style: ElevatedButton.styleFrom(
@@ -526,14 +630,14 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
                               ),
                             ],
                           )
-                        : const Row(
+                        : Row(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              Icon(Icons.merge_rounded, color: Colors.white, size: 22),
-                              SizedBox(width: 10),
+                              const Icon(Icons.merge_rounded, color: Colors.white, size: 22),
+                              const SizedBox(width: 10),
                               Text(
-                                'Merge PDFs',
-                                style: TextStyle(
+                                'Merge $_totalPages Pages',
+                                style: const TextStyle(
                                   color: Colors.white,
                                   fontSize: 17,
                                   fontWeight: FontWeight.w600,
@@ -543,8 +647,8 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
                           ),
                   ),
                 ),
-            ],
-          ),
+              ),
+          ],
         ),
       ),
     );
