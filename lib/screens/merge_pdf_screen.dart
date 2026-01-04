@@ -83,6 +83,10 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
       final String? outputPath = await PdfService.mergePdfs(paths);
 
       if (outputPath != null) {
+        // Clear the queue after successful merge
+        setState(() {
+          _selectedFiles.clear();
+        });
         _showSuccessDialog(outputPath);
       } else {
         _showSnackBar('Failed to merge PDFs', isError: true);
