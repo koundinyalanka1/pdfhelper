@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import '../main.dart';
 import '../providers/theme_provider.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -15,7 +14,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _outputQuality = 'High';
   String _defaultSaveLocation = 'Downloads';
 
-  ThemeProvider? get _themeProvider => PDFHelperApp.of(context)?.themeProvider;
+  ThemeProvider? get _themeProvider => ThemeNotifier.maybeOf(context);
   bool get _isDarkMode => _themeProvider?.isDarkMode ?? true;
   AppColors get _colors => AppColors(_isDarkMode);
 

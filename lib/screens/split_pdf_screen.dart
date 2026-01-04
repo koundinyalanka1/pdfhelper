@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:share_plus/share_plus.dart';
 import '../services/pdf_service.dart';
-import '../main.dart';
 import '../providers/theme_provider.dart';
 
 class SplitPdfScreen extends StatefulWidget {
@@ -21,7 +20,7 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
   String _splitMode = 'range';
   bool _isProcessing = false;
 
-  bool get _isDarkMode => PDFHelperApp.of(context)?.themeProvider.isDarkMode ?? true;
+  bool get _isDarkMode => ThemeNotifier.maybeOf(context)?.isDarkMode ?? true;
   AppColors get _colors => AppColors(_isDarkMode);
 
   @override

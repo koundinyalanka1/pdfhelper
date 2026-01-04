@@ -3,7 +3,6 @@ import 'merge_pdf_screen.dart';
 import 'convert_screen.dart';
 import 'split_pdf_screen.dart';
 import 'settings_screen.dart';
-import '../main.dart';
 import '../providers/theme_provider.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -23,7 +22,7 @@ class _HomeScreenState extends State<HomeScreen> {
     const SettingsScreen(),
   ];
 
-  bool get _isDarkMode => PDFHelperApp.of(context)?.themeProvider.isDarkMode ?? true;
+  bool get _isDarkMode => ThemeNotifier.maybeOf(context)?.isDarkMode ?? true;
   AppColors get _colors => AppColors(_isDarkMode);
 
   @override

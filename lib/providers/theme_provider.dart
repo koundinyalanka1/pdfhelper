@@ -6,7 +6,10 @@ class ThemeProvider extends ChangeNotifier {
   static const String _themeKey = 'isDarkMode';
   
   bool _isDarkMode = true;
+  bool _isInitialized = false;
+  
   bool get isDarkMode => _isDarkMode;
+  bool get isInitialized => _isInitialized;
 
   ThemeProvider() {
     _loadTheme();
@@ -15,11 +18,14 @@ class ThemeProvider extends ChangeNotifier {
   Future<void> _loadTheme() async {
     final prefs = await SharedPreferences.getInstance();
     _isDarkMode = prefs.getBool(_themeKey) ?? true;
+    _isInitialized = true;
     _updateSystemUI();
     notifyListeners();
   }
 
   Future<void> toggleTheme(bool isDark) async {
+    if (_isDarkMode == isDark) return;
+    
     _isDarkMode = isDark;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_themeKey, isDark);
@@ -89,6 +95,26 @@ class ThemeProvider extends ChangeNotifier {
   ThemeData get currentTheme => _isDarkMode ? darkTheme : lightTheme;
 }
 
+/// InheritedWidget to provide theme to all descendants
+class ThemeNotifier extends InheritedNotifier<ThemeProvider> {
+  const ThemeNotifier({
+    super.key,
+    required ThemeProvider themeProvider,
+    required super.child,
+  }) : super(notifier: themeProvider);
+
+  static ThemeProvider of(BuildContext context) {
+    final ThemeNotifier? result = context.dependOnInheritedWidgetOfExactType<ThemeNotifier>();
+    assert(result != null, 'No ThemeNotifier found in context');
+    return result!.notifier!;
+  }
+  
+  static ThemeProvider? maybeOf(BuildContext context) {
+    final ThemeNotifier? result = context.dependOnInheritedWidgetOfExactType<ThemeNotifier>();
+    return result?.notifier;
+  }
+}
+
 // App Colors helper class
 class AppColors {
   final bool isDark;
@@ -106,4 +132,3 @@ class AppColors {
   Color get bottomNavBackground => isDark ? const Color(0xFF16213E) : Colors.white;
   Color get shadowColor => isDark ? Colors.black26 : Colors.black12;
 }
-

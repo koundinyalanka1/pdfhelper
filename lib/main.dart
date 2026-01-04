@@ -19,19 +19,12 @@ void main() {
 class PDFHelperApp extends StatefulWidget {
   const PDFHelperApp({super.key});
 
-  // Static method to access state from anywhere
-  static _PDFHelperAppState? of(BuildContext context) {
-    return context.findAncestorStateOfType<_PDFHelperAppState>();
-  }
-
   @override
   State<PDFHelperApp> createState() => _PDFHelperAppState();
 }
 
 class _PDFHelperAppState extends State<PDFHelperApp> {
   final ThemeProvider _themeProvider = ThemeProvider();
-
-  ThemeProvider get themeProvider => _themeProvider;
 
   @override
   void initState() {
@@ -42,22 +35,28 @@ class _PDFHelperAppState extends State<PDFHelperApp> {
   @override
   void dispose() {
     _themeProvider.removeListener(_onThemeChanged);
+    _themeProvider.dispose();
     super.dispose();
   }
 
   void _onThemeChanged() {
-    setState(() {});
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'PDF Helper',
-      debugShowCheckedModeBanner: false,
-      theme: _themeProvider.lightTheme,
-      darkTheme: _themeProvider.darkTheme,
-      themeMode: _themeProvider.isDarkMode ? ThemeMode.dark : ThemeMode.light,
-      home: const SplashScreen(),
+    return ThemeNotifier(
+      themeProvider: _themeProvider,
+      child: MaterialApp(
+        title: 'PDF Helper',
+        debugShowCheckedModeBanner: false,
+        theme: _themeProvider.lightTheme,
+        darkTheme: _themeProvider.darkTheme,
+        themeMode: _themeProvider.isDarkMode ? ThemeMode.dark : ThemeMode.light,
+        home: const SplashScreen(),
+      ),
     );
   }
 }

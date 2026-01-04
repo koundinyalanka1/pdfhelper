@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:share_plus/share_plus.dart';
 import '../services/pdf_service.dart';
-import '../main.dart';
 import '../providers/theme_provider.dart';
 
 class SelectedPdfFile {
@@ -23,7 +22,7 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
   final List<SelectedPdfFile> _selectedFiles = [];
   bool _isProcessing = false;
 
-  bool get _isDarkMode => PDFHelperApp.of(context)?.themeProvider.isDarkMode ?? true;
+  bool get _isDarkMode => ThemeNotifier.maybeOf(context)?.isDarkMode ?? true;
   AppColors get _colors => AppColors(_isDarkMode);
 
   Future<void> _pickPdfFiles() async {

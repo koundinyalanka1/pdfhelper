@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
 import 'package:crop_your_image/crop_your_image.dart';
 import 'package:path_provider/path_provider.dart';
-import '../main.dart';
 import '../providers/theme_provider.dart';
 
 enum ScanFilter {
@@ -305,7 +304,7 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
   Uint8List? _originalImageBytes;
   String _currentImagePath = '';
 
-  bool get _isDarkMode => PDFHelperApp.of(context)?.themeProvider.isDarkMode ?? true;
+  bool get _isDarkMode => ThemeNotifier.maybeOf(context)?.isDarkMode ?? true;
   AppColors get _colors => AppColors(_isDarkMode);
 
   @override
@@ -728,7 +727,7 @@ class _CropScreenState extends State<_CropScreen> {
   bool _isCropping = false;
   double? _aspectRatio;
 
-  bool get _isDarkMode => PDFHelperApp.of(context)?.themeProvider.isDarkMode ?? true;
+  bool get _isDarkMode => ThemeNotifier.maybeOf(context)?.isDarkMode ?? true;
   AppColors get _colors => AppColors(_isDarkMode);
 
   void _onCrop() {
