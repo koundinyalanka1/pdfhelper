@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:share_plus/share_plus.dart';
 import '../services/pdf_service.dart';
+import '../main.dart';
+import '../providers/theme_provider.dart';
 
 class SelectedPdfFile {
   final String path;
@@ -20,6 +22,9 @@ class MergePdfScreen extends StatefulWidget {
 class _MergePdfScreenState extends State<MergePdfScreen> {
   final List<SelectedPdfFile> _selectedFiles = [];
   bool _isProcessing = false;
+
+  bool get _isDarkMode => PDFHelperApp.of(context)?.themeProvider.isDarkMode ?? true;
+  AppColors get _colors => AppColors(_isDarkMode);
 
   Future<void> _pickPdfFiles() async {
     try {
@@ -71,23 +76,23 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF16213E),
+        backgroundColor: _colors.cardBackground,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Row(
+        title: Row(
           children: [
-            Icon(Icons.check_circle, color: Color(0xFF4CAF50), size: 28),
-            SizedBox(width: 10),
-            Text('Success!', style: TextStyle(color: Colors.white)),
+            const Icon(Icons.check_circle, color: Color(0xFF4CAF50), size: 28),
+            const SizedBox(width: 10),
+            Text('Success!', style: TextStyle(color: _colors.textPrimary)),
           ],
         ),
-        content: const Text(
+        content: Text(
           'PDFs merged successfully!',
-          style: TextStyle(color: Colors.white70),
+          style: TextStyle(color: _colors.textSecondary),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Close', style: TextStyle(color: Colors.white54)),
+            child: Text('Close', style: TextStyle(color: _colors.textSecondary)),
           ),
           TextButton(
             onPressed: () {
@@ -123,14 +128,14 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF1A1A2E),
+      backgroundColor: _colors.background,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        title: const Text(
+        title: Text(
           'Merge PDF',
           style: TextStyle(
-            color: Colors.white,
+            color: _colors.textPrimary,
             fontWeight: FontWeight.w600,
           ),
         ),
@@ -141,7 +146,7 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
               onPressed: () {
                 setState(() => _selectedFiles.clear());
               },
-              icon: const Icon(Icons.delete_outline, color: Colors.white54),
+              icon: Icon(Icons.delete_outline, color: _colors.textSecondary),
             ),
         ],
       ),
@@ -149,240 +154,254 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
         child: Padding(
           padding: const EdgeInsets.all(20),
           child: Column(
-          children: [
-            // Upload area
-            GestureDetector(
-              onTap: _isProcessing ? null : _pickPdfFiles,
-              child: Container(
-                width: double.infinity,
-                height: 180,
-                decoration: BoxDecoration(
-                  color: const Color(0xFF16213E),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: const Color(0xFFE94560).withValues(alpha: 0.3),
-                    width: 2,
-                    style: BorderStyle.solid,
+            children: [
+              // Upload area
+              GestureDetector(
+                onTap: _isProcessing ? null : _pickPdfFiles,
+                child: Container(
+                  width: double.infinity,
+                  height: 180,
+                  decoration: BoxDecoration(
+                    color: _colors.cardBackground,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: const Color(0xFFE94560).withValues(alpha: 0.3),
+                      width: 2,
+                      style: BorderStyle.solid,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: _colors.shadowColor,
+                        blurRadius: 10,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(20),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFE94560).withValues(alpha: 0.1),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.add_circle_outline_rounded,
+                          size: 50,
+                          color: Color(0xFFE94560),
+                        ),
+                      ),
+                      const SizedBox(height: 15),
+                      Text(
+                        'Tap to select PDF files',
+                        style: TextStyle(
+                          color: _colors.textSecondary,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      const SizedBox(height: 5),
+                      Text(
+                        'Select multiple files to merge',
+                        style: TextStyle(
+                          color: _colors.textTertiary,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
+              ),
+              const SizedBox(height: 25),
+              // Selected files list
+              if (_selectedFiles.isNotEmpty) ...[
+                Row(
                   children: [
-                    Container(
-                      padding: const EdgeInsets.all(20),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFE94560).withValues(alpha: 0.1),
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.add_circle_outline_rounded,
-                        size: 50,
-                        color: Color(0xFFE94560),
-                      ),
-                    ),
-                    const SizedBox(height: 15),
-                    const Text(
-                      'Tap to select PDF files',
-                      style: TextStyle(
-                        color: Colors.white70,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    const SizedBox(height: 5),
                     Text(
-                      'Select multiple files to merge',
+                      'Selected Files',
                       style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.4),
-                        fontSize: 13,
+                        color: _colors.textPrimary,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      '${_selectedFiles.length} files',
+                      style: const TextStyle(
+                        color: Color(0xFFE94560),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
                   ],
                 ),
-              ),
-            ),
-            const SizedBox(height: 25),
-            // Selected files list
-            if (_selectedFiles.isNotEmpty) ...[
-              Row(
-                children: [
-                  const Text(
-                    'Selected Files',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const Spacer(),
-                  Text(
-                    '${_selectedFiles.length} files',
-                    style: const TextStyle(
-                      color: Color(0xFFE94560),
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 15),
-            ],
-            Expanded(
-              child: _selectedFiles.isEmpty
-                  ? Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            Icons.folder_open_rounded,
-                            size: 80,
-                            color: Colors.white.withValues(alpha: 0.2),
-                          ),
-                          const SizedBox(height: 15),
-                          Text(
-                            'No files selected',
-                            style: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.4),
-                              fontSize: 16,
-                            ),
-                          ),
-                        ],
-                      ),
-                    )
-                  : ReorderableListView.builder(
-                      itemCount: _selectedFiles.length,
-                      onReorder: (oldIndex, newIndex) {
-                        setState(() {
-                          if (newIndex > oldIndex) newIndex--;
-                          final item = _selectedFiles.removeAt(oldIndex);
-                          _selectedFiles.insert(newIndex, item);
-                        });
-                      },
-                      itemBuilder: (context, index) {
-                        return Container(
-                          key: ValueKey(_selectedFiles[index].path),
-                          margin: const EdgeInsets.only(bottom: 10),
-                          padding: const EdgeInsets.all(15),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF16213E),
-                            borderRadius: BorderRadius.circular(15),
-                          ),
-                          child: Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(10),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFE94560).withValues(alpha: 0.1),
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                child: const Icon(
-                                  Icons.picture_as_pdf_rounded,
-                                  color: Color(0xFFE94560),
-                                  size: 24,
-                                ),
-                              ),
-                              const SizedBox(width: 15),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      _selectedFiles[index].name,
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 15,
-                                        fontWeight: FontWeight.w500,
-                                      ),
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                    const SizedBox(height: 3),
-                                    Text(
-                                      'Order: ${index + 1}',
-                                      style: TextStyle(
-                                        color: Colors.white.withValues(alpha: 0.5),
-                                        fontSize: 12,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              IconButton(
-                                onPressed: () {
-                                  setState(() {
-                                    _selectedFiles.removeAt(index);
-                                  });
-                                },
-                                icon: Icon(
-                                  Icons.close_rounded,
-                                  color: Colors.white.withValues(alpha: 0.5),
-                                ),
-                              ),
-                              const Icon(
-                                Icons.drag_handle_rounded,
-                                color: Colors.white30,
-                              ),
-                            ],
-                          ),
-                        );
-                      },
-                    ),
-            ),
-            // Merge button
-            if (_selectedFiles.length >= 2)
-              Container(
-                width: double.infinity,
-                height: 60,
-                margin: const EdgeInsets.only(top: 20),
-                child: ElevatedButton(
-                  onPressed: _isProcessing ? null : _mergePdfs,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFE94560),
-                    disabledBackgroundColor: const Color(0xFFE94560).withValues(alpha: 0.5),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(15),
-                    ),
-                    elevation: 0,
-                  ),
-                  child: _isProcessing
-                      ? const Row(
+                const SizedBox(height: 15),
+              ],
+              Expanded(
+                child: _selectedFiles.isEmpty
+                    ? Center(
+                        child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            SizedBox(
-                              width: 24,
-                              height: 24,
-                              child: CircularProgressIndicator(
-                                color: Colors.white,
-                                strokeWidth: 2,
-                              ),
+                            Icon(
+                              Icons.folder_open_rounded,
+                              size: 80,
+                              color: _colors.textTertiary,
                             ),
-                            SizedBox(width: 15),
+                            const SizedBox(height: 15),
                             Text(
-                              'Merging...',
+                              'No files selected',
                               style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 18,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ],
-                        )
-                      : const Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.merge_rounded, color: Colors.white),
-                            SizedBox(width: 10),
-                            Text(
-                              'Merge PDFs',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 18,
-                                fontWeight: FontWeight.w600,
+                                color: _colors.textTertiary,
+                                fontSize: 16,
                               ),
                             ),
                           ],
                         ),
-                ),
+                      )
+                    : ReorderableListView.builder(
+                        itemCount: _selectedFiles.length,
+                        onReorder: (oldIndex, newIndex) {
+                          setState(() {
+                            if (newIndex > oldIndex) newIndex--;
+                            final item = _selectedFiles.removeAt(oldIndex);
+                            _selectedFiles.insert(newIndex, item);
+                          });
+                        },
+                        itemBuilder: (context, index) {
+                          return Container(
+                            key: ValueKey(_selectedFiles[index].path),
+                            margin: const EdgeInsets.only(bottom: 10),
+                            padding: const EdgeInsets.all(15),
+                            decoration: BoxDecoration(
+                              color: _colors.cardBackground,
+                              borderRadius: BorderRadius.circular(15),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: _colors.shadowColor,
+                                  blurRadius: 5,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
+                            ),
+                            child: Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(10),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFE94560).withValues(alpha: 0.1),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: const Icon(
+                                    Icons.picture_as_pdf_rounded,
+                                    color: Color(0xFFE94560),
+                                    size: 24,
+                                  ),
+                                ),
+                                const SizedBox(width: 15),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        _selectedFiles[index].name,
+                                        style: TextStyle(
+                                          color: _colors.textPrimary,
+                                          fontSize: 15,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                      const SizedBox(height: 3),
+                                      Text(
+                                        'Order: ${index + 1}',
+                                        style: TextStyle(
+                                          color: _colors.textSecondary,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                IconButton(
+                                  onPressed: () {
+                                    setState(() {
+                                      _selectedFiles.removeAt(index);
+                                    });
+                                  },
+                                  icon: Icon(
+                                    Icons.close_rounded,
+                                    color: _colors.textSecondary,
+                                  ),
+                                ),
+                                Icon(
+                                  Icons.drag_handle_rounded,
+                                  color: _colors.textTertiary,
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
               ),
+              // Merge button
+              if (_selectedFiles.length >= 2)
+                Container(
+                  width: double.infinity,
+                  height: 60,
+                  margin: const EdgeInsets.only(top: 20),
+                  child: ElevatedButton(
+                    onPressed: _isProcessing ? null : _mergePdfs,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFE94560),
+                      disabledBackgroundColor: const Color(0xFFE94560).withValues(alpha: 0.5),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(15),
+                      ),
+                      elevation: 0,
+                    ),
+                    child: _isProcessing
+                        ? const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              SizedBox(
+                                width: 24,
+                                height: 24,
+                                child: CircularProgressIndicator(
+                                  color: Colors.white,
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                              SizedBox(width: 15),
+                              Text(
+                                'Merging...',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          )
+                        : const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.merge_rounded, color: Colors.white),
+                              SizedBox(width: 10),
+                              Text(
+                                'Merge PDFs',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                  ),
+                ),
             ],
           ),
         ),

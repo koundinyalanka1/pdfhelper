@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:share_plus/share_plus.dart';
 import '../services/pdf_service.dart';
+import '../main.dart';
+import '../providers/theme_provider.dart';
 
 class SplitPdfScreen extends StatefulWidget {
   const SplitPdfScreen({super.key});
@@ -18,6 +20,9 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
   final TextEditingController _toController = TextEditingController();
   String _splitMode = 'range';
   bool _isProcessing = false;
+
+  bool get _isDarkMode => PDFHelperApp.of(context)?.themeProvider.isDarkMode ?? true;
+  AppColors get _colors => AppColors(_isDarkMode);
 
   @override
   void dispose() {
@@ -100,25 +105,25 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF16213E),
+        backgroundColor: _colors.cardBackground,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Row(
+        title: Row(
           children: [
-            Icon(Icons.check_circle, color: Color(0xFF4CAF50), size: 28),
-            SizedBox(width: 10),
-            Text('Success!', style: TextStyle(color: Colors.white)),
+            const Icon(Icons.check_circle, color: Color(0xFF4CAF50), size: 28),
+            const SizedBox(width: 10),
+            Text('Success!', style: TextStyle(color: _colors.textPrimary)),
           ],
         ),
         content: Text(
           filePaths.length == 1
               ? 'PDF split successfully!'
               : '${filePaths.length} pages extracted successfully!',
-          style: const TextStyle(color: Colors.white70),
+          style: TextStyle(color: _colors.textSecondary),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Close', style: TextStyle(color: Colors.white54)),
+            child: Text('Close', style: TextStyle(color: _colors.textSecondary)),
           ),
           TextButton(
             onPressed: () {
@@ -158,14 +163,14 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF1A1A2E),
+      backgroundColor: _colors.background,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        title: const Text(
+        title: Text(
           'Split PDF',
           style: TextStyle(
-            color: Colors.white,
+            color: _colors.textPrimary,
             fontWeight: FontWeight.w600,
           ),
         ),
@@ -175,346 +180,367 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(20),
           child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Upload area
-            GestureDetector(
-              onTap: _isProcessing ? null : _pickPdfFile,
-              child: Container(
-                width: double.infinity,
-                height: 160,
-                decoration: BoxDecoration(
-                  color: const Color(0xFF16213E),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: const Color(0xFFFFC107).withValues(alpha: 0.3),
-                    width: 2,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Upload area
+              GestureDetector(
+                onTap: _isProcessing ? null : _pickPdfFile,
+                child: Container(
+                  width: double.infinity,
+                  height: 160,
+                  decoration: BoxDecoration(
+                    color: _colors.cardBackground,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: const Color(0xFFFFC107).withValues(alpha: 0.3),
+                      width: 2,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: _colors.shadowColor,
+                        blurRadius: 10,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
                   ),
-                ),
-                child: _selectedFilePath == null
-                    ? Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(20),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFFFC107).withValues(alpha: 0.1),
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Icon(
-                              Icons.upload_file_rounded,
-                              size: 45,
-                              color: Color(0xFFFFC107),
-                            ),
-                          ),
-                          const SizedBox(height: 15),
-                          const Text(
-                            'Tap to select a PDF',
-                            style: TextStyle(
-                              color: Colors.white70,
-                              fontSize: 16,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ],
-                      )
-                    : Padding(
-                        padding: const EdgeInsets.all(20),
-                        child: Row(
+                  child: _selectedFilePath == null
+                      ? Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
                           children: [
                             Container(
-                              padding: const EdgeInsets.all(15),
+                              padding: const EdgeInsets.all(20),
                               decoration: BoxDecoration(
                                 color: const Color(0xFFFFC107).withValues(alpha: 0.1),
-                                borderRadius: BorderRadius.circular(15),
+                                shape: BoxShape.circle,
                               ),
                               child: const Icon(
-                                Icons.picture_as_pdf_rounded,
+                                Icons.upload_file_rounded,
+                                size: 45,
                                 color: Color(0xFFFFC107),
-                                size: 40,
                               ),
                             ),
-                            const SizedBox(width: 20),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Text(
-                                    _selectedFileName!,
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 12,
-                                      vertical: 6,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFFFFC107).withValues(alpha: 0.2),
-                                      borderRadius: BorderRadius.circular(20),
-                                    ),
-                                    child: Text(
-                                      '$_totalPages pages',
-                                      style: const TextStyle(
-                                        color: Color(0xFFFFC107),
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            IconButton(
-                              onPressed: () {
-                                setState(() {
-                                  _selectedFilePath = null;
-                                  _selectedFileName = null;
-                                  _totalPages = 0;
-                                  _fromController.clear();
-                                  _toController.clear();
-                                });
-                              },
-                              icon: const Icon(
-                                Icons.close_rounded,
-                                color: Colors.white54,
+                            const SizedBox(height: 15),
+                            Text(
+                              'Tap to select a PDF',
+                              style: TextStyle(
+                                color: _colors.textSecondary,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w500,
                               ),
                             ),
                           ],
+                        )
+                      : Padding(
+                          padding: const EdgeInsets.all(20),
+                          child: Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(15),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFFFC107).withValues(alpha: 0.1),
+                                  borderRadius: BorderRadius.circular(15),
+                                ),
+                                child: const Icon(
+                                  Icons.picture_as_pdf_rounded,
+                                  color: Color(0xFFFFC107),
+                                  size: 40,
+                                ),
+                              ),
+                              const SizedBox(width: 20),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Text(
+                                      _selectedFileName!,
+                                      style: TextStyle(
+                                        color: _colors.textPrimary,
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 12,
+                                        vertical: 6,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFFFFC107).withValues(alpha: 0.2),
+                                        borderRadius: BorderRadius.circular(20),
+                                      ),
+                                      child: Text(
+                                        '$_totalPages pages',
+                                        style: const TextStyle(
+                                          color: Color(0xFFFFC107),
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              IconButton(
+                                onPressed: () {
+                                  setState(() {
+                                    _selectedFilePath = null;
+                                    _selectedFileName = null;
+                                    _totalPages = 0;
+                                    _fromController.clear();
+                                    _toController.clear();
+                                  });
+                                },
+                                icon: Icon(
+                                  Icons.close_rounded,
+                                  color: _colors.textSecondary,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
-              ),
-            ),
-            if (_selectedFilePath != null) ...[
-              const SizedBox(height: 30),
-              const Text(
-                'Split Mode',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w600,
                 ),
               ),
-              const SizedBox(height: 15),
-              // Split mode options
-              Row(
-                children: [
-                  Expanded(
-                    child: _buildModeCard(
-                      'range',
-                      'Page Range',
-                      Icons.horizontal_rule_rounded,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: _buildModeCard(
-                      'all',
-                      'Extract All',
-                      Icons.layers_rounded,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 25),
-              // Page range input
-              if (_splitMode == 'range') ...[
-                const Text(
-                  'Select Page Range',
+              if (_selectedFilePath != null) ...[
+                const SizedBox(height: 30),
+                Text(
+                  'Split Mode',
                   style: TextStyle(
-                    color: Colors.white,
+                    color: _colors.textPrimary,
                     fontSize: 18,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
                 const SizedBox(height: 15),
+                // Split mode options
                 Row(
                   children: [
                     Expanded(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 15),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF16213E),
-                          borderRadius: BorderRadius.circular(15),
-                        ),
-                        child: TextField(
-                          controller: _fromController,
-                          keyboardType: TextInputType.number,
-                          style: const TextStyle(color: Colors.white),
-                          decoration: InputDecoration(
-                            border: InputBorder.none,
-                            labelText: 'From',
-                            labelStyle: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.5),
-                            ),
-                            hintText: '1',
-                            hintStyle: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.3),
-                            ),
-                          ),
-                        ),
+                      child: _buildModeCard(
+                        'range',
+                        'Page Range',
+                        Icons.horizontal_rule_rounded,
                       ),
                     ),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 15),
-                      child: Icon(
-                        Icons.arrow_forward_rounded,
-                        color: Colors.white.withValues(alpha: 0.5),
-                      ),
-                    ),
+                    const SizedBox(width: 10),
                     Expanded(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 15),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF16213E),
-                          borderRadius: BorderRadius.circular(15),
-                        ),
-                        child: TextField(
-                          controller: _toController,
-                          keyboardType: TextInputType.number,
-                          style: const TextStyle(color: Colors.white),
-                          decoration: InputDecoration(
-                            border: InputBorder.none,
-                            labelText: 'To',
-                            labelStyle: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.5),
-                            ),
-                            hintText: '$_totalPages',
-                            hintStyle: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.3),
-                            ),
-                          ),
-                        ),
+                      child: _buildModeCard(
+                        'all',
+                        'Extract All',
+                        Icons.layers_rounded,
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 15),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(15),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF16213E),
-                    borderRadius: BorderRadius.circular(15),
+                const SizedBox(height: 25),
+                // Page range input
+                if (_splitMode == 'range') ...[
+                  Text(
+                    'Select Page Range',
+                    style: TextStyle(
+                      color: _colors.textPrimary,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
-                  child: Row(
+                  const SizedBox(height: 15),
+                  Row(
                     children: [
-                      Icon(
-                        Icons.info_outline_rounded,
-                        color: Colors.white.withValues(alpha: 0.5),
-                        size: 20,
-                      ),
-                      const SizedBox(width: 10),
                       Expanded(
-                        child: Text(
-                          'Extract pages 1 to $_totalPages into a new PDF',
-                          style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.5),
-                            fontSize: 13,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 15),
+                          decoration: BoxDecoration(
+                            color: _colors.cardBackground,
+                            borderRadius: BorderRadius.circular(15),
+                            boxShadow: [
+                              BoxShadow(
+                                color: _colors.shadowColor,
+                                blurRadius: 5,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: TextField(
+                            controller: _fromController,
+                            keyboardType: TextInputType.number,
+                            style: TextStyle(color: _colors.textPrimary),
+                            decoration: InputDecoration(
+                              border: InputBorder.none,
+                              labelText: 'From',
+                              labelStyle: TextStyle(
+                                color: _colors.textSecondary,
+                              ),
+                              hintText: '1',
+                              hintStyle: TextStyle(
+                                color: _colors.textTertiary,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 15),
+                        child: Icon(
+                          Icons.arrow_forward_rounded,
+                          color: _colors.textSecondary,
+                        ),
+                      ),
+                      Expanded(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 15),
+                          decoration: BoxDecoration(
+                            color: _colors.cardBackground,
+                            borderRadius: BorderRadius.circular(15),
+                            boxShadow: [
+                              BoxShadow(
+                                color: _colors.shadowColor,
+                                blurRadius: 5,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: TextField(
+                            controller: _toController,
+                            keyboardType: TextInputType.number,
+                            style: TextStyle(color: _colors.textPrimary),
+                            decoration: InputDecoration(
+                              border: InputBorder.none,
+                              labelText: 'To',
+                              labelStyle: TextStyle(
+                                color: _colors.textSecondary,
+                              ),
+                              hintText: '$_totalPages',
+                              hintStyle: TextStyle(
+                                color: _colors.textTertiary,
+                              ),
+                            ),
                           ),
                         ),
                       ),
                     ],
                   ),
-                ),
-              ],
-              if (_splitMode == 'all') ...[
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF16213E),
-                    borderRadius: BorderRadius.circular(15),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFFFC107).withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: const Icon(
-                          Icons.info_outline_rounded,
-                          color: Color(0xFFFFC107),
-                        ),
-                      ),
-                      const SizedBox(width: 15),
-                      Expanded(
-                        child: Text(
-                          'Each of the $_totalPages pages will be extracted as a separate PDF file',
-                          style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.7),
-                            fontSize: 14,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-              const SizedBox(height: 30),
-              // Split button
-              SizedBox(
-                width: double.infinity,
-                height: 60,
-                child: ElevatedButton(
-                  onPressed: _isProcessing ? null : _splitPdf,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFFFC107),
-                    disabledBackgroundColor: const Color(0xFFFFC107).withValues(alpha: 0.5),
-                    shape: RoundedRectangleBorder(
+                  const SizedBox(height: 15),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(15),
+                    decoration: BoxDecoration(
+                      color: _colors.cardBackground,
                       borderRadius: BorderRadius.circular(15),
                     ),
-                    elevation: 0,
-                  ),
-                  child: _isProcessing
-                      ? const Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            SizedBox(
-                              width: 24,
-                              height: 24,
-                              child: CircularProgressIndicator(
-                                color: Colors.black87,
-                                strokeWidth: 2,
-                              ),
-                            ),
-                            SizedBox(width: 15),
-                            Text(
-                              'Splitting...',
-                              style: TextStyle(
-                                color: Colors.black87,
-                                fontSize: 18,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ],
-                        )
-                      : const Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.content_cut_rounded, color: Colors.black87),
-                            SizedBox(width: 10),
-                            Text(
-                              'Split PDF',
-                              style: TextStyle(
-                                color: Colors.black87,
-                                fontSize: 18,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ],
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.info_outline_rounded,
+                          color: _colors.textSecondary,
+                          size: 20,
                         ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            'Extract pages 1 to $_totalPages into a new PDF',
+                            style: TextStyle(
+                              color: _colors.textSecondary,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+                if (_splitMode == 'all') ...[
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: _colors.cardBackground,
+                      borderRadius: BorderRadius.circular(15),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFFC107).withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: const Icon(
+                            Icons.info_outline_rounded,
+                            color: Color(0xFFFFC107),
+                          ),
+                        ),
+                        const SizedBox(width: 15),
+                        Expanded(
+                          child: Text(
+                            'Each of the $_totalPages pages will be extracted as a separate PDF file',
+                            style: TextStyle(
+                              color: _colors.textSecondary,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 30),
+                // Split button
+                SizedBox(
+                  width: double.infinity,
+                  height: 60,
+                  child: ElevatedButton(
+                    onPressed: _isProcessing ? null : _splitPdf,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFFFC107),
+                      disabledBackgroundColor: const Color(0xFFFFC107).withValues(alpha: 0.5),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(15),
+                      ),
+                      elevation: 0,
+                    ),
+                    child: _isProcessing
+                        ? const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              SizedBox(
+                                width: 24,
+                                height: 24,
+                                child: CircularProgressIndicator(
+                                  color: Colors.black87,
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                              SizedBox(width: 15),
+                              Text(
+                                'Splitting...',
+                                style: TextStyle(
+                                  color: Colors.black87,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          )
+                        : const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.content_cut_rounded, color: Colors.black87),
+                              SizedBox(width: 10),
+                              Text(
+                                'Split PDF',
+                                style: TextStyle(
+                                  color: Colors.black87,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                  ),
                 ),
-              ),
-            ],
+              ],
             ],
           ),
         ),
@@ -535,25 +561,32 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
         decoration: BoxDecoration(
           color: isSelected
               ? const Color(0xFFFFC107).withValues(alpha: 0.15)
-              : const Color(0xFF16213E),
+              : _colors.cardBackground,
           borderRadius: BorderRadius.circular(15),
           border: Border.all(
             color: isSelected ? const Color(0xFFFFC107) : Colors.transparent,
             width: 2,
           ),
+          boxShadow: [
+            BoxShadow(
+              color: _colors.shadowColor,
+              blurRadius: 5,
+              offset: const Offset(0, 2),
+            ),
+          ],
         ),
         child: Column(
           children: [
             Icon(
               icon,
-              color: isSelected ? const Color(0xFFFFC107) : Colors.white54,
+              color: isSelected ? const Color(0xFFFFC107) : _colors.textSecondary,
               size: 30,
             ),
             const SizedBox(height: 10),
             Text(
               label,
               style: TextStyle(
-                color: isSelected ? const Color(0xFFFFC107) : Colors.white70,
+                color: isSelected ? const Color(0xFFFFC107) : _colors.textSecondary,
                 fontSize: 14,
                 fontWeight: FontWeight.w500,
               ),
