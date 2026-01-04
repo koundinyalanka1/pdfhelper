@@ -32,39 +32,11 @@ class ExtractPagesRequest {
   ExtractPagesRequest(this.pdfBytes, this.pageIndices);
 }
 
-/// Helper class to hold template with its size for batching
-class _TemplateInfo {
-  final PdfTemplate template;
-  final double width;
-  final double height;
-  _TemplateInfo(this.template, this.width, this.height);
-}
-
-/// ULTRA-OPTIMIZED: Fast merge with batch template creation and size grouping
+/// OPTIMIZED: Fast merge - templates must be used before source doc is disposed
 List<int> mergePdfsFastIsolate(MergeRequest request) {
   if (request.pdfBytesList.isEmpty) return [];
   
-  // PHASE 1: Extract all templates first (batch extraction is faster)
-  // This minimizes context switching between parsing and template creation
-  final List<_TemplateInfo> allTemplates = [];
-  
-  for (final Uint8List pdfBytes in request.pdfBytesList) {
-    final PdfDocument sourceDoc = PdfDocument(inputBytes: pdfBytes);
-    final int pageCount = sourceDoc.pages.count;
-    
-    // Extract all templates from this document
-    for (int i = 0; i < pageCount; i++) {
-      final PdfTemplate template = sourceDoc.pages[i].createTemplate();
-      allTemplates.add(_TemplateInfo(template, template.size.width, template.size.height));
-    }
-    
-    // Dispose source document immediately after extraction
-    sourceDoc.dispose();
-  }
-  
-  if (allTemplates.isEmpty) return [];
-  
-  // PHASE 2: Create output document and add pages
+  // Create output document
   final PdfDocument outputDoc = PdfDocument();
   
   // Remove default empty page
@@ -77,24 +49,41 @@ List<int> mergePdfsFastIsolate(MergeRequest request) {
   double currentWidth = -1;
   double currentHeight = -1;
   
-  // PHASE 3: Add all templates to output document
-  for (final info in allTemplates) {
-    // Create new section only if page size differs
-    if (currentSection == null || 
-        currentWidth != info.width || 
-        currentHeight != info.height) {
-      currentSection = outputDoc.sections!.add();
-      currentSection.pageSettings.size = Size(info.width, info.height);
-      currentSection.pageSettings.margins.all = 0;
-      currentWidth = info.width;
-      currentHeight = info.height;
+  // Process each PDF document
+  for (final Uint8List pdfBytes in request.pdfBytesList) {
+    final PdfDocument sourceDoc = PdfDocument(inputBytes: pdfBytes);
+    final int pageCount = sourceDoc.pages.count;
+    
+    // Extract templates and add to output BEFORE disposing source
+    for (int i = 0; i < pageCount; i++) {
+      final PdfTemplate template = sourceDoc.pages[i].createTemplate();
+      final double templateWidth = template.size.width;
+      final double templateHeight = template.size.height;
+      
+      // Create new section only if page size differs
+      if (currentSection == null || 
+          currentWidth != templateWidth || 
+          currentHeight != templateHeight) {
+        currentSection = outputDoc.sections?.add();
+        if (currentSection != null) {
+          currentSection.pageSettings.size = Size(templateWidth, templateHeight);
+          currentSection.pageSettings.margins.all = 0;
+          currentWidth = templateWidth;
+          currentHeight = templateHeight;
+        }
+      }
+      
+      // Add page and draw template
+      if (currentSection != null) {
+        currentSection.pages.add().graphics.drawPdfTemplate(template, Offset.zero);
+      }
     }
     
-    // Add page and draw template
-    currentSection.pages.add().graphics.drawPdfTemplate(info.template, Offset.zero);
+    // Dispose source document after all its pages are processed
+    sourceDoc.dispose();
   }
 
-  // PHASE 4: Save and cleanup
+  // Save and cleanup
   final List<int> result = outputDoc.saveSync();
   outputDoc.dispose();
   return result;

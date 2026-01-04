@@ -27,7 +27,7 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
   double _splitProgress = 0.0;
   String _splitStatus = '';
   
-  // For page previews (PDFs < 20 pages)
+  // For page previews (PDFs < 30 pages)
   List<Uint8List?> _pagePreviews = [];
   Set<int> _selectedPages = {};
   PdfDocument? _pdfDocument;
@@ -38,8 +38,8 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
   bool get _isDarkMode => ThemeNotifier.maybeOf(context)?.isDarkMode ?? true;
   AppColors get _colors => AppColors(_isDarkMode);
   
-  // Show preview mode for PDFs with less than 20 pages
-  bool get _usePreviewMode => _totalPages > 0 && _totalPages < 20;
+  // Show preview mode for PDFs with less than 30 pages
+  bool get _usePreviewMode => _totalPages > 0 && _totalPages < 30;
 
   @override
   void dispose() {
