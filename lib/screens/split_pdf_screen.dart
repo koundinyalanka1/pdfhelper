@@ -24,11 +24,16 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
   String _splitMode = 'range';
   bool _isProcessing = false;
   bool _isLoadingPreviews = false;
+  double _splitProgress = 0.0;
+  String _splitStatus = '';
   
   // For page previews (PDFs < 20 pages)
   List<Uint8List?> _pagePreviews = [];
   Set<int> _selectedPages = {};
   PdfDocument? _pdfDocument;
+  
+  // Cache PDF bytes to avoid re-reading
+  Uint8List? _cachedPdfBytes;
 
   bool get _isDarkMode => ThemeNotifier.maybeOf(context)?.isDarkMode ?? true;
   AppColors get _colors => AppColors(_isDarkMode);
@@ -54,12 +59,16 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
 
       if (result != null && result.files.single.path != null) {
         final String path = result.files.single.path!;
+        
+        // Read and cache bytes once
+        final Uint8List bytes = await File(path).readAsBytes();
         final int pageCount = await PdfService.getPageCount(path);
 
         setState(() {
           _selectedFilePath = path;
           _selectedFileName = result.files.single.name;
           _totalPages = pageCount;
+          _cachedPdfBytes = bytes;
           _fromController.clear();
           _toController.clear();
           _selectedPages.clear();
@@ -134,9 +143,13 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
   }
 
   Future<void> _splitPdf() async {
-    if (_selectedFilePath == null) return;
+    if (_selectedFilePath == null || _cachedPdfBytes == null) return;
 
-    setState(() => _isProcessing = true);
+    setState(() {
+      _isProcessing = true;
+      _splitProgress = 0.0;
+      _splitStatus = 'Preparing...';
+    });
 
     try {
       if (_usePreviewMode) {
@@ -149,62 +162,24 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
 
         final sortedPages = _selectedPages.toList()..sort();
         
-        // If consecutive pages, use range split
-        bool isConsecutive = true;
-        for (int i = 1; i < sortedPages.length; i++) {
-          if (sortedPages[i] != sortedPages[i - 1] + 1) {
-            isConsecutive = false;
-            break;
-          }
-        }
+        setState(() {
+          _splitProgress = 0.2;
+          _splitStatus = 'Extracting ${sortedPages.length} page${sortedPages.length > 1 ? 's' : ''}...';
+        });
 
-        if (isConsecutive && sortedPages.length > 1) {
-          // Use range split for consecutive pages
-          final String? outputPath = await PdfService.splitPdfByRange(
-            _selectedFilePath!,
-            sortedPages.first + 1, // Convert to 1-based
-            sortedPages.last + 1,
-          );
-          if (outputPath != null) {
-            _showSuccessDialog([outputPath]);
-          } else {
-            _showSnackBar('Failed to split PDF', isError: true);
-          }
+        // OPTIMIZED: Extract all selected pages at once using cached bytes
+        final String? outputPath = await PdfService.extractPagesFromBytes(
+          _cachedPdfBytes!,
+          sortedPages, // Already 0-based
+        );
+        
+        setState(() => _splitProgress = 0.9);
+        
+        if (outputPath != null) {
+          setState(() => _splitProgress = 1.0);
+          _showSuccessDialog([outputPath]);
         } else {
-          // Extract individual pages and merge them
-          List<String> outputPaths = [];
-          for (int pageIndex in sortedPages) {
-            final String? outputPath = await PdfService.splitPdfByRange(
-              _selectedFilePath!,
-              pageIndex + 1,
-              pageIndex + 1,
-            );
-            if (outputPath != null) {
-              outputPaths.add(outputPath);
-            }
-          }
-          
-          if (outputPaths.isNotEmpty) {
-            if (outputPaths.length == 1) {
-              _showSuccessDialog(outputPaths);
-            } else {
-              // Merge the extracted pages into one PDF
-              final String? mergedPath = await PdfService.mergePdfs(outputPaths);
-              // Clean up individual files
-              for (String path in outputPaths) {
-                try {
-                  await File(path).delete();
-                } catch (_) {}
-              }
-              if (mergedPath != null) {
-                _showSuccessDialog([mergedPath]);
-              } else {
-                _showSnackBar('Failed to merge extracted pages', isError: true);
-              }
-            }
-          } else {
-            _showSnackBar('Failed to extract pages', isError: true);
-          }
+          _showSnackBar('Failed to extract pages', isError: true);
         }
       } else if (_splitMode == 'range') {
         final int fromPage = int.tryParse(_fromController.text) ?? 1;
@@ -216,23 +191,40 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
           return;
         }
 
-        final String? outputPath = await PdfService.splitPdfByRange(
-          _selectedFilePath!,
+        setState(() {
+          _splitProgress = 0.3;
+          _splitStatus = 'Extracting pages $fromPage-$toPage...';
+        });
+
+        // Use cached bytes
+        final String? outputPath = await PdfService.splitPdfByRangeFromBytes(
+          _cachedPdfBytes!,
           fromPage,
           toPage,
         );
 
+        setState(() => _splitProgress = 0.9);
+
         if (outputPath != null) {
+          setState(() => _splitProgress = 1.0);
           _showSuccessDialog([outputPath]);
         } else {
           _showSnackBar('Failed to split PDF', isError: true);
         }
       } else {
-        // Split all pages
+        // Split all pages - use cached bytes
+        setState(() {
+          _splitProgress = 0.2;
+          _splitStatus = 'Extracting $_totalPages pages...';
+        });
+        
         final List<String> outputPaths =
-            await PdfService.splitPdfAllPages(_selectedFilePath!);
+            await PdfService.splitPdfAllPagesFromBytes(_cachedPdfBytes!);
+
+        setState(() => _splitProgress = 0.9);
 
         if (outputPaths.isNotEmpty) {
+          setState(() => _splitProgress = 1.0);
           _showSuccessDialog(outputPaths);
         } else {
           _showSnackBar('Failed to split PDF', isError: true);
@@ -241,7 +233,10 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
     } catch (e) {
       _showSnackBar('Error: $e', isError: true);
     } finally {
-      setState(() => _isProcessing = false);
+      setState(() {
+        _isProcessing = false;
+        _splitProgress = 0.0;
+      });
     }
   }
 
@@ -447,6 +442,7 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
                                     _selectedFilePath = null;
                                     _selectedFileName = null;
                                     _totalPages = 0;
+                                    _cachedPdfBytes = null;
                                     _fromController.clear();
                                     _toController.clear();
                                     _selectedPages.clear();
@@ -480,60 +476,91 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
             if (_selectedFilePath != null)
               Padding(
                 padding: const EdgeInsets.all(20),
-                child: SizedBox(
-                  width: double.infinity,
-                  height: 56,
-                  child: ElevatedButton(
-                    onPressed: _isProcessing ? null : _splitPdf,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFFFFC107),
-                      disabledBackgroundColor: const Color(0xFFFFC107).withValues(alpha: 0.5),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(15),
-                      ),
-                      elevation: 0,
-                    ),
-                    child: _isProcessing
-                        ? const Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              SizedBox(
-                                width: 22,
-                                height: 22,
-                                child: CircularProgressIndicator(
-                                  color: Colors.black87,
-                                  strokeWidth: 2,
+                child: Column(
+                  children: [
+                    if (_isProcessing) ...[
+                      // Progress bar
+                      Container(
+                        margin: const EdgeInsets.only(bottom: 12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  _splitStatus,
+                                  style: TextStyle(
+                                    color: _colors.textSecondary,
+                                    fontSize: 13,
+                                  ),
                                 ),
+                                Text(
+                                  '${(_splitProgress * 100).toInt()}%',
+                                  style: const TextStyle(
+                                    color: Color(0xFFFFC107),
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: LinearProgressIndicator(
+                                value: _splitProgress,
+                                minHeight: 8,
+                                backgroundColor: _colors.cardBackground,
+                                valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFFFFC107)),
                               ),
-                              SizedBox(width: 12),
-                              Text(
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                    SizedBox(
+                      width: double.infinity,
+                      height: 56,
+                      child: ElevatedButton(
+                        onPressed: _isProcessing ? null : _splitPdf,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFFFFC107),
+                          disabledBackgroundColor: const Color(0xFFFFC107).withValues(alpha: 0.5),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(15),
+                          ),
+                          elevation: 0,
+                        ),
+                        child: _isProcessing
+                            ? const Text(
                                 'Processing...',
                                 style: TextStyle(
                                   color: Colors.black87,
                                   fontSize: 17,
                                   fontWeight: FontWeight.w600,
                                 ),
+                              )
+                            : Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  const Icon(Icons.content_cut_rounded, color: Colors.black87, size: 22),
+                                  const SizedBox(width: 10),
+                                  Text(
+                                    _usePreviewMode
+                                        ? 'Extract ${_selectedPages.length} Page${_selectedPages.length != 1 ? 's' : ''}'
+                                        : 'Split PDF',
+                                    style: const TextStyle(
+                                      color: Colors.black87,
+                                      fontSize: 17,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
                               ),
-                            ],
-                          )
-                        : Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              const Icon(Icons.content_cut_rounded, color: Colors.black87, size: 22),
-                              const SizedBox(width: 10),
-                              Text(
-                                _usePreviewMode
-                                    ? 'Extract ${_selectedPages.length} Page${_selectedPages.length != 1 ? 's' : ''}'
-                                    : 'Split PDF',
-                                style: const TextStyle(
-                                  color: Colors.black87,
-                                  fontSize: 17,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ],
-                          ),
-                  ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
           ],

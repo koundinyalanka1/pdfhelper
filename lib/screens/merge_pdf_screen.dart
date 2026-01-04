@@ -15,18 +15,20 @@ typedef SyncPdfDocument = sync_pdf.PdfDocument;
 class SelectedPdfFile {
   final String path;
   final String name;
-  final int pageCount;
+  int pageCount;
   final int fileSize;
   Uint8List? thumbnail;
   Uint8List? cachedBytes; // Cache PDF bytes for faster merge
+  bool isLoading; // Loading state for background processing
 
   SelectedPdfFile({
     required this.path,
     required this.name,
-    required this.pageCount,
+    this.pageCount = 0,
     required this.fileSize,
     this.thumbnail,
     this.cachedBytes,
+    this.isLoading = true,
   });
 }
 
@@ -40,7 +42,8 @@ class MergePdfScreen extends StatefulWidget {
 class _MergePdfScreenState extends State<MergePdfScreen> {
   final List<SelectedPdfFile> _selectedFiles = [];
   bool _isProcessing = false;
-  bool _isLoadingFiles = false;
+  double _mergeProgress = 0.0;
+  String _mergeStatus = '';
 
   bool get _isDarkMode => ThemeNotifier.maybeOf(context)?.isDarkMode ?? true;
   AppColors get _colors => AppColors(_isDarkMode);
@@ -60,60 +63,89 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
       );
 
       if (result != null && result.files.isNotEmpty) {
-        setState(() => _isLoadingFiles = true);
-
+        // Add all files immediately with loading state
+        final List<SelectedPdfFile> newFiles = [];
         for (var file in result.files) {
           if (file.path != null) {
-            await _addPdfFile(file.path!, file.name, file.size);
+            final newFile = SelectedPdfFile(
+              path: file.path!,
+              name: file.name,
+              fileSize: file.size,
+              isLoading: true,
+            );
+            newFiles.add(newFile);
           }
         }
-
-        setState(() => _isLoadingFiles = false);
+        
+        setState(() {
+          _selectedFiles.addAll(newFiles);
+        });
+        
+        // Load all files in PARALLEL (not sequential)
+        for (final file in newFiles) {
+          _loadPdfDetails(file);
+        }
       }
     } catch (e) {
-      setState(() => _isLoadingFiles = false);
       _showSnackBar('Error selecting files: $e', isError: true);
     }
   }
 
-  Future<void> _addPdfFile(String path, String name, int size) async {
+  Future<void> _loadPdfDetails(SelectedPdfFile file) async {
     try {
-      // Read file bytes once and cache them
-      final Uint8List pdfBytes = await File(path).readAsBytes();
+      // Read file bytes
+      final Uint8List pdfBytes = await File(file.path).readAsBytes();
       
-      // Get page count from cached bytes
-      final int pageCount = await compute(_getPageCountFromBytes, pdfBytes);
-      
-      // Generate thumbnail of first page
-      Uint8List? thumbnail;
-      try {
-        final pdfDoc = await PdfDocument.openData(pdfBytes);
-        final page = await pdfDoc.getPage(1);
-        final pageImage = await page.render(
-          width: page.width * 0.3,
-          height: page.height * 0.3,
-          format: PdfPageImageFormat.jpeg,
-          quality: 70,
-        );
-        thumbnail = pageImage?.bytes;
-        await page.close();
-        await pdfDoc.close();
-      } catch (e) {
-        debugPrint('Error generating thumbnail: $e');
+      // Cache bytes immediately so merge can proceed even if thumbnail fails
+      if (mounted) {
+        setState(() {
+          file.cachedBytes = pdfBytes;
+        });
       }
+      
+      // Run page count in isolate and thumbnail generation in parallel
+      final pageCountFuture = compute(_getPageCountFromBytes, pdfBytes);
+      final thumbnailFuture = _generateThumbnail(pdfBytes);
+      
+      final results = await Future.wait([pageCountFuture, thumbnailFuture]);
+      final int pageCount = results[0] as int;
+      final Uint8List? thumbnail = results[1] as Uint8List?;
 
-      setState(() {
-        _selectedFiles.add(SelectedPdfFile(
-          path: path,
-          name: name,
-          pageCount: pageCount,
-          fileSize: size,
-          thumbnail: thumbnail,
-          cachedBytes: pdfBytes, // Cache for merge
-        ));
-      });
+      // Update file in list
+      if (mounted) {
+        setState(() {
+          file.pageCount = pageCount;
+          file.thumbnail = thumbnail;
+          file.isLoading = false;
+        });
+      }
     } catch (e) {
-      debugPrint('Error adding PDF: $e');
+      debugPrint('Error loading PDF: $e');
+      if (mounted) {
+        setState(() {
+          file.isLoading = false;
+        });
+      }
+    }
+  }
+  
+  Future<Uint8List?> _generateThumbnail(Uint8List pdfBytes) async {
+    try {
+      final pdfDoc = await PdfDocument.openData(pdfBytes);
+      final page = await pdfDoc.getPage(1);
+      final pageImage = await page.render(
+        width: page.width * 0.25, // Slightly smaller for faster rendering
+        height: page.height * 0.25,
+        format: PdfPageImageFormat.jpeg,
+        quality: 60, // Lower quality for faster rendering (still looks good as thumbnail)
+      );
+      final bytes = pageImage?.bytes;
+      await page.close();
+      await pdfDoc.close();
+      return bytes;
+    } catch (e) {
+      debugPrint('Error generating thumbnail: $e');
+      return null;
     }
   }
   
@@ -125,26 +157,63 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
     return count;
   }
 
+  bool get _allFilesLoaded => _selectedFiles.every((f) => !f.isLoading);
+
   Future<void> _mergePdfs() async {
     if (_selectedFiles.length < 2) return;
+    
+    // Wait for all files to finish loading
+    if (!_allFilesLoaded) {
+      _showSnackBar('Please wait for all files to load', isError: false);
+      return;
+    }
 
-    setState(() => _isProcessing = true);
+    setState(() {
+      _isProcessing = true;
+      _mergeProgress = 0.1;
+      _mergeStatus = 'Preparing ${_selectedFiles.length} files...';
+    });
 
     try {
-      // Use cached bytes if available, otherwise read from file
+      // OPTIMIZED: Use cached bytes directly (already loaded in parallel)
+      // Only read missing files in parallel if any
       final List<Uint8List> pdfBytesList = [];
-      for (final file in _selectedFiles) {
-        if (file.cachedBytes != null) {
-          pdfBytesList.add(file.cachedBytes!);
+      final List<int> missingIndices = [];
+      
+      for (int i = 0; i < _selectedFiles.length; i++) {
+        if (_selectedFiles[i].cachedBytes != null) {
+          pdfBytesList.add(_selectedFiles[i].cachedBytes!);
         } else {
-          pdfBytesList.add(await File(file.path).readAsBytes());
+          pdfBytesList.add(Uint8List(0)); // Placeholder
+          missingIndices.add(i);
+        }
+      }
+      
+      // Read any missing files in parallel
+      if (missingIndices.isNotEmpty) {
+        final missingBytes = await Future.wait(
+          missingIndices.map((i) => File(_selectedFiles[i].path).readAsBytes()),
+        );
+        for (int j = 0; j < missingIndices.length; j++) {
+          pdfBytesList[missingIndices[j]] = missingBytes[j];
         }
       }
 
+      setState(() {
+        _mergeProgress = 0.2;
+        _mergeStatus = 'Merging $_totalPages pages...';
+      });
+
       final String? outputPath = await PdfService.mergePdfsFromBytes(pdfBytesList);
+
+      setState(() {
+        _mergeProgress = 0.95;
+        _mergeStatus = 'Finishing...';
+      });
 
       if (outputPath != null) {
         setState(() {
+          _mergeProgress = 1.0;
           _selectedFiles.clear();
         });
         _showSuccessDialog(outputPath);
@@ -154,7 +223,10 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
     } catch (e) {
       _showSnackBar('Error: $e', isError: true);
     } finally {
-      setState(() => _isProcessing = false);
+      setState(() {
+        _isProcessing = false;
+        _mergeProgress = 0.0;
+      });
     }
   }
 
@@ -212,6 +284,7 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
   }
 
   int get _totalPages => _selectedFiles.fold(0, (sum, file) => sum + file.pageCount);
+  int get _loadingCount => _selectedFiles.where((f) => f.isLoading).length;
 
   @override
   Widget build(BuildContext context) {
@@ -245,7 +318,7 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 10, 20, 10),
               child: GestureDetector(
-                onTap: (_isProcessing || _isLoadingFiles) ? null : _pickPdfFiles,
+                onTap: _isProcessing ? null : _pickPdfFiles,
                 child: Container(
                   width: double.infinity,
                   height: _selectedFiles.isEmpty ? 140 : 70,
@@ -264,83 +337,59 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
                       ),
                     ],
                   ),
-                  child: _isLoadingFiles
-                      ? Center(
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              const SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(
-                                  color: Color(0xFFE94560),
-                                  strokeWidth: 2,
-                                ),
+                  child: _selectedFiles.isEmpty
+                      ? Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(14),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFE94560).withValues(alpha: 0.1),
+                                shape: BoxShape.circle,
                               ),
-                              const SizedBox(width: 12),
-                              Text(
-                                'Loading PDFs...',
-                                style: TextStyle(
-                                  color: _colors.textSecondary,
-                                  fontSize: 14,
-                                ),
+                              child: const Icon(
+                                Icons.add_circle_outline_rounded,
+                                size: 36,
+                                color: Color(0xFFE94560),
                               ),
-                            ],
-                          ),
-                        )
-                      : _selectedFiles.isEmpty
-                          ? Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.all(14),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFFE94560).withValues(alpha: 0.1),
-                                    shape: BoxShape.circle,
-                                  ),
-                                  child: const Icon(
-                                    Icons.add_circle_outline_rounded,
-                                    size: 36,
-                                    color: Color(0xFFE94560),
-                                  ),
-                                ),
-                                const SizedBox(height: 10),
-                                Text(
-                                  'Tap to select PDF files',
-                                  style: TextStyle(
-                                    color: _colors.textSecondary,
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                              ],
-                            )
-                          : Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.all(10),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFFE94560).withValues(alpha: 0.1),
-                                    borderRadius: BorderRadius.circular(10),
-                                  ),
-                                  child: const Icon(
-                                    Icons.add_rounded,
-                                    size: 24,
-                                    color: Color(0xFFE94560),
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                Text(
-                                  'Add more PDFs',
-                                  style: TextStyle(
-                                    color: _colors.textSecondary,
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                              ],
                             ),
+                            const SizedBox(height: 10),
+                            Text(
+                              'Tap to select PDF files',
+                              style: TextStyle(
+                                color: _colors.textSecondary,
+                                fontSize: 15,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        )
+                      : Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFE94560).withValues(alpha: 0.1),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: const Icon(
+                                Icons.add_rounded,
+                                size: 24,
+                                color: Color(0xFFE94560),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Text(
+                              'Add more PDFs',
+                              style: TextStyle(
+                                color: _colors.textSecondary,
+                                fontSize: 15,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ),
                 ),
               ),
             ),
@@ -366,14 +415,37 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
                         color: const Color(0xFFE94560).withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      child: Text(
-                        '${_selectedFiles.length} files • $_totalPages pages',
-                        style: const TextStyle(
-                          color: Color(0xFFE94560),
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
+                      child: _loadingCount > 0
+                          ? Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const SizedBox(
+                                  width: 12,
+                                  height: 12,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 1.5,
+                                    color: Color(0xFFE94560),
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  '${_selectedFiles.length - _loadingCount}/${_selectedFiles.length} loaded',
+                                  style: const TextStyle(
+                                    color: Color(0xFFE94560),
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            )
+                          : Text(
+                              '${_selectedFiles.length} files • $_totalPages pages',
+                              style: const TextStyle(
+                                color: Color(0xFFE94560),
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
                     ),
                   ],
                 ),
@@ -524,18 +596,29 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
                                     ),
                                     child: ClipRRect(
                                       borderRadius: BorderRadius.circular(7),
-                                      child: file.thumbnail != null
-                                          ? Image.memory(
-                                              file.thumbnail!,
-                                              fit: BoxFit.cover,
-                                            )
-                                          : Center(
-                                              child: Icon(
-                                                Icons.picture_as_pdf_rounded,
-                                                color: const Color(0xFFE94560),
-                                                size: 28,
+                                      child: file.isLoading
+                                          ? const Center(
+                                              child: SizedBox(
+                                                width: 20,
+                                                height: 20,
+                                                child: CircularProgressIndicator(
+                                                  strokeWidth: 2,
+                                                  color: Color(0xFFE94560),
+                                                ),
                                               ),
-                                            ),
+                                            )
+                                          : file.thumbnail != null
+                                              ? Image.memory(
+                                                  file.thumbnail!,
+                                                  fit: BoxFit.cover,
+                                                )
+                                              : Center(
+                                                  child: Icon(
+                                                    Icons.picture_as_pdf_rounded,
+                                                    color: const Color(0xFFE94560),
+                                                    size: 28,
+                                                  ),
+                                                ),
                                     ),
                                   ),
                                   const SizedBox(width: 12),
@@ -567,14 +650,23 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
                                                 color: const Color(0xFFE94560).withValues(alpha: 0.1),
                                                 borderRadius: BorderRadius.circular(6),
                                               ),
-                                              child: Text(
-                                                '${file.pageCount} page${file.pageCount != 1 ? 's' : ''}',
-                                                style: const TextStyle(
-                                                  color: Color(0xFFE94560),
-                                                  fontSize: 11,
-                                                  fontWeight: FontWeight.w600,
-                                                ),
-                                              ),
+                                              child: file.isLoading
+                                                  ? const Text(
+                                                      'Loading...',
+                                                      style: TextStyle(
+                                                        color: Color(0xFFE94560),
+                                                        fontSize: 11,
+                                                        fontWeight: FontWeight.w600,
+                                                      ),
+                                                    )
+                                                  : Text(
+                                                      '${file.pageCount} page${file.pageCount != 1 ? 's' : ''}',
+                                                      style: const TextStyle(
+                                                        color: Color(0xFFE94560),
+                                                        fontSize: 11,
+                                                        fontWeight: FontWeight.w600,
+                                                      ),
+                                                    ),
                                             ),
                                             const SizedBox(width: 8),
                                             Text(
@@ -622,58 +714,91 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
             if (_selectedFiles.length >= 2)
               Padding(
                 padding: const EdgeInsets.all(20),
-                child: SizedBox(
-                  width: double.infinity,
-                  height: 56,
-                  child: ElevatedButton(
-                    onPressed: _isProcessing ? null : _mergePdfs,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFFE94560),
-                      disabledBackgroundColor: const Color(0xFFE94560).withValues(alpha: 0.5),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(15),
-                      ),
-                      elevation: 0,
-                    ),
-                    child: _isProcessing
-                        ? const Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              SizedBox(
-                                width: 22,
-                                height: 22,
-                                child: CircularProgressIndicator(
-                                  color: Colors.white,
-                                  strokeWidth: 2,
+                child: Column(
+                  children: [
+                    if (_isProcessing) ...[
+                      // Progress bar
+                      Container(
+                        margin: const EdgeInsets.only(bottom: 12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  _mergeStatus,
+                                  style: TextStyle(
+                                    color: _colors.textSecondary,
+                                    fontSize: 13,
+                                  ),
                                 ),
+                                Text(
+                                  '${(_mergeProgress * 100).toInt()}%',
+                                  style: const TextStyle(
+                                    color: Color(0xFFE94560),
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: LinearProgressIndicator(
+                                value: _mergeProgress,
+                                minHeight: 8,
+                                backgroundColor: _colors.cardBackground,
+                                valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFFE94560)),
                               ),
-                              SizedBox(width: 12),
-                              Text(
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                    SizedBox(
+                      width: double.infinity,
+                      height: 56,
+                      child: ElevatedButton(
+                        onPressed: (_isProcessing || !_allFilesLoaded) ? null : _mergePdfs,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFFE94560),
+                          disabledBackgroundColor: const Color(0xFFE94560).withValues(alpha: 0.5),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(15),
+                          ),
+                          elevation: 0,
+                        ),
+                        child: _isProcessing
+                            ? const Text(
                                 'Merging...',
                                 style: TextStyle(
                                   color: Colors.white,
                                   fontSize: 17,
                                   fontWeight: FontWeight.w600,
                                 ),
+                              )
+                            : Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  const Icon(Icons.merge_rounded, color: Colors.white, size: 22),
+                                  const SizedBox(width: 10),
+                                  Text(
+                                    _allFilesLoaded 
+                                        ? 'Merge $_totalPages Pages'
+                                        : 'Loading files...',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 17,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
                               ),
-                            ],
-                          )
-                        : Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              const Icon(Icons.merge_rounded, color: Colors.white, size: 22),
-                              const SizedBox(width: 10),
-                              Text(
-                                'Merge $_totalPages Pages',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 17,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ],
-                          ),
-                  ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
           ],
