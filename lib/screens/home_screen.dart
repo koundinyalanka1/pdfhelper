@@ -1,36 +1,60 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'merge_pdf_screen.dart';
 import 'convert_screen.dart';
 import 'split_pdf_screen.dart';
 import 'settings_screen.dart';
 import '../providers/theme_provider.dart';
+import '../widgets/lazy_indexed_stack.dart';
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  const HomeScreen({
+    super.key,
+    this.initialPdfPath,
+    this.initialTab = 0,
+  });
+
+  final String? initialPdfPath;
+  final int initialTab;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  int _currentIndex = 0;
+  late int _currentIndex;
 
-  final List<Widget> _screens = [
-    const MergePdfScreen(),
-    const ConvertScreen(),
-    const SplitPdfScreen(),
-    const SettingsScreen(),
-  ];
+  @override
+  void initState() {
+    super.initState();
+    _currentIndex = widget.initialTab;
+  }
 
-  bool get _isDarkMode => ThemeNotifier.maybeOf(context)?.isDarkMode ?? true;
+  Widget _buildScreen(int index) {
+    switch (index) {
+      case 0:
+        return MergePdfScreen(initialPdfPath: widget.initialPdfPath);
+      case 1:
+        return const ConvertScreen();
+      case 2:
+        return SplitPdfScreen(initialPdfPath: widget.initialPdfPath);
+      case 3:
+        return const SettingsScreen();
+      default:
+        return const SizedBox.shrink();
+    }
+  }
+
+  bool get _isDarkMode => context.watch<ThemeProvider>().isDarkMode;
   AppColors get _colors => AppColors(_isDarkMode);
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: IndexedStack(
+      body: LazyIndexedStack(
         index: _currentIndex,
-        children: _screens,
+        itemCount: 4,
+        itemBuilder: _buildScreen,
       ),
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
@@ -66,14 +90,17 @@ class _HomeScreenState extends State<HomeScreen> {
     final Color activeColor = _getActiveColor(index);
     final Color inactiveColor = _isDarkMode ? Colors.white54 : Colors.black45;
 
-    return GestureDetector(
-      onTap: () {
-        setState(() {
-          _currentIndex = index;
-        });
-      },
-      behavior: HitTestBehavior.opaque,
-      child: AnimatedContainer(
+    return Semantics(
+      label: '$label tab, ${isSelected ? "selected" : "not selected"}',
+      button: true,
+      child: GestureDetector(
+        onTap: () {
+          setState(() {
+            _currentIndex = index;
+          });
+        },
+        behavior: HitTestBehavior.opaque,
+        child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: BoxDecoration(
@@ -100,6 +127,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
       ),
+    ),
     );
   }
 

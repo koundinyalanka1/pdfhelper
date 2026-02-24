@@ -3,26 +3,36 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:image/image.dart' as img;
+import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:pdfx/pdfx.dart';
+import 'package:pdfrx_engine/pdfrx_engine.dart';
 import '../services/pdf_service.dart';
 import '../services/notification_service.dart';
 import '../providers/theme_provider.dart';
+import 'pdf_viewer_screen.dart';
 
 class SplitPdfScreen extends StatefulWidget {
-  const SplitPdfScreen({super.key});
+  const SplitPdfScreen({super.key, this.initialPdfPath});
+
+  final String? initialPdfPath;
 
   @override
   State<SplitPdfScreen> createState() => _SplitPdfScreenState();
 }
 
-class _SplitPdfScreenState extends State<SplitPdfScreen> {
+class _SplitPdfScreenState extends State<SplitPdfScreen>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
   String? _selectedFilePath;
   String? _selectedFileName;
   int _totalPages = 0;
   final TextEditingController _fromController = TextEditingController();
   final TextEditingController _toController = TextEditingController();
   String _splitMode = 'range';
+  final List<({int start, int end})> _ranges = [];
   bool _isProcessing = false;
   bool _isLoadingPreviews = false;
   double _splitProgress = 0.0;
@@ -32,21 +42,59 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
   List<Uint8List?> _pagePreviews = [];
   Set<int> _selectedPages = {};
   PdfDocument? _pdfDocument;
+  double _firstPageAspectRatio = 0.7;
   
   // Cache PDF bytes to avoid re-reading
   Uint8List? _cachedPdfBytes;
 
-  bool get _isDarkMode => ThemeNotifier.maybeOf(context)?.isDarkMode ?? true;
+  bool get _isDarkMode => context.watch<ThemeProvider>().isDarkMode;
   AppColors get _colors => AppColors(_isDarkMode);
   
   // Show preview mode for PDFs with less than 30 pages
   bool get _usePreviewMode => _totalPages > 0 && _totalPages < 30;
 
   @override
+  void initState() {
+    super.initState();
+    if (widget.initialPdfPath != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _loadPdfFromPath(widget.initialPdfPath!);
+      });
+    }
+  }
+
+  Future<void> _loadPdfFromPath(String path) async {
+    try {
+      final Uint8List bytes = await File(path).readAsBytes();
+      final int pageCount = await PdfService.getPageCount(path);
+      final String name = path.split(RegExp(r'[/\\]')).last;
+
+      if (mounted) {
+        setState(() {
+          _selectedFilePath = path;
+          _selectedFileName = name;
+          _totalPages = pageCount;
+          _cachedPdfBytes = bytes;
+          _fromController.clear();
+          _toController.clear();
+          _ranges.clear();
+          _selectedPages.clear();
+          _pagePreviews = [];
+        });
+        if (_usePreviewMode) {
+          await _loadPagePreviews(path);
+        }
+      }
+    } catch (e) {
+      debugPrint('Error loading PDF from intent: $e');
+    }
+  }
+
+  @override
   void dispose() {
     _fromController.dispose();
     _toController.dispose();
-    _pdfDocument?.close();
+    _pdfDocument?.dispose();
     super.dispose();
   }
 
@@ -72,6 +120,7 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
           _cachedPdfBytes = bytes;
           _fromController.clear();
           _toController.clear();
+          _ranges.clear();
           _selectedPages.clear();
           _pagePreviews = [];
         });
@@ -90,26 +139,35 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
     setState(() => _isLoadingPreviews = true);
 
     try {
-      _pdfDocument?.close();
+      _pdfDocument?.dispose();
       _pdfDocument = await PdfDocument.openFile(path);
-      
-      List<Uint8List?> previews = [];
-      
-      for (int i = 1; i <= _totalPages; i++) {
-        final page = await _pdfDocument!.getPage(i);
-        final pageImage = await page.render(
-          width: page.width * 0.5,
-          height: page.height * 0.5,
-          format: PdfPageImageFormat.jpeg,
-          quality: 80,
-        );
-        previews.add(pageImage?.bytes);
-        await page.close();
+      await _pdfDocument!.loadPagesProgressively();
+
+      final List<Uint8List?> previews = [];
+      double aspectRatio = 0.7;
+      for (final page in _pdfDocument!.pages) {
+        if (previews.isEmpty) {
+          aspectRatio = page.width / page.height;
+        }
+        final w = (page.width * 1.0).round().clamp(280, 1600).toDouble();
+        final h = (page.height * 1.0).round().clamp(280, 1700).toDouble();
+        final pageImage = await page.render(fullWidth: w, fullHeight: h);
+
+        Uint8List? bytes;
+        if (pageImage != null) {
+          final imgObj = pageImage.createImageNF();
+          if (imgObj != null) {
+            bytes = Uint8List.fromList(img.encodeJpg(imgObj, quality: 92));
+          }
+          pageImage.dispose();
+        }
+        previews.add(bytes);
       }
 
       if (mounted) {
         setState(() {
           _pagePreviews = previews;
+          _firstPageAspectRatio = aspectRatio;
           _isLoadingPreviews = false;
         });
       }
@@ -143,6 +201,26 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
     });
   }
 
+  void _addRange() {
+    final from = int.tryParse(_fromController.text) ?? 1;
+    final to = int.tryParse(_toController.text) ?? _totalPages;
+    final start = from.clamp(1, _totalPages);
+    final end = to.clamp(1, _totalPages);
+    if (start <= end) {
+      setState(() {
+        _ranges.add((start: start, end: end));
+        _fromController.clear();
+        _toController.clear();
+      });
+    } else {
+      _showSnackBar('Invalid range: From must be ≤ To', isError: true);
+    }
+  }
+
+  void _removeRange(int index) {
+    setState(() => _ranges.removeAt(index));
+  }
+
   Future<void> _splitPdf() async {
     if (_selectedFilePath == null || _cachedPdfBytes == null) return;
 
@@ -169,9 +247,12 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
         });
 
         // OPTIMIZED: Extract all selected pages at once using cached bytes
+        final themeProvider = context.read<ThemeProvider>();
+        final outputQuality = themeProvider.outputQuality;
         final String? outputPath = await PdfService.extractPagesFromBytes(
           _cachedPdfBytes!,
           sortedPages, // Already 0-based
+          outputQuality: outputQuality,
         );
         
         setState(() => _splitProgress = 0.9);
@@ -179,12 +260,11 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
         if (outputPath != null) {
           // Auto-save if enabled
           String? autoSavedPath;
-          final themeProvider = ThemeNotifier.maybeOf(context);
-          if (themeProvider != null && themeProvider.autoSave) {
+          if (themeProvider.autoSave) {
             autoSavedPath = await themeProvider.autoSaveFile(outputPath, 'extracted');
           }
           // Show notification if enabled
-          if (themeProvider != null && themeProvider.notifications) {
+          if (themeProvider.notifications) {
             NotificationService().showSplitComplete(sortedPages.length);
           }
           setState(() => _splitProgress = 1.0);
@@ -193,42 +273,51 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
           _showSnackBar('Failed to extract pages', isError: true);
         }
       } else if (_splitMode == 'range') {
-        final int fromPage = int.tryParse(_fromController.text) ?? 1;
-        final int toPage = int.tryParse(_toController.text) ?? _totalPages;
+        final themeProvider = context.read<ThemeProvider>();
+        final outputQuality = themeProvider.outputQuality;
+        List<({int start, int end})> rangesToUse = [];
 
-        if (fromPage < 1 || toPage > _totalPages || fromPage > toPage) {
-          _showSnackBar('Invalid page range', isError: true);
-          setState(() => _isProcessing = false);
-          return;
+        if (_ranges.isNotEmpty) {
+          rangesToUse = List.from(_ranges);
+        } else {
+          final fromPage = int.tryParse(_fromController.text) ?? 1;
+          final toPage = int.tryParse(_toController.text) ?? _totalPages;
+          if (fromPage < 1 || toPage > _totalPages || fromPage > toPage) {
+            _showSnackBar('Invalid page range', isError: true);
+            setState(() => _isProcessing = false);
+            return;
+          }
+          rangesToUse = [(start: fromPage, end: toPage)];
         }
 
         setState(() {
           _splitProgress = 0.3;
-          _splitStatus = 'Extracting pages $fromPage-$toPage...';
+          _splitStatus = 'Extracting ${rangesToUse.length} range(s)...';
         });
 
-        // Use cached bytes
-        final String? outputPath = await PdfService.splitPdfByRangeFromBytes(
+        final outputPaths = await PdfService.splitPdfByRangesFromBytes(
           _cachedPdfBytes!,
-          fromPage,
-          toPage,
+          rangesToUse,
+          outputQuality: outputQuality,
         );
 
         setState(() => _splitProgress = 0.9);
 
-        if (outputPath != null) {
-          // Auto-save if enabled
-          String? autoSavedPath;
-          final themeProvider = ThemeNotifier.maybeOf(context);
-          if (themeProvider != null && themeProvider.autoSave) {
-            autoSavedPath = await themeProvider.autoSaveFile(outputPath, 'split');
+        if (outputPaths.isNotEmpty) {
+          List<String>? autoSavedPaths;
+          if (themeProvider.autoSave) {
+            autoSavedPaths = [];
+            for (int i = 0; i < outputPaths.length; i++) {
+              final saved =
+                  await themeProvider.autoSaveFile(outputPaths[i], 'split_${i + 1}');
+              if (saved != null) autoSavedPaths.add(saved);
+            }
           }
-          // Show notification if enabled
-          if (themeProvider != null && themeProvider.notifications) {
-            NotificationService().showSplitComplete(toPage - fromPage + 1);
+          if (themeProvider.notifications) {
+            NotificationService().showSplitComplete(outputPaths.length);
           }
           setState(() => _splitProgress = 1.0);
-          _showSuccessDialog([outputPath], autoSavedPath != null ? [autoSavedPath] : null);
+          _showSuccessDialog(outputPaths, autoSavedPaths);
         } else {
           _showSnackBar('Failed to split PDF', isError: true);
         }
@@ -239,16 +328,20 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
           _splitStatus = 'Extracting $_totalPages pages...';
         });
         
+        final themeProvider = context.read<ThemeProvider>();
+        final outputQuality = themeProvider.outputQuality;
         final List<String> outputPaths =
-            await PdfService.splitPdfAllPagesFromBytes(_cachedPdfBytes!);
+            await PdfService.splitPdfAllPagesFromBytes(
+              _cachedPdfBytes!,
+              outputQuality: outputQuality,
+            );
 
         setState(() => _splitProgress = 0.9);
 
         if (outputPaths.isNotEmpty) {
           // Auto-save all pages if enabled
           List<String>? autoSavedPaths;
-          final themeProvider = ThemeNotifier.maybeOf(context);
-          if (themeProvider != null && themeProvider.autoSave) {
+          if (themeProvider.autoSave) {
             autoSavedPaths = [];
             for (int i = 0; i < outputPaths.length; i++) {
               final saved = await themeProvider.autoSaveFile(outputPaths[i], 'page_${i + 1}');
@@ -256,7 +349,7 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
             }
           }
           // Show notification if enabled
-          if (themeProvider != null && themeProvider.notifications) {
+          if (themeProvider.notifications) {
             NotificationService().showSplitComplete(outputPaths.length);
           }
           setState(() => _splitProgress = 1.0);
@@ -281,8 +374,8 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
       _selectedPages.clear();
     });
     
-    final themeProvider = ThemeNotifier.maybeOf(context);
-    final saveLocation = themeProvider?.saveLocation ?? 'Downloads';
+    final themeProvider = context.read<ThemeProvider>();
+    final saveLocation = themeProvider.saveLocation;
     final hasAutoSaved = autoSavedPaths != null && autoSavedPaths.isNotEmpty;
     
     showDialog(
@@ -321,7 +414,7 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        'Saved to $saveLocation/PDFHelper',
+                        'Saved to app storage (PDFHelper/$saveLocation)',
                         style: const TextStyle(
                           color: Color(0xFF4CAF50),
                           fontSize: 12,
@@ -352,19 +445,29 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
             },
             child: const Text('Share', style: TextStyle(color: Color(0xFFE94560))),
           ),
-          if (filePaths.length == 1)
-            ElevatedButton(
-              onPressed: () {
-                Navigator.pop(context);
-                // Open auto-saved file if available
-                final openFile = hasAutoSaved ? autoSavedPaths.first : filePaths.first;
-                PdfService.openPdf(openFile);
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFFFC107),
-              ),
-              child: const Text('Open', style: TextStyle(color: Colors.black87)),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              final openFile = hasAutoSaved ? autoSavedPaths!.first : filePaths.first;
+              final name = openFile.split(RegExp(r'[/\\]')).last;
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => PdfViewerScreen(
+                    pdfPath: openFile,
+                    title: name,
+                  ),
+                ),
+              );
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFFFC107),
             ),
+            child: Text(
+              filePaths.length == 1 ? 'Open' : 'View first PDF',
+              style: const TextStyle(color: Colors.black87),
+            ),
+          ),
         ],
       ),
     );
@@ -381,6 +484,7 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
 
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     return Scaffold(
       backgroundColor: _colors.background,
       appBar: AppBar(
@@ -395,6 +499,20 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
         ),
         centerTitle: true,
         actions: [
+          if (_selectedFilePath != null)
+            IconButton(
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => PdfViewerScreen(
+                    pdfPath: _selectedFilePath!,
+                    title: _selectedFileName,
+                  ),
+                ),
+              ),
+              icon: const Icon(Icons.visibility_rounded),
+              tooltip: 'View PDF',
+            ),
           if (_usePreviewMode && _selectedPages.isNotEmpty)
             TextButton(
               onPressed: () => setState(() => _selectedPages.clear()),
@@ -411,75 +529,81 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
             // Upload area (smaller when file is selected)
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 10, 20, 10),
-              child: GestureDetector(
-                onTap: _isProcessing ? null : _pickPdfFile,
-                child: Container(
-                  width: double.infinity,
-                  height: _selectedFilePath == null ? 140 : 80,
-                  decoration: BoxDecoration(
-                    color: _colors.cardBackground,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: const Color(0xFFFFC107).withValues(alpha: 0.3),
-                      width: 2,
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: _colors.shadowColor,
-                        blurRadius: 10,
-                        offset: const Offset(0, 2),
+              child: Semantics(
+                label: _selectedFilePath == null
+                    ? 'Tap to select a PDF file to split'
+                    : 'Change selected PDF file',
+                button: true,
+                enabled: !_isProcessing,
+                child: GestureDetector(
+                  onTap: _isProcessing ? null : _pickPdfFile,
+                  child: Container(
+                    width: double.infinity,
+                    height: _selectedFilePath == null ? 140 : 80,
+                    decoration: BoxDecoration(
+                      color: _colors.cardBackground,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: const Color(0xFFFFC107).withValues(alpha: 0.3),
+                        width: 2,
                       ),
-                    ],
-                  ),
-                  child: _selectedFilePath == null
-                      ? Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(16),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFFFC107).withValues(alpha: 0.1),
-                                shape: BoxShape.circle,
-                              ),
-                              child: const Icon(
-                                Icons.upload_file_rounded,
-                                size: 36,
-                                color: Color(0xFFFFC107),
-                              ),
-                            ),
-                            const SizedBox(height: 10),
-                            Text(
-                              'Tap to select a PDF',
-                              style: TextStyle(
-                                color: _colors.textSecondary,
-                                fontSize: 15,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ],
-                        )
-                      : Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                          child: Row(
+                      boxShadow: [
+                        BoxShadow(
+                          color: _colors.shadowColor,
+                          blurRadius: 10,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: _selectedFilePath == null
+                        ? Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
                             children: [
                               Container(
-                                padding: const EdgeInsets.all(12),
+                                padding: const EdgeInsets.all(16),
                                 decoration: BoxDecoration(
                                   color: const Color(0xFFFFC107).withValues(alpha: 0.1),
-                                  borderRadius: BorderRadius.circular(12),
+                                  shape: BoxShape.circle,
                                 ),
                                 child: const Icon(
-                                  Icons.picture_as_pdf_rounded,
+                                  Icons.upload_file_rounded,
+                                  size: 36,
                                   color: Color(0xFFFFC107),
-                                  size: 28,
                                 ),
                               ),
-                              const SizedBox(width: 14),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
+                              const SizedBox(height: 10),
+                              Text(
+                                'Tap to select a PDF',
+                                style: TextStyle(
+                                  color: _colors.textSecondary,
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
+                          )
+                        : Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            child: Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFFFC107).withValues(alpha: 0.1),
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: const Icon(
+                                    Icons.picture_as_pdf_rounded,
+                                    color: Color(0xFFFFC107),
+                                    size: 28,
+                                  ),
+                                ),
+                                const SizedBox(width: 14),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
                                     Text(
                                       _selectedFileName!,
                                       style: TextStyle(
@@ -508,11 +632,11 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
                                         ),
                                       ),
                                     ),
-                                  ],
+                                    ],
+                                  ),
                                 ),
-                              ),
-                              IconButton(
-                                onPressed: () {
+                                IconButton(
+                                  onPressed: () {
                                   setState(() {
                                     _selectedFilePath = null;
                                     _selectedFileName = null;
@@ -520,24 +644,26 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
                                     _cachedPdfBytes = null;
                                     _fromController.clear();
                                     _toController.clear();
-                                    _selectedPages.clear();
-                                    _pagePreviews = [];
-                                  });
-                                  _pdfDocument?.close();
-                                  _pdfDocument = null;
-                                },
-                                icon: Icon(
-                                  Icons.close_rounded,
-                                  color: _colors.textSecondary,
+                                  _ranges.clear();
+                                  _selectedPages.clear();
+                                  _pagePreviews = [];
+                                });
+                                    _pdfDocument?.dispose();
+                                    _pdfDocument = null;
+                                  },
+                                  icon: Icon(
+                                    Icons.close_rounded,
+                                    color: _colors.textSecondary,
+                                  ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
-                        ),
+                    ),
+                  ),
                 ),
               ),
-            ),
-            
+
             // Content area
             Expanded(
               child: _selectedFilePath == null
@@ -624,7 +750,9 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
                                   Text(
                                     _usePreviewMode
                                         ? 'Extract ${_selectedPages.length} Page${_selectedPages.length != 1 ? 's' : ''}'
-                                        : 'Split PDF',
+                                        : _ranges.isNotEmpty
+                                            ? 'Split into ${_ranges.length} PDF${_ranges.length > 1 ? 's' : ''}'
+                                            : 'Split PDF',
                                     style: const TextStyle(
                                       color: Colors.black87,
                                       fontSize: 17,
@@ -747,12 +875,12 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
                   ),
                 )
               : GridView.builder(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                     crossAxisCount: 3,
-                    crossAxisSpacing: 10,
-                    mainAxisSpacing: 10,
-                    childAspectRatio: 0.7,
+                    crossAxisSpacing: 6,
+                    mainAxisSpacing: 6,
+                    childAspectRatio: _firstPageAspectRatio.clamp(0.5, 1.5),
                   ),
                   itemCount: _totalPages,
                   itemBuilder: (context, index) {
@@ -795,7 +923,7 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
                               if (hasPreview)
                                 Image.memory(
                                   _pagePreviews[index]!,
-                                  fit: BoxFit.cover,
+                                  fit: BoxFit.contain,
                                 )
                               else
                                 Container(
@@ -992,6 +1120,66 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
               ],
             ),
             const SizedBox(height: 12),
+            if (_ranges.isNotEmpty) ...[
+              Text(
+                'Ranges to extract',
+                style: TextStyle(
+                  color: _colors.textPrimary,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 8),
+              ...List.generate(_ranges.length, (i) {
+                final r = _ranges[i];
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: _colors.cardBackground,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.description_rounded,
+                        color: const Color(0xFFFFC107),
+                        size: 20,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'Pages ${r.start}-${r.end}',
+                          style: TextStyle(
+                            color: _colors.textPrimary,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () => _removeRange(i),
+                        icon: Icon(
+                          Icons.close_rounded,
+                          color: Colors.red.shade400,
+                          size: 20,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }),
+              const SizedBox(height: 8),
+            ],
+            FilledButton.icon(
+              onPressed: _addRange,
+              icon: const Icon(Icons.add_rounded, size: 18),
+              label: Text(_ranges.isEmpty ? 'Add range' : 'Add another range'),
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF00D9FF),
+                foregroundColor: Colors.white,
+              ),
+            ),
+            const SizedBox(height: 12),
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(14),
@@ -1009,7 +1197,9 @@ class _SplitPdfScreenState extends State<SplitPdfScreen> {
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                      'Extract pages 1 to $_totalPages into a new PDF',
+                      _ranges.isEmpty
+                          ? 'Enter range above and tap "Add range", or split with a single range'
+                          : '${_ranges.length} range(s) will be extracted into separate PDFs',
                       style: TextStyle(
                         color: _colors.textSecondary,
                         fontSize: 13,

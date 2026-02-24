@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:provider/provider.dart';
 import '../providers/theme_provider.dart';
+import '../services/permission_service.dart';
+import '../widgets/settings_widgets.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -10,36 +13,37 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  String _outputQuality = 'High';
-
-  ThemeProvider? get _themeProvider => ThemeNotifier.maybeOf(context);
-  bool get _isDarkMode => _themeProvider?.isDarkMode ?? true;
-  bool get _autoSave => _themeProvider?.autoSave ?? true;
-  bool get _notifications => _themeProvider?.notifications ?? false;
-  String get _saveLocation => _themeProvider?.saveLocation ?? 'Downloads';
+  ThemeProvider get _themeProvider => context.watch<ThemeProvider>();
+  bool get _isDarkMode => _themeProvider.isDarkMode;
+  bool get _autoSave => _themeProvider.autoSave;
+  bool get _notifications => _themeProvider.notifications;
+  String get _saveLocation => _themeProvider.saveLocation;
+  String get _outputQuality => _themeProvider.outputQuality;
   AppColors get _colors => AppColors(_isDarkMode);
 
   Future<void> _handleNotificationToggle(bool value) async {
-    if (_themeProvider == null) return;
-    
-    final success = await _themeProvider!.setNotifications(value);
-    
-    if (!success && value && mounted) {
-      // Permission was denied when trying to turn on
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Notification permission denied. Please enable in device settings.'),
-          backgroundColor: Colors.orange,
-          action: SnackBarAction(
-            label: 'Settings',
-            textColor: Colors.white,
-            onPressed: () {
-              // Open app settings using permission_handler
-              openAppSettings();
-            },
-          ),
-        ),
-      );
+    final provider = context.read<ThemeProvider>();
+    if (!value) {
+      await provider.setNotifications(false);
+      return;
+    }
+
+    // Request with rationale and settings guidance when enabling
+    final granted = await PermissionService.requestWithRationale(
+      context: context,
+      permission: Permission.notification,
+      rationaleTitle: 'Notification Permission',
+      rationaleMessage:
+          'Get notified when PDF merge, split, or scan operations complete.',
+      deniedTitle: 'Notification Access Required',
+      deniedMessage:
+          'Notification permission was denied. Enable it in Settings to get completion alerts.',
+      settingsButtonText: 'Open Settings',
+      cancelButtonText: 'Not Now',
+    );
+
+    if (granted && mounted) {
+      await context.read<ThemeProvider>().setNotifications(true);
     }
   }
 
@@ -130,25 +134,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
               const SizedBox(height: 30),
 
               // Appearance settings
-              _buildSectionHeader('Appearance'),
+              SettingsSectionHeader(title: 'Appearance', colors: _colors),
               const SizedBox(height: 15),
-              _buildSettingsCard([
-                _buildThemeTile(),
-              ]),
+              SettingsCard(
+                colors: _colors,
+                children: [
+                  _buildThemeTile(),
+                ],
+              ),
               const SizedBox(height: 25),
 
               // General settings
-              _buildSectionHeader('General'),
+              SettingsSectionHeader(title: 'General', colors: _colors),
               const SizedBox(height: 15),
-              _buildSettingsCard([
-                _buildSwitchTile(
+              SettingsCard(
+                colors: _colors,
+                children: [
+                  _buildSwitchTile(
                   'Auto Save',
-                  'Save files to $_saveLocation folder',
+                  'Save to app storage (PDFHelper/$_saveLocation)',
                   Icons.save_rounded,
                   _autoSave,
-                  (value) => _themeProvider?.setAutoSave(value),
+                  (value) => context.read<ThemeProvider>().setAutoSave(value),
                 ),
-                _buildDivider(),
+                SettingsDivider(colors: _colors),
                 _buildSwitchTile(
                   'Notifications',
                   _notifications 
@@ -162,54 +171,59 @@ class _SettingsScreenState extends State<SettingsScreen> {
               const SizedBox(height: 25),
 
               // Output settings
-              _buildSectionHeader('Output'),
+              SettingsSectionHeader(title: 'Output', colors: _colors),
               const SizedBox(height: 15),
-              _buildSettingsCard([
-                _buildDropdownTile(
-                  'Output Quality',
-                  'Select PDF quality',
-                  Icons.high_quality_rounded,
-                  _outputQuality,
-                  ['Low', 'Medium', 'High', 'Maximum'],
-                  (value) => setState(() => _outputQuality = value!),
-                ),
-                _buildDivider(),
+              SettingsCard(
+                colors: _colors,
+                children: [
+                  _buildDropdownTile(
+                    'Output Quality',
+                    'Select PDF quality',
+                    Icons.high_quality_rounded,
+                    _outputQuality,
+                    ['Low', 'Medium', 'High', 'Maximum'],
+                    (value) => context.read<ThemeProvider>().setOutputQuality(value!),
+                  ),
+                SettingsDivider(colors: _colors),
                 _buildDropdownTile(
                   'Save Location',
                   'Auto-save destination',
                   Icons.folder_rounded,
                   _saveLocation,
                   ['Downloads', 'Documents'],
-                  (value) => _themeProvider?.setSaveLocation(value!),
+                  (value) => context.read<ThemeProvider>().setSaveLocation(value!),
                 ),
               ]),
               const SizedBox(height: 25),
 
               // About section
-              _buildSectionHeader('About'),
+              SettingsSectionHeader(title: 'About', colors: _colors),
               const SizedBox(height: 15),
-              _buildSettingsCard([
-                _buildActionTile(
-                  'Rate App',
-                  'Love the app? Rate us!',
-                  Icons.star_rounded,
-                  () {},
-                ),
-                _buildDivider(),
+              SettingsCard(
+                colors: _colors,
+                children: [
+                  _buildActionTile(
+                    'Rate App',
+                    'Love the app? Rate us!',
+                    Icons.star_rounded,
+                    () {},
+                  ),
+                SettingsDivider(colors: _colors),
                 _buildActionTile(
                   'Privacy Policy',
                   'Read our privacy policy',
                   Icons.privacy_tip_rounded,
                   () {},
                 ),
-                _buildDivider(),
+                SettingsDivider(colors: _colors),
                 _buildActionTile(
                   'Terms of Service',
                   'Read terms of service',
                   Icons.description_rounded,
                   () {},
                 ),
-              ]),
+              ],
+              ),
               const SizedBox(height: 30),
 
               // Footer
@@ -227,43 +241,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ),
       ),
-    );
-  }
-
-  Widget _buildSectionHeader(String title) {
-    return Text(
-      title,
-      style: TextStyle(
-        color: _colors.textSecondary,
-        fontSize: 14,
-        fontWeight: FontWeight.w600,
-        letterSpacing: 1.5,
-      ),
-    );
-  }
-
-  Widget _buildSettingsCard(List<Widget> children) {
-    return Container(
-      decoration: BoxDecoration(
-        color: _colors.cardBackground,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: _colors.shadowColor,
-            blurRadius: 10,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(children: children),
-    );
-  }
-
-  Widget _buildDivider() {
-    return Divider(
-      color: _colors.divider,
-      height: 1,
-      indent: 70,
     );
   }
 
@@ -320,12 +297,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _buildThemeButton(
                   icon: Icons.light_mode_rounded,
                   isSelected: !_isDarkMode,
-                  onTap: () => _themeProvider?.toggleTheme(false),
+                  onTap: () => context.read<ThemeProvider>().toggleTheme(false),
                 ),
                 _buildThemeButton(
                   icon: Icons.dark_mode_rounded,
                   isSelected: _isDarkMode,
-                  onTap: () => _themeProvider?.toggleTheme(true),
+                  onTap: () => context.read<ThemeProvider>().toggleTheme(true),
                 ),
               ],
             ),

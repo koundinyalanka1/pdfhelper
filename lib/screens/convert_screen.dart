@@ -2,12 +2,16 @@ import 'dart:io';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:provider/provider.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import '../services/pdf_service.dart';
 import '../services/notification_service.dart';
+import '../services/permission_service.dart';
 import '../providers/theme_provider.dart';
+import 'pdf_preview_screen.dart';
 import 'scan_edit_screen.dart';
 
 class ConvertScreen extends StatefulWidget {
@@ -17,10 +21,16 @@ class ConvertScreen extends StatefulWidget {
   State<ConvertScreen> createState() => _ConvertScreenState();
 }
 
-class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserver {
+class _ConvertScreenState extends State<ConvertScreen>
+    with WidgetsBindingObserver, AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
   CameraController? _cameraController;
   List<CameraDescription>? _cameras;
   bool _isCameraInitialized = false;
+  bool _cameraPermissionDenied = false;
+  bool _cameraPermissionPermanentlyDenied = false;
   bool _isFlashOn = false;
   bool _isProcessing = false;
   bool _isCapturing = false;
@@ -36,7 +46,7 @@ class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserv
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _initializeCamera();
+    _checkCameraAndInit();
   }
 
   @override
@@ -57,7 +67,69 @@ class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserv
       _cameraController?.dispose();
       _isCameraInitialized = false;
     } else if (state == AppLifecycleState.resumed) {
-      _initializeCamera();
+      PermissionService.isGranted(Permission.camera).then((granted) {
+        if (granted && mounted) {
+          _initializeCamera();
+        }
+      });
+    }
+  }
+
+  Future<void> _checkCameraAndInit() async {
+    final granted = await PermissionService.isGranted(Permission.camera);
+    if (granted) {
+      await _initializeCamera();
+      return;
+    }
+    if (!mounted) return;
+    final permanentlyDenied = await Permission.camera.isPermanentlyDenied;
+    setState(() {
+      _cameraPermissionDenied = true;
+      _cameraPermissionPermanentlyDenied = permanentlyDenied;
+    });
+  }
+
+  Future<void> _requestCameraPermission() async {
+    if (!mounted) return;
+    final granted = await PermissionService.requestWithRationale(
+      context: context,
+      permission: Permission.camera,
+      rationaleTitle: 'Camera Access',
+      rationaleMessage:
+          'PDF Helper needs camera access to scan documents and convert them to PDF.',
+      deniedTitle: 'Camera Permission Required',
+      deniedMessage:
+          'Camera access was denied. Please enable it in Settings to scan documents.',
+      settingsButtonText: 'Open Settings',
+      cancelButtonText: 'Not Now',
+    );
+    if (!mounted) return;
+    if (granted) {
+      setState(() {
+        _cameraPermissionDenied = false;
+        _cameraPermissionPermanentlyDenied = false;
+      });
+      await _initializeCamera();
+    } else {
+      final permanentlyDenied = await Permission.camera.isPermanentlyDenied;
+      setState(() {
+        _cameraPermissionDenied = true;
+        _cameraPermissionPermanentlyDenied = permanentlyDenied;
+      });
+    }
+  }
+
+  Future<void> _openAppSettings() async {
+    await openAppSettings();
+    await Future.delayed(const Duration(milliseconds: 500));
+    if (!mounted) return;
+    final granted = await PermissionService.isGranted(Permission.camera);
+    if (granted) {
+      setState(() {
+        _cameraPermissionDenied = false;
+        _cameraPermissionPermanentlyDenied = false;
+      });
+      await _initializeCamera();
     }
   }
 
@@ -73,14 +145,13 @@ class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserv
         );
 
         await _cameraController!.initialize();
-        
-        // Set continuous auto focus mode
+
         try {
           await _cameraController!.setFocusMode(FocusMode.auto);
         } catch (e) {
           debugPrint('Auto focus not supported: $e');
         }
-        
+
         if (mounted) {
           setState(() {
             _isCameraInitialized = true;
@@ -185,11 +256,13 @@ class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserv
 
       // Navigate to edit screen
       if (mounted) {
+        final themeProvider = context.read<ThemeProvider>();
         Navigator.push(
           context,
           MaterialPageRoute(
             builder: (context) => ScanEditScreen(
               imagePath: savedPath,
+              imageQuality: themeProvider.outputQualityAsImageQuality,
               onSave: (processedPath) {
                 setState(() {
                   _capturedImages.add(processedPath);
@@ -208,8 +281,24 @@ class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserv
 
   Future<void> _pickFromGallery() async {
     try {
+      final granted = await PermissionService.requestWithRationale(
+        context: context,
+        permission: Permission.photos,
+        rationaleTitle: 'Photo Library Access',
+        rationaleMessage:
+            'PDF Helper needs access to your photos to add images to your PDF document.',
+        deniedTitle: 'Photo Access Required',
+        deniedMessage:
+            'Photo access was denied. Please enable it in Settings to add images from your gallery.',
+        settingsButtonText: 'Open Settings',
+        cancelButtonText: 'Not Now',
+      );
+      if (!granted || !mounted) return;
+
+      final themeProvider = context.read<ThemeProvider>();
+      final imageQuality = themeProvider.outputQualityAsImageQuality;
       final List<XFile> images = await _imagePicker.pickMultiImage(
-        imageQuality: 90,
+        imageQuality: imageQuality.clamp(1, 100),
       );
 
       if (images.isNotEmpty) {
@@ -222,11 +311,13 @@ class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserv
         await File(image.path).copy(savedPath);
         
         if (mounted) {
+          final themeProvider = context.read<ThemeProvider>();
           Navigator.push(
             context,
             MaterialPageRoute(
               builder: (context) => ScanEditScreen(
                 imagePath: savedPath,
+                imageQuality: themeProvider.outputQualityAsImageQuality,
                 onSave: (processedPath) async {
                   setState(() {
                     _capturedImages.add(processedPath);
@@ -263,20 +354,28 @@ class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserv
     setState(() => _isProcessing = true);
 
     try {
-      final String? outputPath = await PdfService.imagesToPdf(_capturedImages);
+      final themeProvider = context.read<ThemeProvider>();
+      final outputQuality = themeProvider.outputQuality;
+      final String? outputPath = await PdfService.imagesToPdf(
+        _capturedImages,
+        outputQuality: outputQuality,
+      );
 
       if (outputPath != null) {
-        // Auto-save if enabled
-        String? autoSavedPath;
-        final themeProvider = ThemeNotifier.maybeOf(context);
-        if (themeProvider != null && themeProvider.autoSave) {
-          autoSavedPath = await themeProvider.autoSaveFile(outputPath, 'scanned');
-        }
-        // Show notification if enabled
-        if (themeProvider != null && themeProvider.notifications) {
-          NotificationService().showScanComplete(_capturedImages.length);
-        }
-        _showSuccessDialog(outputPath, autoSavedPath);
+        if (!mounted) return;
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => PdfPreviewScreen(
+              filePaths: [outputPath],
+              sourceType: PdfPreviewSourceType.convert,
+              pageCount: _capturedImages.length,
+              onSaved: () {
+                setState(() => _capturedImages.clear());
+              },
+            ),
+          ),
+        );
       } else {
         _showSnackBar('Failed to create PDF', isError: true);
       }
@@ -287,99 +386,79 @@ class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserv
     }
   }
 
-  void _showSuccessDialog(String filePath, [String? autoSavedPath]) {
-    final themeProvider = ThemeNotifier.maybeOf(context);
-    final saveLocation = themeProvider?.saveLocation ?? 'Downloads';
-    final isDark = themeProvider?.isDarkMode ?? true;
-    final colors = AppColors(isDark);
-    
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: colors.cardBackground,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Row(
-          children: [
-            const Icon(Icons.check_circle, color: Color(0xFF4CAF50), size: 28),
-            const SizedBox(width: 10),
-            Text('Success!', style: TextStyle(color: colors.textPrimary)),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '${_capturedImages.length} page(s) converted to PDF!',
-              style: TextStyle(color: colors.textSecondary),
-            ),
-            if (autoSavedPath != null) ...[
-              const SizedBox(height: 12),
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF4CAF50).withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.folder_rounded, color: Color(0xFF4CAF50), size: 18),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Saved to $saveLocation/PDFHelper',
-                        style: const TextStyle(
-                          color: Color(0xFF4CAF50),
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              setState(() {
-                _capturedImages.clear();
-              });
-            },
-            child: Text('New Scan', style: TextStyle(color: colors.textSecondary)),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              final shareFile = autoSavedPath ?? filePath;
-              Share.shareXFiles([XFile(shareFile)], text: 'Scanned PDF');
-            },
-            child: const Text('Share', style: TextStyle(color: Color(0xFFE94560))),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context);
-              PdfService.openPdf(autoSavedPath ?? filePath);
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF00D9FF),
-            ),
-            child: const Text('Open', style: TextStyle(color: Colors.white)),
-          ),
-        ],
-      ),
-    );
-  }
-
   void _showSnackBar(String message, {bool isError = false}) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
         backgroundColor: isError ? Colors.red : const Color(0xFF00D9FF),
         duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  Widget _buildPermissionDeniedUi() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.1),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.camera_alt_outlined,
+                size: 64,
+                color: Colors.white54,
+              ),
+            ),
+            const SizedBox(height: 24),
+            const Text(
+              'Camera Access Required',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 20,
+                fontWeight: FontWeight.w600,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              _cameraPermissionPermanentlyDenied
+                  ? 'Camera permission was denied. Please enable it in Settings to scan documents.'
+                  : 'PDF Helper needs camera access to scan documents and convert them to PDF.',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.8),
+                fontSize: 15,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 32),
+            if (_cameraPermissionPermanentlyDenied)
+              FilledButton.icon(
+                onPressed: _openAppSettings,
+                icon: const Icon(Icons.settings),
+                label: const Text('Open Settings'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF00D9FF),
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                ),
+              )
+            else
+              FilledButton.icon(
+                onPressed: _requestCameraPermission,
+                icon: const Icon(Icons.camera_alt),
+                label: const Text('Grant Camera Access'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF00D9FF),
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -396,11 +475,13 @@ class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserv
   }
 
   void _editImage(int index) {
+    final themeProvider = context.read<ThemeProvider>();
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => ScanEditScreen(
           imagePath: _capturedImages[index],
+          imageQuality: themeProvider.outputQualityAsImageQuality,
           onSave: (processedPath) {
             setState(() {
               _capturedImages[index] = processedPath;
@@ -617,6 +698,7 @@ class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserv
 
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     final topPadding = MediaQuery.of(context).padding.top;
     final bottomPadding = MediaQuery.of(context).padding.bottom;
     
@@ -680,6 +762,8 @@ class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserv
                 },
               ),
             )
+          else if (_cameraPermissionDenied)
+            _buildPermissionDeniedUi()
           else
             const Center(
               child: Column(
@@ -795,8 +879,12 @@ class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserv
                     label: 'Gallery',
                     onTap: _pickFromGallery,
                   ),
-                  GestureDetector(
-                    onTap: _isCapturing ? null : _captureImage,
+                  Semantics(
+                    label: _isCapturing ? 'Capturing, please wait' : 'Take photo',
+                    button: true,
+                    enabled: !_isCapturing,
+                    child: GestureDetector(
+                      onTap: _isCapturing ? null : _captureImage,
                     child: Container(
                       width: 75,
                       height: 75,
@@ -828,6 +916,7 @@ class _ConvertScreenState extends State<ConvertScreen> with WidgetsBindingObserv
                               ),
                       ),
                     ),
+                  ),
                   ),
                   _buildControlButton(
                     icon: _capturedImages.isEmpty

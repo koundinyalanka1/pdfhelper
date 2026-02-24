@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:image/image.dart' as img;
 import 'package:crop_your_image/crop_your_image.dart';
 import 'package:path_provider/path_provider.dart';
@@ -20,8 +21,9 @@ enum ScanFilter {
 class ImageFilterRequest {
   final Uint8List imageBytes;
   final int filterIndex; // Use int instead of enum for isolate compatibility
+  final int imageQuality; // JPEG quality 1-100
   
-  ImageFilterRequest(this.imageBytes, this.filterIndex);
+  ImageFilterRequest(this.imageBytes, this.filterIndex, {this.imageQuality = 85});
 }
 
 /// Top-level function for isolate processing
@@ -51,7 +53,7 @@ Uint8List processImageInBackground(ImageFilterRequest request) {
       processed = image;
   }
 
-  return Uint8List.fromList(img.encodeJpg(processed, quality: 100));
+  return Uint8List.fromList(img.encodeJpg(processed, quality: request.imageQuality));
 }
 
 /// Auto enhance - intelligent enhancement based on image characteristics
@@ -286,11 +288,13 @@ img.Image applyGrayscaleFilter(img.Image image) {
 class ScanEditScreen extends StatefulWidget {
   final String imagePath;
   final Function(String) onSave;
+  final int imageQuality; // JPEG quality 1-100 for filter output
 
   const ScanEditScreen({
     super.key,
     required this.imagePath,
     required this.onSave,
+    this.imageQuality = 85,
   });
 
   @override
@@ -304,7 +308,7 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
   Uint8List? _originalImageBytes;
   String _currentImagePath = '';
 
-  bool get _isDarkMode => ThemeNotifier.maybeOf(context)?.isDarkMode ?? true;
+  bool get _isDarkMode => context.watch<ThemeProvider>().isDarkMode;
   AppColors get _colors => AppColors(_isDarkMode);
 
   @override
@@ -387,7 +391,7 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
         // Process image in background isolate using int index for better serialization
         resultBytes = await compute(
           processImageInBackground,
-          ImageFilterRequest(_originalImageBytes!, filter.index),
+          ImageFilterRequest(_originalImageBytes!, filter.index, imageQuality: widget.imageQuality),
         );
       }
 
@@ -727,7 +731,7 @@ class _CropScreenState extends State<_CropScreen> {
   bool _isCropping = false;
   double? _aspectRatio;
 
-  bool get _isDarkMode => ThemeNotifier.maybeOf(context)?.isDarkMode ?? true;
+  bool get _isDarkMode => context.watch<ThemeProvider>().isDarkMode;
   AppColors get _colors => AppColors(_isDarkMode);
 
   void _onCrop() {

@@ -5,7 +5,7 @@ publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: ^3.10.4
+  sdk: ">=3.10.4 <4.0.0"
 
 dependencies:
   flutter:
@@ -13,18 +13,17 @@ dependencies:
 
   cupertino_icons: ^1.0.8
   
-  # PDF operations
-  syncfusion_flutter_pdf: ^32.1.21
-  pdfx: ^2.6.0
+  # PDF - single library for merge, split, create, render (MIT, flexible)
+  pdfrx: ^2.2.24
   
   # File handling
-  file_picker: ^10.3.8
-  image_picker: ^1.1.2
+  file_picker: 10.3.8  # Pinned: 10.3.9+ has Kotlin/AGP compatibility issues
+  image_picker: ^1.2.1
   path_provider: ^2.1.5
   open_file: ^3.5.10
   
   # Camera
-  camera: ^0.11.0+2
+  camera: ^0.11.4
   
   # Image processing
   image: ^4.3.0
@@ -39,8 +38,14 @@ dependencies:
   # Settings persistence
   shared_preferences: ^2.3.5
   
+  # State management
+  provider: ^6.1.2
+  
   # Notifications
   flutter_local_notifications: ^18.0.1
+
+  # Receive intents (e.g. open PDF from file manager)
+  receive_intent: ^0.2.7
 
 dev_dependencies:
   flutter_test:

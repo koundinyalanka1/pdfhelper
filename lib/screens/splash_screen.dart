@@ -1,6 +1,9 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:permission_handler/permission_handler.dart';
+import '../services/intent_service.dart';
+import '../utils/format_utils.dart';
 import 'home_screen.dart';
+import 'pdf_viewer_screen.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -45,68 +48,76 @@ class _SplashScreenState extends State<SplashScreen>
   Future<void> _initializeApp() async {
     // Wait for animation to start
     await Future.delayed(const Duration(milliseconds: 800));
-    
-    // Request permissions
-    await _requestPermissions();
-    
+
+    if (mounted) {
+      setState(() => _statusText = 'Ready to go!');
+    }
+
     // Small delay before navigation
     await Future.delayed(const Duration(milliseconds: 500));
-    
+
     _navigateToHome();
   }
 
-  Future<void> _requestPermissions() async {
-    if (mounted) {
-      setState(() {
-        _statusText = 'Requesting permissions...';
-      });
+  void _navigateToHome() async {
+    if (!mounted) return;
+    PdfIntentResult? intentResult;
+    try {
+      intentResult = await IntentService.getOpenedPdfIntent();
+    } catch (e) {
+      debugPrint('[SplashScreen] getOpenedPdfIntent error: $e');
     }
+    if (!mounted) return;
 
-    // Request camera permission
-    final cameraStatus = await Permission.camera.request();
-    
-    // Request storage permissions based on Android version
-    if (await Permission.photos.isGranted == false) {
-      await Permission.photos.request();
-    }
-    
-    // For older Android versions
-    if (await Permission.storage.isGranted == false) {
-      await Permission.storage.request();
-    }
+    debugPrint('[SplashScreen] _navigateToHome: intentResult=$intentResult action=${intentResult?.action}');
 
-    // Request notification permission (Android 13+)
-    if (await Permission.notification.isGranted == false) {
-      await Permission.notification.request();
-    }
+    if (intentResult != null) {
+      final path = intentResult.path;
+      final title = getPdfDisplayTitle(path);
 
-    if (mounted) {
-      if (cameraStatus.isGranted) {
-        setState(() {
-          _statusText = 'Ready to go!';
-        });
-      } else {
-        setState(() {
-          _statusText = 'Some permissions denied';
-        });
+      switch (intentResult.action) {
+        case PdfIntentAction.view:
+          debugPrint('[SplashScreen] Navigating to PdfViewerScreen path=$path');
+          Navigator.pushReplacement(
+            context,
+            PageRouteBuilder(
+              pageBuilder: (context, animation, secondaryAnimation) =>
+                  PdfViewerScreen(pdfPath: path, title: title),
+              transitionsBuilder: (context, animation, secondaryAnimation, child) {
+                return FadeTransition(opacity: animation, child: child);
+              },
+              transitionDuration: const Duration(milliseconds: 500),
+            ),
+          );
+          break;
+        case PdfIntentAction.split:
+          debugPrint('[SplashScreen] Navigating to HomeScreen Split tab');
+          _goToHome(path, 2);
+          break;
+        case PdfIntentAction.merge:
+          debugPrint('[SplashScreen] Navigating to HomeScreen Merge tab');
+          _goToHome(path, 0);
+          break;
       }
+    } else {
+      debugPrint('[SplashScreen] No intent, navigating to HomeScreen default');
+      _goToHome(null, 0);
     }
   }
 
-  void _navigateToHome() {
-    if (mounted) {
-      Navigator.pushReplacement(
-        context,
-        PageRouteBuilder(
-          pageBuilder: (context, animation, secondaryAnimation) =>
-              const HomeScreen(),
-          transitionsBuilder: (context, animation, secondaryAnimation, child) {
-            return FadeTransition(opacity: animation, child: child);
-          },
-          transitionDuration: const Duration(milliseconds: 500),
-        ),
-      );
-    }
+  void _goToHome(String? pdfPath, int tab) {
+    if (!mounted) return;
+    Navigator.pushReplacement(
+      context,
+      PageRouteBuilder(
+        pageBuilder: (context, animation, secondaryAnimation) =>
+            HomeScreen(initialPdfPath: pdfPath, initialTab: tab),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          return FadeTransition(opacity: animation, child: child);
+        },
+        transitionDuration: const Duration(milliseconds: 500),
+      ),
+    );
   }
 
   @override
@@ -186,13 +197,16 @@ class _SplashScreenState extends State<SplashScreen>
                         ),
                       ),
                       const SizedBox(height: 60),
-                      SizedBox(
-                        width: 40,
-                        height: 40,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 3,
-                          valueColor: AlwaysStoppedAnimation<Color>(
-                            const Color(0xFFE94560).withValues(alpha: 0.8),
+                      Semantics(
+                        label: 'Loading PDF Helper',
+                        child: SizedBox(
+                          width: 40,
+                          height: 40,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 3,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              const Color(0xFFE94560).withValues(alpha: 0.8),
+                            ),
                           ),
                         ),
                       ),

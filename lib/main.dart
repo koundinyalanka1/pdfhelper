@@ -1,12 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
+import 'package:pdfrx/pdfrx.dart';
 import 'screens/splash_screen.dart';
 import 'providers/theme_provider.dart';
 import 'services/notification_service.dart';
+import 'widgets/pdf_intent_listener.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
+  // Initialize pdfrx (required before any PDF operations)
+  pdfrxFlutterInitialize();
+
   // Initialize notifications
   await NotificationService().initialize();
   
@@ -21,46 +27,30 @@ void main() async {
   runApp(const PDFHelperApp());
 }
 
-class PDFHelperApp extends StatefulWidget {
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
+class PDFHelperApp extends StatelessWidget {
   const PDFHelperApp({super.key});
 
   @override
-  State<PDFHelperApp> createState() => _PDFHelperAppState();
-}
-
-class _PDFHelperAppState extends State<PDFHelperApp> {
-  final ThemeProvider _themeProvider = ThemeProvider();
-
-  @override
-  void initState() {
-    super.initState();
-    _themeProvider.addListener(_onThemeChanged);
-  }
-
-  @override
-  void dispose() {
-    _themeProvider.removeListener(_onThemeChanged);
-    _themeProvider.dispose();
-    super.dispose();
-  }
-
-  void _onThemeChanged() {
-    if (mounted) {
-      setState(() {});
-    }
-  }
-
-  @override
   Widget build(BuildContext context) {
-    return ThemeNotifier(
-      themeProvider: _themeProvider,
-      child: MaterialApp(
-        title: 'PDF Helper',
-        debugShowCheckedModeBanner: false,
-        theme: _themeProvider.lightTheme,
-        darkTheme: _themeProvider.darkTheme,
-        themeMode: _themeProvider.isDarkMode ? ThemeMode.dark : ThemeMode.light,
-        home: const SplashScreen(),
+    return ChangeNotifierProvider(
+      create: (_) => ThemeProvider(),
+      child: Consumer<ThemeProvider>(
+        builder: (context, themeProvider, _) {
+          return PdfIntentListener(
+            navigatorKey: navigatorKey,
+            child: MaterialApp(
+              navigatorKey: navigatorKey,
+              title: 'PDF Helper',
+              debugShowCheckedModeBanner: false,
+              theme: themeProvider.lightTheme,
+              darkTheme: themeProvider.darkTheme,
+              themeMode: themeProvider.isDarkMode ? ThemeMode.dark : ThemeMode.light,
+              home: const SplashScreen(),
+            ),
+          );
+        },
       ),
     );
   }

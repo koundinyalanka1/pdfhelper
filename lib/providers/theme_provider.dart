@@ -10,18 +10,32 @@ class ThemeProvider extends ChangeNotifier {
   static const String _autoSaveKey = 'autoSave';
   static const String _saveLocationKey = 'saveLocation';
   static const String _notificationsKey = 'notifications';
+  static const String _outputQualityKey = 'outputQuality';
   
   bool _isDarkMode = true;
   bool _isInitialized = false;
   bool _autoSave = true;
   bool _notifications = false; // Default to false, will be set based on permission
   String _saveLocation = 'Downloads';
+  String _outputQuality = 'Maximum';
   
   bool get isDarkMode => _isDarkMode;
   bool get isInitialized => _isInitialized;
   bool get autoSave => _autoSave;
   bool get notifications => _notifications;
   String get saveLocation => _saveLocation;
+  String get outputQuality => _outputQuality;
+
+  /// JPEG quality (1-100) for scan-to-PDF image encoding
+  int get outputQualityAsImageQuality {
+    switch (_outputQuality) {
+      case 'Low': return 50;
+      case 'Medium': return 70;
+      case 'High': return 85;
+      case 'Maximum': return 100;
+      default: return 85;
+    }
+  }
 
   ThemeProvider() {
     _loadSettings();
@@ -32,6 +46,7 @@ class ThemeProvider extends ChangeNotifier {
     _isDarkMode = prefs.getBool(_themeKey) ?? true;
     _autoSave = prefs.getBool(_autoSaveKey) ?? true;
     _saveLocation = prefs.getString(_saveLocationKey) ?? 'Downloads';
+    _outputQuality = prefs.getString(_outputQualityKey) ?? 'Maximum';
     
     // Check if notification permission is granted
     // Only enable notifications setting if user has granted permission
@@ -77,6 +92,15 @@ class ThemeProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> setOutputQuality(String quality) async {
+    if (_outputQuality == quality) return;
+    
+    _outputQuality = quality;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_outputQualityKey, quality);
+    notifyListeners();
+  }
+
   /// Set notifications - requests permission if turning on
   /// Returns true if setting was changed successfully
   Future<bool> setNotifications(bool value) async {
@@ -98,31 +122,18 @@ class ThemeProvider extends ChangeNotifier {
     return true;
   }
 
-  /// Get the auto-save directory path based on settings
+  /// Get the auto-save directory path based on settings.
+  /// Uses app-private storage (scoped storage) - no MANAGE_EXTERNAL_STORAGE needed.
+  /// Files are accessible via Files app (Android) or Share.
   Future<String?> getAutoSavePath() async {
     if (!_autoSave) return null;
-    
+
     try {
-      if (Platform.isAndroid) {
-        // On Android, save to Downloads or Documents in external storage
-        if (_saveLocation == 'Downloads') {
-          final dir = Directory('/storage/emulated/0/Download');
-          if (await dir.exists()) {
-            return '${dir.path}/PDFHelper';
-          }
-        } else if (_saveLocation == 'Documents') {
-          final dir = Directory('/storage/emulated/0/Documents');
-          if (await dir.exists()) {
-            return '${dir.path}/PDFHelper';
-          }
-        }
-        // Fallback to external storage directory
-        final extDir = await getExternalStorageDirectory();
-        return extDir?.path;
-      } else if (Platform.isIOS) {
-        final docDir = await getApplicationDocumentsDirectory();
-        return docDir.path;
-      }
+      final docDir = await getApplicationDocumentsDirectory();
+      // Use subfolder based on user preference (Downloads/Documents)
+      // Both are in app-private storage - Android 10+ compatible
+      final subfolder = _saveLocation == 'Documents' ? 'Documents' : 'Downloads';
+      return '${docDir.path}/PDFHelper/$subfolder';
     } catch (e) {
       debugPrint('Error getting auto-save path: $e');
     }
@@ -220,27 +231,6 @@ class ThemeProvider extends ChangeNotifier {
 
   ThemeData get currentTheme => _isDarkMode ? darkTheme : lightTheme;
 }
-
-/// InheritedWidget to provide theme to all descendants
-class ThemeNotifier extends InheritedNotifier<ThemeProvider> {
-  const ThemeNotifier({
-    super.key,
-    required ThemeProvider themeProvider,
-    required super.child,
-  }) : super(notifier: themeProvider);
-
-  static ThemeProvider of(BuildContext context) {
-    final ThemeNotifier? result = context.dependOnInheritedWidgetOfExactType<ThemeNotifier>();
-    assert(result != null, 'No ThemeNotifier found in context');
-    return result!.notifier!;
-  }
-  
-  static ThemeProvider? maybeOf(BuildContext context) {
-    final ThemeNotifier? result = context.dependOnInheritedWidgetOfExactType<ThemeNotifier>();
-    return result?.notifier;
-  }
-}
-
 // App Colors helper class
 class AppColors {
   final bool isDark;
@@ -258,3 +248,4 @@ class AppColors {
   Color get bottomNavBackground => isDark ? const Color(0xFF16213E) : Colors.white;
   Color get shadowColor => isDark ? Colors.black26 : Colors.black12;
 }
+

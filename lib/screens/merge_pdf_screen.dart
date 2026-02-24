@@ -1,58 +1,73 @@
 import 'dart:io';
 import 'dart:typed_data';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:pdfx/pdfx.dart';
-import 'package:syncfusion_flutter_pdf/pdf.dart' as sync_pdf;
+import '../models/selected_pdf_file.dart';
 import '../services/pdf_service.dart';
 import '../services/notification_service.dart';
 import '../providers/theme_provider.dart';
-
-typedef SyncPdfDocument = sync_pdf.PdfDocument;
-
-class SelectedPdfFile {
-  final String path;
-  final String name;
-  int pageCount;
-  final int fileSize;
-  Uint8List? thumbnail;
-  Uint8List? cachedBytes; // Cache PDF bytes for faster merge
-  bool isLoading; // Loading state for background processing
-
-  SelectedPdfFile({
-    required this.path,
-    required this.name,
-    this.pageCount = 0,
-    required this.fileSize,
-    this.thumbnail,
-    this.cachedBytes,
-    this.isLoading = true,
-  });
-}
+import '../utils/format_utils.dart';
+import 'pdf_preview_screen.dart';
+import 'pdf_viewer_screen.dart';
 
 class MergePdfScreen extends StatefulWidget {
-  const MergePdfScreen({super.key});
+  const MergePdfScreen({super.key, this.initialPdfPath});
+
+  final String? initialPdfPath;
 
   @override
   State<MergePdfScreen> createState() => _MergePdfScreenState();
 }
 
-class _MergePdfScreenState extends State<MergePdfScreen> {
-  final List<SelectedPdfFile> _selectedFiles = [];
+class _MergePdfScreenState extends State<MergePdfScreen>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  List<List<SelectedPdfFile>> _batches = [[]];
   bool _isProcessing = false;
   double _mergeProgress = 0.0;
   String _mergeStatus = '';
 
-  bool get _isDarkMode => ThemeNotifier.maybeOf(context)?.isDarkMode ?? true;
+  bool get _isDarkMode => context.watch<ThemeProvider>().isDarkMode;
   AppColors get _colors => AppColors(_isDarkMode);
 
-  String _formatFileSize(int bytes) {
-    if (bytes < 1024) return '$bytes B';
-    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
-    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  @override
+  void initState() {
+    super.initState();
+    if (widget.initialPdfPath != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _addInitialPdf(widget.initialPdfPath!);
+      });
+    }
+  }
+
+  Future<void> _addInitialPdf(String path) async {
+    try {
+      final file = File(path);
+      if (!await file.exists()) return;
+      final name = path.split(RegExp(r'[/\\]')).last;
+      final size = await file.length();
+      final newFile = SelectedPdfFile(
+        path: path,
+        name: name,
+        fileSize: size,
+        isLoading: true,
+      );
+      if (mounted) {
+        setState(() {
+          if (_batches.isEmpty) _batches.add([]);
+          _batches.last.insert(0, newFile);
+        });
+        _loadPdfDetails(newFile);
+      }
+    } catch (e) {
+      debugPrint('Error adding initial PDF: $e');
+    }
   }
 
   Future<void> _pickPdfFiles() async {
@@ -79,7 +94,8 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
         }
         
         setState(() {
-          _selectedFiles.addAll(newFiles);
+          if (_batches.isEmpty) _batches.add([]);
+          _batches.last.addAll(newFiles);
         });
         
         // Load all files in PARALLEL (not sequential)
@@ -94,76 +110,61 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
 
   Future<void> _loadPdfDetails(SelectedPdfFile file) async {
     try {
-      // Read file bytes
       final Uint8List pdfBytes = await File(file.path).readAsBytes();
-      
-      // Cache bytes immediately so merge can proceed even if thumbnail fails
-      if (mounted) {
-        setState(() {
-          file.cachedBytes = pdfBytes;
-        });
-      }
-      
-      // Run page count in isolate and thumbnail generation in parallel
-      final pageCountFuture = compute(_getPageCountFromBytes, pdfBytes);
-      final thumbnailFuture = _generateThumbnail(pdfBytes);
-      
-      final results = await Future.wait([pageCountFuture, thumbnailFuture]);
-      final int pageCount = results[0] as int;
-      final Uint8List? thumbnail = results[1] as Uint8List?;
 
-      // Update file in list
+      if (mounted) {
+        setState(() => file.cachedBytes = pdfBytes);
+      }
+
+      final results = await Future.wait([
+        PdfService.getPageCountFromBytes(pdfBytes),
+        PdfService.generateThumbnail(pdfBytes),
+        PdfService.getFirstPageAspectRatioFromBytes(pdfBytes),
+      ]);
+      final pageCount = results[0] as int;
+      final thumbnail = results[1] as Uint8List?;
+      final aspectRatio = results[2] as double?;
+
       if (mounted) {
         setState(() {
           file.pageCount = pageCount;
           file.thumbnail = thumbnail;
+          file.aspectRatio = aspectRatio;
           file.isLoading = false;
         });
       }
     } catch (e) {
       debugPrint('Error loading PDF: $e');
       if (mounted) {
-        setState(() {
-          file.isLoading = false;
-        });
+        setState(() => file.isLoading = false);
       }
     }
   }
-  
-  Future<Uint8List?> _generateThumbnail(Uint8List pdfBytes) async {
-    try {
-      final pdfDoc = await PdfDocument.openData(pdfBytes);
-      final page = await pdfDoc.getPage(1);
-      final pageImage = await page.render(
-        width: page.width * 0.25, // Slightly smaller for faster rendering
-        height: page.height * 0.25,
-        format: PdfPageImageFormat.jpeg,
-        quality: 60, // Lower quality for faster rendering (still looks good as thumbnail)
-      );
-      final bytes = pageImage?.bytes;
-      await page.close();
-      await pdfDoc.close();
-      return bytes;
-    } catch (e) {
-      debugPrint('Error generating thumbnail: $e');
-      return null;
-    }
-  }
-  
-  // Isolate function for getting page count
-  static int _getPageCountFromBytes(Uint8List bytes) {
-    final doc = SyncPdfDocument(inputBytes: bytes);
-    final count = doc.pages.count;
-    doc.dispose();
-    return count;
+
+  bool get _allFilesLoaded =>
+      _batches.every((b) => b.every((f) => !f.isLoading));
+  int get _mergeableBatchCount =>
+      _batches.where((b) => b.length >= 2).length;
+  int get _totalBatchesPages =>
+      _batches.fold(0, (sum, b) => sum + b.fold(0, (s, f) => s + f.pageCount));
+  int get _totalFileCount => _batches.fold(0, (sum, b) => sum + b.length);
+  int get _loadingCount =>
+      _batches.fold(0, (sum, b) => sum + b.where((f) => f.isLoading).length);
+
+  void _addNewBatch() {
+    setState(() => _batches.add([]));
   }
 
-  bool get _allFilesLoaded => _selectedFiles.every((f) => !f.isLoading);
+  void _removeBatch(int batchIndex) {
+    setState(() {
+      _batches.removeAt(batchIndex);
+      if (_batches.isEmpty) _batches.add([]);
+    });
+  }
 
   Future<void> _mergePdfs() async {
-    if (_selectedFiles.length < 2) return;
-    
-    // Wait for all files to finish loading
+    if (_mergeableBatchCount == 0) return;
+
     if (!_allFilesLoaded) {
       _showSnackBar('Please wait for all files to load', isError: false);
       return;
@@ -171,65 +172,58 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
 
     setState(() {
       _isProcessing = true;
-      _mergeProgress = 0.1;
-      _mergeStatus = 'Preparing ${_selectedFiles.length} files...';
+      _mergeProgress = 0.05;
+      _mergeStatus = 'Preparing ${_mergeableBatchCount} batch(es)...';
     });
 
     try {
-      // OPTIMIZED: Use cached bytes directly (already loaded in parallel)
-      // Only read missing files in parallel if any
-      final List<Uint8List> pdfBytesList = [];
-      final List<int> missingIndices = [];
-      
-      for (int i = 0; i < _selectedFiles.length; i++) {
-        if (_selectedFiles[i].cachedBytes != null) {
-          pdfBytesList.add(_selectedFiles[i].cachedBytes!);
-        } else {
-          pdfBytesList.add(Uint8List(0)); // Placeholder
-          missingIndices.add(i);
+      final themeProvider = context.read<ThemeProvider>();
+      final outputQuality = themeProvider.outputQuality;
+
+      // Build batch bytes
+      final List<List<Uint8List>> batchBytesList = [];
+      for (final batch in _batches) {
+        if (batch.length < 2) continue;
+        final List<Uint8List> bytes = [];
+        for (final file in batch) {
+          if (file.cachedBytes != null) {
+            bytes.add(file.cachedBytes!);
+          } else {
+            bytes.add(await File(file.path).readAsBytes());
+          }
         }
-      }
-      
-      // Read any missing files in parallel
-      if (missingIndices.isNotEmpty) {
-        final missingBytes = await Future.wait(
-          missingIndices.map((i) => File(_selectedFiles[i].path).readAsBytes()),
-        );
-        for (int j = 0; j < missingIndices.length; j++) {
-          pdfBytesList[missingIndices[j]] = missingBytes[j];
-        }
+        batchBytesList.add(bytes);
       }
 
       setState(() {
         _mergeProgress = 0.2;
-        _mergeStatus = 'Merging $_totalPages pages...';
+        _mergeStatus = 'Merging ${batchBytesList.length} batch(es)...';
       });
 
-      final String? outputPath = await PdfService.mergePdfsFromBytes(pdfBytesList);
+      final outputPaths =
+          await PdfService.mergePdfsBatch(batchBytesList, outputQuality: outputQuality);
 
       setState(() {
-        _mergeProgress = 0.9;
+        _mergeProgress = 0.8;
         _mergeStatus = 'Saving...';
       });
 
-      if (outputPath != null) {
-        // Auto-save to user-accessible location if enabled
-        String? autoSavedPath;
-        final themeProvider = ThemeNotifier.maybeOf(context);
-        if (themeProvider != null && themeProvider.autoSave) {
-          autoSavedPath = await themeProvider.autoSaveFile(outputPath, 'merged');
-        }
-        
-        // Show notification if enabled
-        if (themeProvider != null && themeProvider.notifications) {
-          NotificationService().showMergeComplete(_totalPages);
-        }
-        
-        setState(() {
-          _mergeProgress = 1.0;
-          _selectedFiles.clear();
-        });
-        _showSuccessDialog(outputPath, autoSavedPath);
+      if (outputPaths.isNotEmpty) {
+        setState(() => _mergeProgress = 1.0);
+        if (!mounted) return;
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => PdfPreviewScreen(
+              filePaths: outputPaths,
+              sourceType: PdfPreviewSourceType.merge,
+              pageCount: _totalBatchesPages,
+              onSaved: () {
+                setState(() => _batches = [[]]);
+              },
+            ),
+          ),
+        );
       } else {
         _showSnackBar('Failed to merge PDFs', isError: true);
       }
@@ -243,84 +237,253 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
     }
   }
 
-  void _showSuccessDialog(String filePath, [String? autoSavedPath]) {
-    final themeProvider = ThemeNotifier.maybeOf(context);
-    final saveLocation = themeProvider?.saveLocation ?? 'Downloads';
-    
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: _colors.cardBackground,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Row(
-          children: [
-            const Icon(Icons.check_circle, color: Color(0xFF4CAF50), size: 28),
-            const SizedBox(width: 10),
-            Text('Success!', style: TextStyle(color: _colors.textPrimary)),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
+  Widget _buildBatchesList() {
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      itemCount: _batches.length,
+      itemBuilder: (context, batchIndex) {
+        final batch = _batches[batchIndex];
+        return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'PDFs merged successfully!',
-              style: TextStyle(color: _colors.textSecondary),
-            ),
-            if (autoSavedPath != null) ...[
-              const SizedBox(height: 12),
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF4CAF50).withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(8),
-                ),
+            if (batchIndex > 0) const SizedBox(height: 8),
+            if (batchIndex > 0)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
                 child: Row(
                   children: [
-                    const Icon(Icons.folder_rounded, color: Color(0xFF4CAF50), size: 18),
-                    const SizedBox(width: 8),
-                    Expanded(
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF00D9FF).withValues(alpha: 0.2),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
                       child: Text(
-                        'Saved to $saveLocation/PDFHelper',
+                        'Batch ${batchIndex + 1}',
                         style: const TextStyle(
-                          color: Color(0xFF4CAF50),
+                          color: Color(0xFF00D9FF),
                           fontSize: 12,
-                          fontWeight: FontWeight.w500,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
                     ),
+                    if (batch.isEmpty)
+                      TextButton.icon(
+                        onPressed: () => _removeBatch(batchIndex),
+                        icon: const Icon(Icons.delete_outline, size: 16),
+                        label: const Text('Remove'),
+                        style: TextButton.styleFrom(
+                          foregroundColor: Colors.red,
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                        ),
+                      ),
                   ],
                 ),
               ),
-            ],
+            ...batch.asMap().entries.map((entry) {
+              final fileIndex = entry.key;
+              final file = entry.value;
+              return _buildPdfCard(file, batchIndex, fileIndex);
+            }),
           ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('Close', style: TextStyle(color: _colors.textSecondary)),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              // Share the auto-saved file if available, otherwise use original
-              final shareFile = autoSavedPath ?? filePath;
-              Share.shareXFiles([XFile(shareFile)], text: 'Merged PDF');
-            },
-            child: const Text('Share', style: TextStyle(color: Color(0xFF00D9FF))),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context);
-              // Open the auto-saved file if available, otherwise use original
-              PdfService.openPdf(autoSavedPath ?? filePath);
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFE94560),
-            ),
-            child: const Text('Open', style: TextStyle(color: Colors.white)),
+        );
+      },
+    );
+  }
+
+  Widget _buildPdfCard(SelectedPdfFile file, int batchIndex, int fileIndex) {
+    return Container(
+      key: ValueKey('${file.path}_${batchIndex}_$fileIndex'),
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: _colors.cardBackground,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: _colors.shadowColor,
+            blurRadius: 8,
+            offset: const Offset(0, 2),
           ),
         ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          children: [
+            Container(
+              width: 28,
+              height: 28,
+              decoration: BoxDecoration(
+                color: const Color(0xFFE94560),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Center(
+                child: Text(
+                  '${fileIndex + 1}',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final ratio = file.aspectRatio ?? 0.7;
+                const base = 88.0;
+                final w = ratio >= 1 ? base : (base * ratio).clamp(50.0, 90.0);
+                final h = ratio >= 1 ? (base / ratio).clamp(55.0, 110.0) : base;
+                return Container(
+                  width: w,
+                  height: h,
+                  decoration: BoxDecoration(
+                color: _isDarkMode
+                    ? Colors.white.withValues(alpha: 0.1)
+                    : Colors.grey.shade200,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: _colors.divider, width: 1),
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(7),
+                child: file.isLoading
+                    ? const Center(
+                        child: SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Color(0xFFE94560),
+                          ),
+                        ),
+                      )
+                    : file.thumbnail != null
+                        ? Image.memory(file.thumbnail!, fit: BoxFit.contain)
+                        : Center(
+                            child: Icon(
+                              Icons.picture_as_pdf_rounded,
+                              color: const Color(0xFFE94560),
+                              size: 28,
+                            ),
+                          ),
+                ),
+              );
+            },
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    file.name,
+                    style: TextStyle(
+                      color: _colors.textPrimary,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFE94560).withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: file.isLoading
+                            ? const Text(
+                                'Loading...',
+                                style: TextStyle(
+                                  color: Color(0xFFE94560),
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              )
+                            : Text(
+                                '${file.pageCount} page${file.pageCount != 1 ? 's' : ''}',
+                                style: const TextStyle(
+                                  color: Color(0xFFE94560),
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        formatFileSize(file.fileSize),
+                        style: TextStyle(
+                          color: _colors.textTertiary,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            if (!file.isLoading)
+              Semantics(
+                label: 'View ${file.name}',
+                button: true,
+                child: IconButton(
+                  onPressed: () async {
+                    HapticFeedback.lightImpact();
+                    String path = file.path;
+                    if (!File(path).existsSync() && file.cachedBytes != null) {
+                      try {
+                        final dir = await getTemporaryDirectory();
+                        final temp = File('${dir.path}/view_${DateTime.now().millisecondsSinceEpoch}.pdf');
+                        await temp.writeAsBytes(file.cachedBytes!);
+                        path = temp.path;
+                      } catch (e) {
+                        debugPrint('Error writing temp PDF: $e');
+                        if (mounted) _showSnackBar('Could not open PDF', isError: true);
+                        return;
+                      }
+                    }
+                    if (mounted) {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => PdfViewerScreen(
+                            pdfPath: path,
+                            title: file.name,
+                          ),
+                        ),
+                      );
+                    }
+                  },
+                  icon: Icon(Icons.visibility_rounded, color: _colors.textSecondary, size: 20),
+                  constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                  padding: EdgeInsets.zero,
+                ),
+              ),
+            Semantics(
+              label: 'Remove ${file.name} from batch',
+              button: true,
+              child: IconButton(
+                onPressed: () {
+                  HapticFeedback.lightImpact();
+                  setState(() {
+                    _batches[batchIndex].removeAt(fileIndex);
+                    if (_batches[batchIndex].isEmpty && _batches.length > 1) {
+                      _batches.removeAt(batchIndex);
+                    }
+                  });
+                },
+                icon: Icon(Icons.close_rounded, color: Colors.red.shade400, size: 20),
+                constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                padding: EdgeInsets.zero,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -334,16 +497,31 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
     );
   }
 
-  int get _totalPages => _selectedFiles.fold(0, (sum, file) => sum + file.pageCount);
-  int get _loadingCount => _selectedFiles.where((f) => f.isLoading).length;
 
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     return Scaffold(
       backgroundColor: _colors.background,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
+        leading: Semantics(
+          label: 'New batch',
+          button: true,
+          child: IconButton(
+            onPressed: _isProcessing ? null : _addNewBatch,
+            icon: Text(
+              '+B',
+              style: TextStyle(
+                color: _colors.textTertiary.withValues(alpha: 0.8),
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            tooltip: 'New batch',
+          ),
+        ),
         title: Text(
           'Merge PDF',
           style: TextStyle(
@@ -353,12 +531,16 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
         ),
         centerTitle: true,
         actions: [
-          if (_selectedFiles.isNotEmpty)
-            IconButton(
-              onPressed: () {
-                setState(() => _selectedFiles.clear());
-              },
-              icon: Icon(Icons.delete_outline, color: _colors.textSecondary),
+          if (_batches.any((b) => b.isNotEmpty))
+            Semantics(
+              label: 'Clear all batches',
+              button: true,
+              child: IconButton(
+                onPressed: () {
+                  setState(() => _batches = [[]]);
+                },
+                icon: Icon(Icons.delete_outline, color: _colors.textSecondary),
+              ),
             ),
         ],
       ),
@@ -368,91 +550,98 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
             // Add files button
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 10, 20, 10),
-              child: GestureDetector(
-                onTap: _isProcessing ? null : _pickPdfFiles,
-                child: Container(
-                  width: double.infinity,
-                  height: _selectedFiles.isEmpty ? 140 : 70,
-                  decoration: BoxDecoration(
-                    color: _colors.cardBackground,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: const Color(0xFFE94560).withValues(alpha: 0.3),
-                      width: 2,
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: _colors.shadowColor,
-                        blurRadius: 10,
-                        offset: const Offset(0, 2),
+              child: Semantics(
+                label: _batches.every((b) => b.isEmpty)
+                    ? 'Tap to select PDF files to merge'
+                    : 'Add more PDF files to current batch',
+                button: true,
+                enabled: !_isProcessing,
+                child: GestureDetector(
+                  onTap: _isProcessing ? null : _pickPdfFiles,
+                  child: Container(
+                    width: double.infinity,
+                    height: _batches.every((b) => b.isEmpty) ? 140 : 70,
+                    decoration: BoxDecoration(
+                      color: _colors.cardBackground,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: const Color(0xFFE94560).withValues(alpha: 0.3),
+                        width: 2,
                       ),
-                    ],
-                  ),
-                  child: _selectedFiles.isEmpty
-                      ? Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(14),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFE94560).withValues(alpha: 0.1),
-                                shape: BoxShape.circle,
-                              ),
-                              child: const Icon(
-                                Icons.add_circle_outline_rounded,
-                                size: 36,
-                                color: Color(0xFFE94560),
-                              ),
-                            ),
-                            const SizedBox(height: 10),
-                            Text(
-                              'Tap to select PDF files',
-                              style: TextStyle(
-                                color: _colors.textSecondary,
-                                fontSize: 15,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ],
-                        )
-                      : Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFE94560).withValues(alpha: 0.1),
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              child: const Icon(
-                                Icons.add_rounded,
-                                size: 24,
-                                color: Color(0xFFE94560),
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Text(
-                              'Add more PDFs',
-                              style: TextStyle(
-                                color: _colors.textSecondary,
-                                fontSize: 15,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ],
+                      boxShadow: [
+                        BoxShadow(
+                          color: _colors.shadowColor,
+                          blurRadius: 10,
+                          offset: const Offset(0, 2),
                         ),
+                      ],
+                    ),
+                    child: _batches.every((b) => b.isEmpty)
+                        ? Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                                Container(
+                                padding: const EdgeInsets.all(14),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFE94560).withValues(alpha: 0.1),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(
+                                  Icons.add_circle_outline_rounded,
+                                  size: 36,
+                                  color: Color(0xFFE94560),
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                                Text(
+                                'Tap to select PDF files',
+                                style: TextStyle(
+                                  color: _colors.textSecondary,
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
+                          )
+                        : Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFE94560).withValues(alpha: 0.1),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: const Icon(
+                                  Icons.add_rounded,
+                                  size: 24,
+                                  color: Color(0xFFE94560),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Text(
+                                'Add more PDFs',
+                                style: TextStyle(
+                                  color: _colors.textSecondary,
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
+                          ),
+                    ),
+                  ),
                 ),
               ),
-            ),
 
             // Stats bar
-            if (_selectedFiles.isNotEmpty)
+            if (_batches.any((b) => b.isNotEmpty))
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
                 child: Row(
                   children: [
                     Text(
-                      'Selected PDFs',
+                      'Batches',
                       style: TextStyle(
                         color: _colors.textPrimary,
                         fontSize: 16,
@@ -480,7 +669,7 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
                                 ),
                                 const SizedBox(width: 6),
                                 Text(
-                                  '${_selectedFiles.length - _loadingCount}/${_selectedFiles.length} loaded',
+                                  '$_totalFileCount files loading...',
                                   style: const TextStyle(
                                     color: Color(0xFFE94560),
                                     fontSize: 12,
@@ -490,7 +679,7 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
                               ],
                             )
                           : Text(
-                              '${_selectedFiles.length} files • $_totalPages pages',
+                              '${_batches.where((b) => b.isNotEmpty).length} batch(es) • $_totalFileCount files',
                               style: const TextStyle(
                                 color: Color(0xFFE94560),
                                 fontSize: 12,
@@ -503,7 +692,7 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
               ),
 
             // Hint
-            if (_selectedFiles.length > 1)
+            if (_mergeableBatchCount > 0)
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 20),
                 child: Container(
@@ -522,7 +711,9 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          'Long press and drag to reorder',
+                          _batches.length > 1
+                              ? 'Long press to reorder. Use "New batch" for separate merge groups.'
+                              : 'Long press and drag to reorder',
                           style: TextStyle(
                             color: const Color(0xFF00D9FF),
                             fontSize: 12,
@@ -538,7 +729,7 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
 
             // PDF grid with previews
             Expanded(
-              child: _selectedFiles.isEmpty
+              child: _batches.every((b) => b.isEmpty)
                   ? Center(
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
@@ -559,210 +750,11 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
                         ],
                       ),
                     )
-                  : ReorderableListView.builder(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      itemCount: _selectedFiles.length,
-                      proxyDecorator: (child, index, animation) {
-                        return AnimatedBuilder(
-                          animation: animation,
-                          builder: (context, child) {
-                            final double elevation = Tween<double>(begin: 0, end: 8)
-                                .animate(animation)
-                                .value;
-                            return Material(
-                              elevation: elevation,
-                              borderRadius: BorderRadius.circular(16),
-                              shadowColor: const Color(0xFFE94560).withValues(alpha: 0.4),
-                              child: child,
-                            );
-                          },
-                          child: child,
-                        );
-                      },
-                      onReorder: (oldIndex, newIndex) {
-                        HapticFeedback.mediumImpact();
-                        setState(() {
-                          if (newIndex > oldIndex) newIndex--;
-                          final item = _selectedFiles.removeAt(oldIndex);
-                          _selectedFiles.insert(newIndex, item);
-                        });
-                      },
-                      itemBuilder: (context, index) {
-                        final file = _selectedFiles[index];
-                        
-                        return ReorderableDragStartListener(
-                          key: ValueKey('${file.path}_$index'),
-                          index: index,
-                          child: Container(
-                            margin: const EdgeInsets.only(bottom: 12),
-                            decoration: BoxDecoration(
-                              color: _colors.cardBackground,
-                              borderRadius: BorderRadius.circular(16),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: _colors.shadowColor,
-                                  blurRadius: 8,
-                                  offset: const Offset(0, 2),
-                                ),
-                              ],
-                            ),
-                            child: Padding(
-                              padding: const EdgeInsets.all(12),
-                              child: Row(
-                                children: [
-                                  // Order badge
-                                  Container(
-                                    width: 28,
-                                    height: 28,
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFFE94560),
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                    child: Center(
-                                      child: Text(
-                                        '${index + 1}',
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-
-                                  // Thumbnail
-                                  Container(
-                                    width: 60,
-                                    height: 80,
-                                    decoration: BoxDecoration(
-                                      color: _isDarkMode 
-                                          ? Colors.white.withValues(alpha: 0.1)
-                                          : Colors.grey.shade200,
-                                      borderRadius: BorderRadius.circular(8),
-                                      border: Border.all(
-                                        color: _colors.divider,
-                                        width: 1,
-                                      ),
-                                    ),
-                                    child: ClipRRect(
-                                      borderRadius: BorderRadius.circular(7),
-                                      child: file.isLoading
-                                          ? const Center(
-                                              child: SizedBox(
-                                                width: 20,
-                                                height: 20,
-                                                child: CircularProgressIndicator(
-                                                  strokeWidth: 2,
-                                                  color: Color(0xFFE94560),
-                                                ),
-                                              ),
-                                            )
-                                          : file.thumbnail != null
-                                              ? Image.memory(
-                                                  file.thumbnail!,
-                                                  fit: BoxFit.cover,
-                                                )
-                                              : Center(
-                                                  child: Icon(
-                                                    Icons.picture_as_pdf_rounded,
-                                                    color: const Color(0xFFE94560),
-                                                    size: 28,
-                                                  ),
-                                                ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-
-                                  // File info
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          file.name,
-                                          style: TextStyle(
-                                            color: _colors.textPrimary,
-                                            fontSize: 14,
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                          maxLines: 2,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                        const SizedBox(height: 6),
-                                        Row(
-                                          children: [
-                                            Container(
-                                              padding: const EdgeInsets.symmetric(
-                                                horizontal: 8,
-                                                vertical: 3,
-                                              ),
-                                              decoration: BoxDecoration(
-                                                color: const Color(0xFFE94560).withValues(alpha: 0.1),
-                                                borderRadius: BorderRadius.circular(6),
-                                              ),
-                                              child: file.isLoading
-                                                  ? const Text(
-                                                      'Loading...',
-                                                      style: TextStyle(
-                                                        color: Color(0xFFE94560),
-                                                        fontSize: 11,
-                                                        fontWeight: FontWeight.w600,
-                                                      ),
-                                                    )
-                                                  : Text(
-                                                      '${file.pageCount} page${file.pageCount != 1 ? 's' : ''}',
-                                                      style: const TextStyle(
-                                                        color: Color(0xFFE94560),
-                                                        fontSize: 11,
-                                                        fontWeight: FontWeight.w600,
-                                                      ),
-                                                    ),
-                                            ),
-                                            const SizedBox(width: 8),
-                                            Text(
-                                              _formatFileSize(file.fileSize),
-                                              style: TextStyle(
-                                                color: _colors.textTertiary,
-                                                fontSize: 11,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-
-                                  // Delete button
-                                  IconButton(
-                                    onPressed: () {
-                                      HapticFeedback.lightImpact();
-                                      setState(() {
-                                        _selectedFiles.removeAt(index);
-                                      });
-                                    },
-                                    icon: Icon(
-                                      Icons.close_rounded,
-                                      color: Colors.red.shade400,
-                                      size: 20,
-                                    ),
-                                    constraints: const BoxConstraints(
-                                      minWidth: 40,
-                                      minHeight: 40,
-                                    ),
-                                    padding: EdgeInsets.zero,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
+                  : _buildBatchesList(),
             ),
 
             // Merge button
-            if (_selectedFiles.length >= 2)
+            if (_mergeableBatchCount > 0)
               Padding(
                 padding: const EdgeInsets.all(20),
                 child: Column(
@@ -808,11 +800,18 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
                         ),
                       ),
                     ],
-                    SizedBox(
-                      width: double.infinity,
-                      height: 56,
-                      child: ElevatedButton(
-                        onPressed: (_isProcessing || !_allFilesLoaded) ? null : _mergePdfs,
+                    Semantics(
+                      label: _isProcessing
+                          ? 'Merging PDFs in progress'
+                          : _allFilesLoaded
+                              ? 'Merge $_totalBatchesPages pages'
+                              : 'Loading files, please wait',
+                      button: true,
+                      child: SizedBox(
+                        width: double.infinity,
+                        height: 56,
+                        child: ElevatedButton(
+                          onPressed: (_isProcessing || !_allFilesLoaded) ? null : _mergePdfs,
                         style: ElevatedButton.styleFrom(
                           backgroundColor: const Color(0xFFE94560),
                           disabledBackgroundColor: const Color(0xFFE94560).withValues(alpha: 0.5),
@@ -836,8 +835,8 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
                                   const Icon(Icons.merge_rounded, color: Colors.white, size: 22),
                                   const SizedBox(width: 10),
                                   Text(
-                                    _allFilesLoaded 
-                                        ? 'Merge $_totalPages Pages'
+                                    _allFilesLoaded
+                                        ? 'Merge $_mergeableBatchCount Batch(es)'
                                         : 'Loading files...',
                                     style: const TextStyle(
                                       color: Colors.white,
@@ -847,6 +846,7 @@ class _MergePdfScreenState extends State<MergePdfScreen> {
                                   ),
                                 ],
                               ),
+                        ),
                       ),
                     ),
                   ],

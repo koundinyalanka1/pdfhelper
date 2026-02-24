@@ -1,292 +1,58 @@
 import 'dart:io';
-import 'dart:ui';
 import 'package:flutter/foundation.dart';
-import 'package:syncfusion_flutter_pdf/pdf.dart';
+import 'package:image/image.dart' as img;
 import 'package:path_provider/path_provider.dart';
+import 'package:pdfrx/pdfrx.dart';
+import 'package:pdfrx_engine/pdfrx_engine.dart';
 import 'package:open_file/open_file.dart';
 
-/// Data class for merge operation - contains raw bytes list
-class MergeRequest {
-  final List<Uint8List> pdfBytesList;
-  MergeRequest(this.pdfBytesList);
-}
-
-/// Data class for image to PDF operation  
-class ImageToPdfRequest {
-  final List<Uint8List> imageBytes;
-  ImageToPdfRequest(this.imageBytes);
-}
-
-/// Data class for split operation
-class SplitRequest {
-  final Uint8List pdfBytes;
-  final int startPage;
-  final int endPage;
-  SplitRequest(this.pdfBytes, this.startPage, this.endPage);
-}
-
-/// Data class for extracting multiple specific pages
-class ExtractPagesRequest {
-  final Uint8List pdfBytes;
-  final List<int> pageIndices; // 0-based page indices
-  ExtractPagesRequest(this.pdfBytes, this.pageIndices);
-}
-
-/// OPTIMIZED: Fast merge - templates must be used before source doc is disposed
-List<int> mergePdfsFastIsolate(MergeRequest request) {
-  if (request.pdfBytesList.isEmpty) return [];
-  
-  // Create output document
-  final PdfDocument outputDoc = PdfDocument();
-  
-  // Remove default empty page
-  if (outputDoc.pages.count > 0) {
-    outputDoc.pages.removeAt(0);
-  }
-  
-  // Track current section for same-sized pages (reduces section allocation overhead)
-  PdfSection? currentSection;
-  double currentWidth = -1;
-  double currentHeight = -1;
-  
-  // Process each PDF document
-  for (final Uint8List pdfBytes in request.pdfBytesList) {
-    final PdfDocument sourceDoc = PdfDocument(inputBytes: pdfBytes);
-    final int pageCount = sourceDoc.pages.count;
-    
-    // Extract templates and add to output BEFORE disposing source
-    for (int i = 0; i < pageCount; i++) {
-      final PdfTemplate template = sourceDoc.pages[i].createTemplate();
-      final double templateWidth = template.size.width;
-      final double templateHeight = template.size.height;
-      
-      // Create new section only if page size differs
-      if (currentSection == null || 
-          currentWidth != templateWidth || 
-          currentHeight != templateHeight) {
-        currentSection = outputDoc.sections?.add();
-        if (currentSection != null) {
-          currentSection.pageSettings.size = Size(templateWidth, templateHeight);
-          currentSection.pageSettings.margins.all = 0;
-          currentWidth = templateWidth;
-          currentHeight = templateHeight;
-        }
-      }
-      
-      // Add page and draw template
-      if (currentSection != null) {
-        currentSection.pages.add().graphics.drawPdfTemplate(template, Offset.zero);
-      }
-    }
-    
-    // Dispose source document after all its pages are processed
-    sourceDoc.dispose();
-  }
-
-  // Save and cleanup
-  final List<int> result = outputDoc.saveSync();
-  outputDoc.dispose();
-  return result;
-}
-
-/// Optimized isolate function for converting images to PDF
-List<int> imagesToPdfIsolate(ImageToPdfRequest request) {
-  final PdfDocument document = PdfDocument();
-
-  for (Uint8List imageBytes in request.imageBytes) {
-    final PdfBitmap image = PdfBitmap(imageBytes);
-    final PdfPage page = document.pages.add();
-    final Size pageSize = page.getClientSize();
-
-    double imageWidth = image.width.toDouble();
-    double imageHeight = image.height.toDouble();
-    double aspectRatio = imageWidth / imageHeight;
-
-    double drawWidth, drawHeight;
-    if (aspectRatio > (pageSize.width / pageSize.height)) {
-      drawWidth = pageSize.width;
-      drawHeight = drawWidth / aspectRatio;
-    } else {
-      drawHeight = pageSize.height;
-      drawWidth = drawHeight * aspectRatio;
-    }
-
-    double x = (pageSize.width - drawWidth) / 2;
-    double y = (pageSize.height - drawHeight) / 2;
-
-    page.graphics.drawImage(
-      image,
-      Rect.fromLTWH(x, y, drawWidth, drawHeight),
-    );
-  }
-
-  final List<int> bytes = document.saveSync();
-  document.dispose();
-  return bytes;
-}
-
-/// Isolate function for splitting PDF by range
-List<int>? splitPdfByRangeIsolate(SplitRequest request) {
-  final PdfDocument sourceDocument = PdfDocument(inputBytes: request.pdfBytes);
-  final int totalPages = sourceDocument.pages.count;
-  
-  if (request.startPage < 1 || request.endPage > totalPages || request.startPage > request.endPage) {
-    sourceDocument.dispose();
-    return null;
-  }
-
-  final PdfDocument newDocument = PdfDocument();
-  
-  // Remove default page
-  if (newDocument.pages.count > 0) {
-    newDocument.pages.removeAt(0);
-  }
-
-  // Track current section for same-sized pages (optimization)
-  PdfSection? currentSection;
-  Size? currentSize;
-
-  for (int i = request.startPage - 1; i < request.endPage; i++) {
-    final PdfPage sourcePage = sourceDocument.pages[i];
-    final PdfTemplate template = sourcePage.createTemplate();
-    final Size templateSize = template.size;
-    
-    // Reuse section if page size is same
-    if (currentSection == null || currentSize != templateSize) {
-      currentSection = newDocument.sections!.add();
-      currentSection.pageSettings.size = templateSize;
-      currentSection.pageSettings.margins.all = 0;
-      currentSize = templateSize;
-    }
-    
-    currentSection.pages.add().graphics.drawPdfTemplate(template, Offset.zero);
-  }
-
-  sourceDocument.dispose();
-  final List<int> outputBytes = newDocument.saveSync();
-  newDocument.dispose();
-  return outputBytes;
-}
-
-/// OPTIMIZED: Extract multiple specific pages into one PDF (handles non-consecutive pages)
-List<int>? extractPagesIsolate(ExtractPagesRequest request) {
-  if (request.pageIndices.isEmpty) return null;
-  
-  final PdfDocument sourceDocument = PdfDocument(inputBytes: request.pdfBytes);
-  final int totalPages = sourceDocument.pages.count;
-  
-  // Validate all page indices
-  for (int idx in request.pageIndices) {
-    if (idx < 0 || idx >= totalPages) {
-      sourceDocument.dispose();
-      return null;
-    }
-  }
-
-  final PdfDocument newDocument = PdfDocument();
-  
-  // Remove default page
-  if (newDocument.pages.count > 0) {
-    newDocument.pages.removeAt(0);
-  }
-
-  // Track current section for same-sized pages (optimization)
-  PdfSection? currentSection;
-  Size? currentSize;
-
-  for (int pageIdx in request.pageIndices) {
-    final PdfPage sourcePage = sourceDocument.pages[pageIdx];
-    final PdfTemplate template = sourcePage.createTemplate();
-    final Size templateSize = template.size;
-    
-    // Reuse section if page size is same
-    if (currentSection == null || currentSize != templateSize) {
-      currentSection = newDocument.sections!.add();
-      currentSection.pageSettings.size = templateSize;
-      currentSection.pageSettings.margins.all = 0;
-      currentSize = templateSize;
-    }
-    
-    currentSection.pages.add().graphics.drawPdfTemplate(template, Offset.zero);
-  }
-
-  sourceDocument.dispose();
-  final List<int> outputBytes = newDocument.saveSync();
-  newDocument.dispose();
-  return outputBytes;
-}
-
-/// OPTIMIZED: Isolate function for splitting PDF into all pages
-/// Pre-creates all templates first to minimize repeated parsing
-List<List<int>> splitPdfAllPagesIsolate(Uint8List pdfBytes) {
-  final PdfDocument sourceDocument = PdfDocument(inputBytes: pdfBytes);
-  final int totalPages = sourceDocument.pages.count;
-  
-  // Pre-create all templates first (faster than recreating source doc each time)
-  final List<PdfTemplate> templates = [];
-  for (int i = 0; i < totalPages; i++) {
-    templates.add(sourceDocument.pages[i].createTemplate());
-  }
-  
-  // Now create individual page PDFs
-  List<List<int>> results = [];
-  for (int i = 0; i < totalPages; i++) {
-    final PdfDocument singlePageDoc = PdfDocument();
-    
-    // Remove default page
-    if (singlePageDoc.pages.count > 0) {
-      singlePageDoc.pages.removeAt(0);
-    }
-    
-    final PdfTemplate template = templates[i];
-    final PdfSection section = singlePageDoc.sections!.add();
-    section.pageSettings.size = template.size;
-    section.pageSettings.margins.all = 0;
-    section.pages.add().graphics.drawPdfTemplate(template, Offset.zero);
-
-    results.add(singlePageDoc.saveSync());
-    singlePageDoc.dispose();
-  }
-
-  sourceDocument.dispose();
-  return results;
-}
-
+/// PDF service using pdfrx - single library for merge, split, create, and render.
+/// pdfrx is MIT licensed and flexible for future features (viewing, text search, etc).
 class PdfService {
-  // Pre-cached directory path for faster file operations
   static String? _cachedOutputDir;
-  
-  /// Get or cache the output directory
+
   static Future<String> _getOutputDir() async {
-    if (_cachedOutputDir == null) {
-      final Directory directory = await getApplicationDocumentsDirectory();
-      _cachedOutputDir = directory.path;
-    }
+    _cachedOutputDir ??= (await getApplicationDocumentsDirectory()).path;
     return _cachedOutputDir!;
   }
 
-  /// Merge PDFs from pre-loaded bytes (fastest - no file I/O)
-  static Future<String?> mergePdfsFromBytes(List<Uint8List> pdfBytesList) async {
+  static Future<String> _getOutputPath(String prefix) async {
+    final dir = await getApplicationDocumentsDirectory();
+    return '${dir.path}/${prefix}_${DateTime.now().millisecondsSinceEpoch}.pdf';
+  }
+
+  /// Merge PDFs from pre-loaded bytes
+  static Future<String?> mergePdfsFromBytes(
+    List<Uint8List> pdfBytesList, {
+    String outputQuality = 'High',
+  }) async {
     if (pdfBytesList.length < 2) return null;
 
     try {
-      // Pre-compute output path BEFORE isolate work (parallel preparation)
-      final String outputDir = await _getOutputDir();
-      final String timestamp = DateTime.now().millisecondsSinceEpoch.toString();
-      final String outputPath = '$outputDir/merged_pdf_$timestamp.pdf';
-      
-      // Process merge in background isolate (bytes already loaded)
-      final List<int> outputBytes = await compute(
-        mergePdfsFastIsolate,
-        MergeRequest(pdfBytesList),
-      );
+      final outputDir = await _getOutputDir();
+      final outputPath =
+          '$outputDir/merged_pdf_${DateTime.now().millisecondsSinceEpoch}.pdf';
 
-      // Save with explicit buffer size for large files
-      final File outputFile = File(outputPath);
-      final IOSink sink = outputFile.openWrite(mode: FileMode.writeOnly);
-      sink.add(outputBytes);
-      await sink.flush();
-      await sink.close();
+      final List<PdfDocument> sourceDocs = [];
+      for (final bytes in pdfBytesList) {
+        sourceDocs.add(
+            await PdfDocument.openData(bytes, sourceName: 'memory:'));
+      }
+
+      final outputDoc =
+          await PdfDocument.createNew(sourceName: 'merged.pdf');
+      final List<PdfPage> allPages = [];
+      for (final doc in sourceDocs) {
+        await doc.loadPagesProgressively();
+        allPages.addAll(doc.pages);
+      }
+      outputDoc.pages = allPages;
+
+      final pdfData = await outputDoc.encodePdf();
+      await File(outputPath).writeAsBytes(pdfData);
+
+      for (final doc in sourceDocs) doc.dispose();
+      outputDoc.dispose();
 
       return outputPath;
     } catch (e) {
@@ -295,17 +61,31 @@ class PdfService {
     }
   }
 
-  /// Merge multiple PDF files into one - OPTIMIZED
-  static Future<String?> mergePdfs(List<String> pdfPaths) async {
+  /// Merge multiple batches of PDFs - each batch becomes one output file
+  static Future<List<String>> mergePdfsBatch(
+    List<List<Uint8List>> batches, {
+    String outputQuality = 'High',
+  }) async {
+    final List<String> outputPaths = [];
+    for (final batch in batches) {
+      if (batch.length >= 2) {
+        final path = await mergePdfsFromBytes(batch, outputQuality: outputQuality);
+        if (path != null) outputPaths.add(path);
+      }
+    }
+    return outputPaths;
+  }
+
+  /// Merge multiple PDF files into one
+  static Future<String?> mergePdfs(
+    List<String> pdfPaths, {
+    String outputQuality = 'High',
+  }) async {
     if (pdfPaths.length < 2) return null;
-
     try {
-      // Read all PDF files in PARALLEL for speed
-      final List<Uint8List> pdfBytesList = await Future.wait(
-        pdfPaths.map((path) => File(path).readAsBytes()),
-      );
-
-      return mergePdfsFromBytes(pdfBytesList);
+      final bytesList =
+          await Future.wait(pdfPaths.map((p) => File(p).readAsBytes()));
+      return mergePdfsFromBytes(bytesList, outputQuality: outputQuality);
     } catch (e) {
       debugPrint('Error merging PDFs: $e');
       return null;
@@ -313,26 +93,38 @@ class PdfService {
   }
 
   /// Convert images to PDF
-  static Future<String?> imagesToPdf(List<String> imagePaths) async {
+  static Future<String?> imagesToPdf(
+    List<String> imagePaths, {
+    String outputQuality = 'High',
+  }) async {
     if (imagePaths.isEmpty) return null;
 
     try {
-      // Read all image files in PARALLEL
-      final List<Future<Uint8List>> readFutures = imagePaths
-          .map((path) => File(path).readAsBytes())
-          .toList();
-      
-      final List<Uint8List> imageBytes = await Future.wait(readFutures);
+      final imageBytesList =
+          await Future.wait(imagePaths.map((p) => File(p).readAsBytes()));
 
-      // Process in background isolate
-      final List<int> outputBytes = await compute(
-        imagesToPdfIsolate,
-        ImageToPdfRequest(imageBytes),
-      );
+      final List<PdfDocument> imageDocs = [];
+      for (final bytes in imageBytesList) {
+        imageDocs.add(await PdfDocument.createFromJpegData(
+          bytes,
+          width: 595,
+          height: 842,
+          sourceName: 'image.pdf',
+        ));
+      }
 
-      // Save the document
-      final String outputPath = await _getOutputPath('images_to_pdf');
-      await File(outputPath).writeAsBytes(outputBytes, flush: true);
+      final outputDoc =
+          await PdfDocument.createNew(sourceName: 'images.pdf');
+      final List<PdfPage> allPages = [];
+      for (final doc in imageDocs) allPages.addAll(doc.pages);
+      outputDoc.pages = allPages;
+
+      final pdfData = await outputDoc.encodePdf();
+      final outputPath = await _getOutputPath('images_to_pdf');
+      await File(outputPath).writeAsBytes(pdfData);
+
+      for (final doc in imageDocs) doc.dispose();
+      outputDoc.dispose();
 
       return outputPath;
     } catch (e) {
@@ -343,46 +135,70 @@ class PdfService {
 
   /// Split PDF by page range
   static Future<String?> splitPdfByRange(
-      String pdfPath, int startPage, int endPage) async {
+    String pdfPath,
+    int startPage,
+    int endPage, {
+    String outputQuality = 'High',
+  }) async {
     try {
-      final Uint8List bytes = await File(pdfPath).readAsBytes();
-
-      // Process in background isolate
-      final List<int>? outputBytes = await compute(
-        splitPdfByRangeIsolate,
-        SplitRequest(bytes, startPage, endPage),
-      );
-
-      if (outputBytes == null) return null;
-
-      // Save the new document
-      final String outputPath =
-          await _getOutputPath('split_${startPage}_to_$endPage');
-      await File(outputPath).writeAsBytes(outputBytes, flush: true);
-
-      return outputPath;
+      final bytes = await File(pdfPath).readAsBytes();
+      return splitPdfByRangeFromBytes(bytes, startPage, endPage,
+          outputQuality: outputQuality);
     } catch (e) {
       debugPrint('Error splitting PDF: $e');
       return null;
     }
   }
 
-  /// OPTIMIZED: Split PDF by page range from pre-loaded bytes (avoids re-reading file)
+  /// Split PDF into multiple ranges - each range becomes one output file
+  static Future<List<String>> splitPdfByRangesFromBytes(
+    Uint8List pdfBytes,
+    List<({int start, int end})> ranges, {
+    String outputQuality = 'High',
+  }) async {
+    final List<String> outputPaths = [];
+    for (final range in ranges) {
+      final path = await splitPdfByRangeFromBytes(
+        pdfBytes,
+        range.start,
+        range.end,
+        outputQuality: outputQuality,
+      );
+      if (path != null) outputPaths.add(path);
+    }
+    return outputPaths;
+  }
+
+  /// Split PDF by page range from pre-loaded bytes
   static Future<String?> splitPdfByRangeFromBytes(
-      Uint8List pdfBytes, int startPage, int endPage) async {
+    Uint8List pdfBytes,
+    int startPage,
+    int endPage, {
+    String outputQuality = 'High',
+  }) async {
     try {
-      // Process in background isolate
-      final List<int>? outputBytes = await compute(
-        splitPdfByRangeIsolate,
-        SplitRequest(pdfBytes, startPage, endPage),
-      );
+      final sourceDoc =
+          await PdfDocument.openData(pdfBytes, sourceName: 'memory:');
+      await sourceDoc.loadPagesProgressively();
 
-      if (outputBytes == null) return null;
+      final totalPages = sourceDoc.pages.length;
+      if (startPage < 1 || endPage > totalPages || startPage > endPage) {
+        sourceDoc.dispose();
+        return null;
+      }
 
-      // Save the new document
-      final String outputPath =
+      final selectedPages = sourceDoc.pages.sublist(startPage - 1, endPage);
+      final outputDoc =
+          await PdfDocument.createNew(sourceName: 'split.pdf');
+      outputDoc.pages = List.from(selectedPages);
+
+      final pdfData = await outputDoc.encodePdf();
+      final outputPath =
           await _getOutputPath('split_${startPage}_to_$endPage');
-      await File(outputPath).writeAsBytes(outputBytes, flush: true);
+      await File(outputPath).writeAsBytes(pdfData);
+
+      sourceDoc.dispose();
+      outputDoc.dispose();
 
       return outputPath;
     } catch (e) {
@@ -391,21 +207,37 @@ class PdfService {
     }
   }
 
-  /// OPTIMIZED: Extract multiple specific pages into one PDF (handles non-consecutive pages)
+  /// Extract multiple specific pages into one PDF
   static Future<String?> extractPagesFromBytes(
-      Uint8List pdfBytes, List<int> pageIndices) async {
+    Uint8List pdfBytes,
+    List<int> pageIndices, {
+    String outputQuality = 'High',
+  }) async {
     try {
-      // Process in background isolate
-      final List<int>? outputBytes = await compute(
-        extractPagesIsolate,
-        ExtractPagesRequest(pdfBytes, pageIndices),
-      );
+      final sourceDoc =
+          await PdfDocument.openData(pdfBytes, sourceName: 'memory:');
+      await sourceDoc.loadPagesProgressively();
 
-      if (outputBytes == null) return null;
+      final totalPages = sourceDoc.pages.length;
+      for (final idx in pageIndices) {
+        if (idx < 0 || idx >= totalPages) {
+          sourceDoc.dispose();
+          return null;
+        }
+      }
 
-      // Save the new document
-      final String outputPath = await _getOutputPath('extracted_pages');
-      await File(outputPath).writeAsBytes(outputBytes, flush: true);
+      final selectedPages =
+          pageIndices.map((i) => sourceDoc.pages[i]).toList();
+      final outputDoc =
+          await PdfDocument.createNew(sourceName: 'extracted.pdf');
+      outputDoc.pages = selectedPages;
+
+      final pdfData = await outputDoc.encodePdf();
+      final outputPath = await _getOutputPath('extracted_pages');
+      await File(outputPath).writeAsBytes(pdfData);
+
+      sourceDoc.dispose();
+      outputDoc.dispose();
 
       return outputPath;
     } catch (e) {
@@ -415,42 +247,48 @@ class PdfService {
   }
 
   /// Split PDF into individual pages
-  static Future<List<String>> splitPdfAllPages(String pdfPath) async {
+  static Future<List<String>> splitPdfAllPages(
+    String pdfPath, {
+    String outputQuality = 'High',
+  }) async {
     try {
-      final Uint8List bytes = await File(pdfPath).readAsBytes();
-      return splitPdfAllPagesFromBytes(bytes);
+      final bytes = await File(pdfPath).readAsBytes();
+      return splitPdfAllPagesFromBytes(bytes, outputQuality: outputQuality);
     } catch (e) {
       debugPrint('Error splitting PDF into pages: $e');
       return [];
     }
   }
 
-  /// OPTIMIZED: Split PDF into individual pages from cached bytes
-  static Future<List<String>> splitPdfAllPagesFromBytes(Uint8List pdfBytes) async {
-    List<String> outputPaths = [];
+  /// Split PDF into individual pages from cached bytes
+  static Future<List<String>> splitPdfAllPagesFromBytes(
+    Uint8List pdfBytes, {
+    String outputQuality = 'High',
+  }) async {
+    final List<String> outputPaths = [];
 
     try {
-      // Process in background isolate
-      final List<List<int>> results = await compute(
-        splitPdfAllPagesIsolate,
-        pdfBytes,
-      );
+      final sourceDoc =
+          await PdfDocument.openData(pdfBytes, sourceName: 'memory:');
+      await sourceDoc.loadPagesProgressively();
 
-      // Generate all output paths first
-      final Directory directory = await getApplicationDocumentsDirectory();
-      final String timestamp = DateTime.now().millisecondsSinceEpoch.toString();
-      
-      for (int i = 0; i < results.length; i++) {
-        outputPaths.add('${directory.path}/page_${i + 1}_$timestamp.pdf');
+      final dir = await getApplicationDocumentsDirectory();
+      final ts = DateTime.now().millisecondsSinceEpoch.toString();
+
+      for (int i = 0; i < sourceDoc.pages.length; i++) {
+        final outputDoc =
+            await PdfDocument.createNew(sourceName: 'page_${i + 1}.pdf');
+        outputDoc.pages = [sourceDoc.pages[i]];
+
+        final pdfData = await outputDoc.encodePdf();
+        final path = '${dir.path}/page_${i + 1}_$ts.pdf';
+        await File(path).writeAsBytes(pdfData);
+        outputPaths.add(path);
+
+        outputDoc.dispose();
       }
 
-      // Save all pages in parallel
-      await Future.wait(
-        List.generate(results.length, (i) => 
-          File(outputPaths[i]).writeAsBytes(results[i], flush: true)
-        ),
-      );
-      
+      sourceDoc.dispose();
     } catch (e) {
       debugPrint('Error splitting PDF into pages: $e');
     }
@@ -461,15 +299,124 @@ class PdfService {
   /// Get the page count of a PDF file
   static Future<int> getPageCount(String pdfPath) async {
     try {
-      final Uint8List bytes = await File(pdfPath).readAsBytes();
-      // Page count is fast enough to do on main thread
-      final PdfDocument document = PdfDocument(inputBytes: bytes);
-      final int pageCount = document.pages.count;
-      document.dispose();
-      return pageCount;
+      final doc = await PdfDocument.openFile(pdfPath);
+      final count = doc.pages.length;
+      doc.dispose();
+      return count;
     } catch (e) {
       debugPrint('Error getting page count: $e');
       return 0;
+    }
+  }
+
+  /// Get page count from bytes (for merge screen)
+  static Future<int> getPageCountFromBytes(Uint8List bytes) async {
+    try {
+      final doc = await PdfDocument.openData(bytes, sourceName: 'memory:');
+      final count = doc.pages.length;
+      doc.dispose();
+      return count;
+    } catch (e) {
+      debugPrint('Error getting page count: $e');
+      return 0;
+    }
+  }
+
+  /// Get first page aspect ratio (width/height) from bytes. Returns null on error.
+  static Future<double?> getFirstPageAspectRatioFromBytes(Uint8List bytes) async {
+    try {
+      final doc = await PdfDocument.openData(bytes, sourceName: 'memory:');
+      if (doc.pages.isEmpty) {
+        doc.dispose();
+        return null;
+      }
+      final page = doc.pages.first;
+      final ratio = page.width / page.height;
+      doc.dispose();
+      return ratio;
+    } catch (e) {
+      debugPrint('Error getting aspect ratio: $e');
+      return null;
+    }
+  }
+
+  /// Get first page aspect ratio (width/height) from file path. Returns null on error.
+  static Future<double?> getFirstPageAspectRatio(String pdfPath) async {
+    try {
+      final doc = await PdfDocument.openFile(pdfPath);
+      if (doc.pages.isEmpty) {
+        doc.dispose();
+        return null;
+      }
+      final page = doc.pages.first;
+      final ratio = page.width / page.height;
+      doc.dispose();
+      return ratio;
+    } catch (e) {
+      debugPrint('Error getting aspect ratio: $e');
+      return null;
+    }
+  }
+
+  /// Load page preview thumbnails for a PDF file (for preview screen)
+  static Future<List<Uint8List?>> loadPagePreviews(String pdfPath) async {
+    try {
+      final doc = await PdfDocument.openFile(pdfPath);
+      await doc.loadPagesProgressively();
+      final List<Uint8List?> previews = [];
+      for (final page in doc.pages) {
+        final w = (page.width * 1.0).round().clamp(350, 1500).toDouble();
+        final h = (page.height * 1.0).round().clamp(350, 1700).toDouble();
+        final pageImage = await page.render(fullWidth: w, fullHeight: h);
+        Uint8List? bytes;
+        if (pageImage != null) {
+          final imgObj = pageImage.createImageNF();
+          if (imgObj != null) {
+            bytes = Uint8List.fromList(img.encodeJpg(imgObj, quality: 92));
+          }
+          pageImage.dispose();
+        }
+        previews.add(bytes);
+      }
+      doc.dispose();
+      return previews;
+    } catch (e) {
+      debugPrint('Error loading page previews: $e');
+      return [];
+    }
+  }
+
+  /// Generate thumbnail from PDF bytes (for merge screen)
+  static Future<Uint8List?> generateThumbnail(Uint8List pdfBytes) async {
+    try {
+      final doc = await PdfDocument.openData(pdfBytes, sourceName: 'memory:');
+      await doc.loadPagesProgressively();
+      if (doc.pages.isEmpty) {
+        doc.dispose();
+        return null;
+      }
+
+      final page = doc.pages.first;
+      final scale = 1.0;
+      final w = (page.width * scale).round().clamp(280, 1100).toDouble();
+      final h = (page.height * scale).round().clamp(280, 1500).toDouble();
+
+      final pageImage = await page.render(fullWidth: w, fullHeight: h);
+
+      Uint8List? bytes;
+      if (pageImage != null) {
+        final imgObj = pageImage.createImageNF();
+        if (imgObj != null) {
+            bytes = Uint8List.fromList(img.encodeJpg(imgObj, quality: 95));
+        }
+        pageImage.dispose();
+      }
+
+      doc.dispose();
+      return bytes;
+    } catch (e) {
+      debugPrint('Error generating thumbnail: $e');
+      return null;
     }
   }
 
@@ -482,16 +429,7 @@ class PdfService {
     }
   }
 
-  /// Get output file path with timestamp
-  static Future<String> _getOutputPath(String prefix) async {
-    final Directory directory = await getApplicationDocumentsDirectory();
-    final String timestamp = DateTime.now().millisecondsSinceEpoch.toString();
-    return '${directory.path}/${prefix}_$timestamp.pdf';
-  }
-
-  /// Get the output directory path
   static Future<String> getOutputDirectory() async {
-    final Directory directory = await getApplicationDocumentsDirectory();
-    return directory.path;
+    return (await getApplicationDocumentsDirectory()).path;
   }
 }
