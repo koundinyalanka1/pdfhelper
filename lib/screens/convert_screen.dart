@@ -5,10 +5,8 @@ import 'package:camera/camera.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:share_plus/share_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import '../services/pdf_service.dart';
-import '../services/notification_service.dart';
 import '../services/permission_service.dart';
 import '../providers/theme_provider.dart';
 import 'pdf_preview_screen.dart';
@@ -36,7 +34,7 @@ class _ConvertScreenState extends State<ConvertScreen>
   bool _isCapturing = false;
   final List<String> _capturedImages = [];
   final ImagePicker _imagePicker = ImagePicker();
-  
+
   // Focus related
   Offset? _focusPoint;
   bool _showFocusIndicator = false;
@@ -172,7 +170,7 @@ class _ConvertScreenState extends State<ConvertScreen>
     _focusTimer?.cancel();
 
     final Offset tapPosition = details.localPosition;
-    
+
     // Calculate normalized coordinates (0.0 to 1.0)
     double x = (tapPosition.dx / previewSize.width).clamp(0.0, 1.0);
     double y = (tapPosition.dy / previewSize.height).clamp(0.0, 1.0);
@@ -186,7 +184,7 @@ class _ConvertScreenState extends State<ConvertScreen>
       // Set focus point
       await _cameraController!.setFocusMode(FocusMode.auto);
       await _cameraController!.setFocusPoint(Offset(x, y));
-      
+
       // Set exposure point
       try {
         await _cameraController!.setExposurePoint(Offset(x, y));
@@ -209,7 +207,7 @@ class _ConvertScreenState extends State<ConvertScreen>
 
   Future<void> _toggleFlash() async {
     if (_cameraController == null) return;
-    
+
     try {
       if (_isFlashOn) {
         await _cameraController!.setFlashMode(FlashMode.off);
@@ -240,10 +238,11 @@ class _ConvertScreenState extends State<ConvertScreen>
       }
 
       final XFile image = await _cameraController!.takePicture();
-      
+
       // Save to app's document directory
       final Directory appDir = await getApplicationDocumentsDirectory();
-      final String fileName = 'scan_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final String fileName =
+          'scan_${DateTime.now().millisecondsSinceEpoch}.jpg';
       final String savedPath = '${appDir.path}/$fileName';
       await File(image.path).copy(savedPath);
 
@@ -303,13 +302,14 @@ class _ConvertScreenState extends State<ConvertScreen>
 
       if (images.isNotEmpty) {
         final Directory appDir = await getApplicationDocumentsDirectory();
-        
+
         // Process first image through the edit screen
         final image = images[0];
-        final String fileName = 'picked_${DateTime.now().millisecondsSinceEpoch}_0.jpg';
+        final String fileName =
+            'picked_${DateTime.now().millisecondsSinceEpoch}_0.jpg';
         final String savedPath = '${appDir.path}/$fileName';
         await File(image.path).copy(savedPath);
-        
+
         if (mounted) {
           final themeProvider = context.read<ThemeProvider>();
           Navigator.push(
@@ -322,18 +322,19 @@ class _ConvertScreenState extends State<ConvertScreen>
                   setState(() {
                     _capturedImages.add(processedPath);
                   });
-                  
+
                   // Add remaining images directly
                   for (int i = 1; i < images.length; i++) {
                     final img = images[i];
-                    final String fName = 'picked_${DateTime.now().millisecondsSinceEpoch}_$i.jpg';
+                    final String fName =
+                        'picked_${DateTime.now().millisecondsSinceEpoch}_$i.jpg';
                     final String sPath = '${appDir.path}/$fName';
                     await File(img.path).copy(sPath);
                     setState(() {
                       _capturedImages.add(sPath);
                     });
                   }
-                  
+
                   if (images.length > 1) {
                     _showSnackBar('${images.length} image(s) added!');
                   }
@@ -363,19 +364,32 @@ class _ConvertScreenState extends State<ConvertScreen>
 
       if (outputPath != null) {
         if (!mounted) return;
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => PdfPreviewScreen(
-              filePaths: [outputPath],
-              sourceType: PdfPreviewSourceType.convert,
-              pageCount: _capturedImages.length,
-              onSaved: () {
-                setState(() => _capturedImages.clear());
-              },
+        if (themeProvider.skipPreview && themeProvider.autoSave) {
+          // Fast path: save immediately, skip the preview screen.
+          await autoSavePdfs(
+            themeProvider: themeProvider,
+            filePaths: [outputPath],
+            sourceType: PdfPreviewSourceType.convert,
+            pageCount: _capturedImages.length,
+          );
+          if (!mounted) return;
+          _showSnackBar('PDF saved (${_capturedImages.length} page(s))');
+          setState(() => _capturedImages.clear());
+        } else {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => PdfPreviewScreen(
+                filePaths: [outputPath],
+                sourceType: PdfPreviewSourceType.convert,
+                pageCount: _capturedImages.length,
+                onSaved: () {
+                  setState(() => _capturedImages.clear());
+                },
+              ),
             ),
-          ),
-        );
+          );
+        }
       } else {
         _showSnackBar('Failed to create PDF', isError: true);
       }
@@ -444,7 +458,10 @@ class _ConvertScreenState extends State<ConvertScreen>
                 label: const Text('Open Settings'),
                 style: FilledButton.styleFrom(
                   backgroundColor: const Color(0xFF00D9FF),
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 14,
+                  ),
                 ),
               )
             else
@@ -454,7 +471,10 @@ class _ConvertScreenState extends State<ConvertScreen>
                 label: const Text('Grant Camera Access'),
                 style: FilledButton.styleFrom(
                   backgroundColor: const Color(0xFF00D9FF),
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 14,
+                  ),
                 ),
               ),
           ],
@@ -553,7 +573,11 @@ class _ConvertScreenState extends State<ConvertScreen>
                     ),
                     child: const Row(
                       children: [
-                        Icon(Icons.touch_app, color: Color(0xFF00D9FF), size: 20),
+                        Icon(
+                          Icons.touch_app,
+                          color: Color(0xFF00D9FF),
+                          size: 20,
+                        ),
                         SizedBox(width: 10),
                         Expanded(
                           child: Text(
@@ -573,11 +597,12 @@ class _ConvertScreenState extends State<ConvertScreen>
                   child: GridView.builder(
                     controller: scrollController,
                     padding: const EdgeInsets.symmetric(horizontal: 20),
-                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: 3,
-                      crossAxisSpacing: 10,
-                      mainAxisSpacing: 10,
-                    ),
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 3,
+                          crossAxisSpacing: 10,
+                          mainAxisSpacing: 10,
+                        ),
                     itemCount: _capturedImages.length,
                     itemBuilder: (context, index) {
                       return GestureDetector(
@@ -590,9 +615,14 @@ class _ConvertScreenState extends State<ConvertScreen>
                             Container(
                               decoration: BoxDecoration(
                                 borderRadius: BorderRadius.circular(12),
-                                border: Border.all(color: Colors.white24, width: 1),
+                                border: Border.all(
+                                  color: Colors.white24,
+                                  width: 1,
+                                ),
                                 image: DecorationImage(
-                                  image: FileImage(File(_capturedImages[index])),
+                                  image: FileImage(
+                                    File(_capturedImages[index]),
+                                  ),
                                   fit: BoxFit.cover,
                                 ),
                               ),
@@ -601,7 +631,10 @@ class _ConvertScreenState extends State<ConvertScreen>
                               bottom: 5,
                               left: 5,
                               child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 4,
+                                ),
                                 decoration: BoxDecoration(
                                   color: Colors.black.withValues(alpha: 0.7),
                                   borderRadius: BorderRadius.circular(8),
@@ -618,7 +651,11 @@ class _ConvertScreenState extends State<ConvertScreen>
                                       ),
                                     ),
                                     const SizedBox(width: 4),
-                                    const Icon(Icons.edit, color: Colors.white70, size: 12),
+                                    const Icon(
+                                      Icons.edit,
+                                      color: Colors.white70,
+                                      size: 12,
+                                    ),
                                   ],
                                 ),
                               ),
@@ -642,7 +679,11 @@ class _ConvertScreenState extends State<ConvertScreen>
                                     color: Colors.red.withValues(alpha: 0.8),
                                     shape: BoxShape.circle,
                                   ),
-                                  child: const Icon(Icons.close, color: Colors.white, size: 16),
+                                  child: const Icon(
+                                    Icons.close,
+                                    color: Colors.white,
+                                    size: 16,
+                                  ),
                                 ),
                               ),
                             ),
@@ -673,7 +714,10 @@ class _ConvertScreenState extends State<ConvertScreen>
                       child: const Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(Icons.picture_as_pdf_rounded, color: Colors.white),
+                          Icon(
+                            Icons.picture_as_pdf_rounded,
+                            color: Colors.white,
+                          ),
                           SizedBox(width: 10),
                           Text(
                             'Create PDF',
@@ -701,7 +745,7 @@ class _ConvertScreenState extends State<ConvertScreen>
     super.build(context);
     final topPadding = MediaQuery.of(context).padding.top;
     final bottomPadding = MediaQuery.of(context).padding.bottom;
-    
+
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
@@ -711,7 +755,10 @@ class _ConvertScreenState extends State<ConvertScreen>
             Positioned.fill(
               child: LayoutBuilder(
                 builder: (context, constraints) {
-                  final Size previewSize = Size(constraints.maxWidth, constraints.maxHeight);
+                  final Size previewSize = Size(
+                    constraints.maxWidth,
+                    constraints.maxHeight,
+                  );
                   return GestureDetector(
                     onTapUp: (details) => _onTapToFocus(details, previewSize),
                     child: Stack(
@@ -816,7 +863,10 @@ class _ConvertScreenState extends State<ConvertScreen>
                     children: [
                       // Tap to focus hint
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 5,
+                        ),
                         decoration: BoxDecoration(
                           color: Colors.black.withValues(alpha: 0.4),
                           borderRadius: BorderRadius.circular(15),
@@ -824,21 +874,35 @@ class _ConvertScreenState extends State<ConvertScreen>
                         child: const Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(Icons.touch_app, color: Colors.white60, size: 14),
+                            Icon(
+                              Icons.touch_app,
+                              color: Colors.white60,
+                              size: 14,
+                            ),
                             SizedBox(width: 4),
                             Text(
                               'Tap to focus',
-                              style: TextStyle(color: Colors.white60, fontSize: 11),
+                              style: TextStyle(
+                                color: Colors.white60,
+                                fontSize: 11,
+                              ),
                             ),
                           ],
                         ),
                       ),
                       const SizedBox(width: 8),
                       IconButton(
+                        tooltip: _isFlashOn
+                            ? 'Turn flash off'
+                            : 'Turn flash on',
                         onPressed: _toggleFlash,
                         icon: Icon(
-                          _isFlashOn ? Icons.flash_on_rounded : Icons.flash_off_rounded,
-                          color: _isFlashOn ? const Color(0xFFFFC107) : Colors.white,
+                          _isFlashOn
+                              ? Icons.flash_on_rounded
+                              : Icons.flash_off_rounded,
+                          color: _isFlashOn
+                              ? const Color(0xFFFFC107)
+                              : Colors.white,
                           size: 28,
                         ),
                       ),
@@ -880,51 +944,59 @@ class _ConvertScreenState extends State<ConvertScreen>
                     onTap: _pickFromGallery,
                   ),
                   Semantics(
-                    label: _isCapturing ? 'Capturing, please wait' : 'Take photo',
+                    label: _isCapturing
+                        ? 'Capturing, please wait'
+                        : 'Take photo',
                     button: true,
                     enabled: !_isCapturing,
                     child: GestureDetector(
                       onTap: _isCapturing ? null : _captureImage,
-                    child: Container(
-                      width: 75,
-                      height: 75,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white, width: 4),
-                      ),
                       child: Container(
-                        margin: const EdgeInsets.all(4),
+                        width: 75,
+                        height: 75,
                         decoration: BoxDecoration(
-                          color: _isCapturing ? Colors.grey : const Color(0xFF00D9FF),
                           shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 4),
                         ),
-                        child: _isCapturing
-                            ? const Center(
-                                child: SizedBox(
-                                  width: 28,
-                                  height: 28,
-                                  child: CircularProgressIndicator(
-                                    color: Colors.white,
-                                    strokeWidth: 3,
+                        child: Container(
+                          margin: const EdgeInsets.all(4),
+                          decoration: BoxDecoration(
+                            color: _isCapturing
+                                ? Colors.grey
+                                : const Color(0xFF00D9FF),
+                            shape: BoxShape.circle,
+                          ),
+                          child: _isCapturing
+                              ? const Center(
+                                  child: SizedBox(
+                                    width: 28,
+                                    height: 28,
+                                    child: CircularProgressIndicator(
+                                      color: Colors.white,
+                                      strokeWidth: 3,
+                                    ),
                                   ),
+                                )
+                              : const Icon(
+                                  Icons.camera_alt_rounded,
+                                  color: Colors.white,
+                                  size: 32,
                                 ),
-                              )
-                            : const Icon(
-                                Icons.camera_alt_rounded,
-                                color: Colors.white,
-                                size: 32,
-                              ),
+                        ),
                       ),
                     ),
-                  ),
                   ),
                   _buildControlButton(
                     icon: _capturedImages.isEmpty
                         ? Icons.insert_drive_file_outlined
                         : Icons.collections_rounded,
-                    label: _capturedImages.isEmpty ? 'Pages' : '${_capturedImages.length} Pages',
+                    label: _capturedImages.isEmpty
+                        ? 'Pages'
+                        : '${_capturedImages.length} Pages',
                     onTap: _capturedImages.isEmpty ? null : _showPreviewSheet,
-                    badge: _capturedImages.isNotEmpty ? _capturedImages.length : null,
+                    badge: _capturedImages.isNotEmpty
+                        ? _capturedImages.length
+                        : null,
                   ),
                 ],
               ),

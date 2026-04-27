@@ -45,5 +45,32 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>PDF Helper uses the camera to scan documents and convert them into PDFs.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>PDF Helper needs access to your photos to convert images into PDFs.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>PDF Helper saves generated PDFs and scans to your photo library when you choose to share them.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>PDF Helper does not record audio. This entry exists because the camera plugin includes audio capability by default.</string>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>PDF Document</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.adobe.pdf</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

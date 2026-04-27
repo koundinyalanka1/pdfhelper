@@ -37,19 +37,19 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
   bool _isLoadingPreviews = false;
   double _splitProgress = 0.0;
   String _splitStatus = '';
-  
+
   // For page previews (PDFs < 30 pages)
   List<Uint8List?> _pagePreviews = [];
   Set<int> _selectedPages = {};
   PdfDocument? _pdfDocument;
   double _firstPageAspectRatio = 0.7;
-  
+
   // Cache PDF bytes to avoid re-reading
   Uint8List? _cachedPdfBytes;
 
   bool get _isDarkMode => context.watch<ThemeProvider>().isDarkMode;
   AppColors get _colors => AppColors(_isDarkMode);
-  
+
   // Show preview mode for PDFs with less than 30 pages
   bool get _usePreviewMode => _totalPages > 0 && _totalPages < 30;
 
@@ -108,7 +108,7 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
 
       if (result != null && result.files.single.path != null) {
         final String path = result.files.single.path!;
-        
+
         // Read and cache bytes once
         final Uint8List bytes = await File(path).readAsBytes();
         final int pageCount = await PdfService.getPageCount(path);
@@ -156,9 +156,7 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
         Uint8List? bytes;
         if (pageImage != null) {
           final imgObj = pageImage.createImageNF();
-          if (imgObj != null) {
-            bytes = Uint8List.fromList(img.encodeJpg(imgObj, quality: 92));
-          }
+          bytes = Uint8List.fromList(img.encodeJpg(imgObj, quality: 92));
           pageImage.dispose();
         }
         previews.add(bytes);
@@ -175,6 +173,7 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
       debugPrint('Error loading previews: $e');
       if (mounted) {
         setState(() => _isLoadingPreviews = false);
+        _showSnackBar('Could not load page previews', isError: true);
       }
     }
   }
@@ -240,10 +239,11 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
         }
 
         final sortedPages = _selectedPages.toList()..sort();
-        
+
         setState(() {
           _splitProgress = 0.2;
-          _splitStatus = 'Extracting ${sortedPages.length} page${sortedPages.length > 1 ? 's' : ''}...';
+          _splitStatus =
+              'Extracting ${sortedPages.length} page${sortedPages.length > 1 ? 's' : ''}...';
         });
 
         // OPTIMIZED: Extract all selected pages at once using cached bytes
@@ -254,21 +254,26 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
           sortedPages, // Already 0-based
           outputQuality: outputQuality,
         );
-        
+
         setState(() => _splitProgress = 0.9);
-        
+
         if (outputPath != null) {
           // Auto-save if enabled
           String? autoSavedPath;
           if (themeProvider.autoSave) {
-            autoSavedPath = await themeProvider.autoSaveFile(outputPath, 'extracted');
+            autoSavedPath = await themeProvider.autoSaveFile(
+              outputPath,
+              'extracted',
+            );
           }
           // Show notification if enabled
           if (themeProvider.notifications) {
             NotificationService().showSplitComplete(sortedPages.length);
           }
           setState(() => _splitProgress = 1.0);
-          _showSuccessDialog([outputPath], autoSavedPath != null ? [autoSavedPath] : null);
+          _showSuccessDialog([
+            outputPath,
+          ], autoSavedPath != null ? [autoSavedPath] : null);
         } else {
           _showSnackBar('Failed to extract pages', isError: true);
         }
@@ -308,8 +313,10 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
           if (themeProvider.autoSave) {
             autoSavedPaths = [];
             for (int i = 0; i < outputPaths.length; i++) {
-              final saved =
-                  await themeProvider.autoSaveFile(outputPaths[i], 'split_${i + 1}');
+              final saved = await themeProvider.autoSaveFile(
+                outputPaths[i],
+                'split_${i + 1}',
+              );
               if (saved != null) autoSavedPaths.add(saved);
             }
           }
@@ -327,7 +334,7 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
           _splitProgress = 0.2;
           _splitStatus = 'Extracting $_totalPages pages...';
         });
-        
+
         final themeProvider = context.read<ThemeProvider>();
         final outputQuality = themeProvider.outputQuality;
         final List<String> outputPaths =
@@ -344,7 +351,10 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
           if (themeProvider.autoSave) {
             autoSavedPaths = [];
             for (int i = 0; i < outputPaths.length; i++) {
-              final saved = await themeProvider.autoSaveFile(outputPaths[i], 'page_${i + 1}');
+              final saved = await themeProvider.autoSaveFile(
+                outputPaths[i],
+                'page_${i + 1}',
+              );
               if (saved != null) autoSavedPaths.add(saved);
             }
           }
@@ -368,16 +378,19 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
     }
   }
 
-  void _showSuccessDialog(List<String> filePaths, [List<String>? autoSavedPaths]) {
+  void _showSuccessDialog(
+    List<String> filePaths, [
+    List<String>? autoSavedPaths,
+  ]) {
     // Clear selection after success
     setState(() {
       _selectedPages.clear();
     });
-    
+
     final themeProvider = context.read<ThemeProvider>();
     final saveLocation = themeProvider.saveLocation;
     final hasAutoSaved = autoSavedPaths != null && autoSavedPaths.isNotEmpty;
-    
+
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -410,7 +423,11 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.folder_rounded, color: Color(0xFF4CAF50), size: 18),
+                    const Icon(
+                      Icons.folder_rounded,
+                      color: Color(0xFF4CAF50),
+                      size: 18,
+                    ),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
@@ -431,7 +448,10 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: Text('Close', style: TextStyle(color: _colors.textSecondary)),
+            child: Text(
+              'Close',
+              style: TextStyle(color: _colors.textSecondary),
+            ),
           ),
           TextButton(
             onPressed: () {
@@ -443,20 +463,23 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
                 text: 'Split PDF',
               );
             },
-            child: const Text('Share', style: TextStyle(color: Color(0xFFE94560))),
+            child: const Text(
+              'Share',
+              style: TextStyle(color: Color(0xFFE94560)),
+            ),
           ),
           ElevatedButton(
             onPressed: () {
               Navigator.pop(context);
-              final openFile = hasAutoSaved ? autoSavedPaths!.first : filePaths.first;
+              final openFile = hasAutoSaved
+                  ? autoSavedPaths.first
+                  : filePaths.first;
               final name = openFile.split(RegExp(r'[/\\]')).last;
               Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (_) => PdfViewerScreen(
-                    pdfPath: openFile,
-                    title: name,
-                  ),
+                  builder: (_) =>
+                      PdfViewerScreen(pdfPath: openFile, title: name),
                 ),
               );
             },
@@ -562,7 +585,9 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
                               Container(
                                 padding: const EdgeInsets.all(16),
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFFFFC107).withValues(alpha: 0.1),
+                                  color: const Color(
+                                    0xFFFFC107,
+                                  ).withValues(alpha: 0.1),
                                   shape: BoxShape.circle,
                                 ),
                                 child: const Icon(
@@ -589,7 +614,9 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
                                 Container(
                                   padding: const EdgeInsets.all(12),
                                   decoration: BoxDecoration(
-                                    color: const Color(0xFFFFC107).withValues(alpha: 0.1),
+                                    color: const Color(
+                                      0xFFFFC107,
+                                    ).withValues(alpha: 0.1),
                                     borderRadius: BorderRadius.circular(12),
                                   ),
                                   child: const Icon(
@@ -601,53 +628,58 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
                                 const SizedBox(width: 14),
                                 Expanded(
                                   child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     mainAxisAlignment: MainAxisAlignment.center,
                                     children: [
-                                    Text(
-                                      _selectedFileName!,
-                                      style: TextStyle(
-                                        color: _colors.textPrimary,
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 10,
-                                        vertical: 4,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: const Color(0xFFFFC107).withValues(alpha: 0.2),
-                                        borderRadius: BorderRadius.circular(12),
-                                      ),
-                                      child: Text(
-                                        '$_totalPages pages',
-                                        style: const TextStyle(
-                                          color: Color(0xFFFFC107),
-                                          fontSize: 12,
+                                      Text(
+                                        _selectedFileName!,
+                                        style: TextStyle(
+                                          color: _colors.textPrimary,
+                                          fontSize: 14,
                                           fontWeight: FontWeight.w600,
                                         ),
+                                        overflow: TextOverflow.ellipsis,
                                       ),
-                                    ),
+                                      const SizedBox(height: 4),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 10,
+                                          vertical: 4,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: const Color(
+                                            0xFFFFC107,
+                                          ).withValues(alpha: 0.2),
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                        ),
+                                        child: Text(
+                                          '$_totalPages pages',
+                                          style: const TextStyle(
+                                            color: Color(0xFFFFC107),
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ),
                                     ],
                                   ),
                                 ),
                                 IconButton(
                                   onPressed: () {
-                                  setState(() {
-                                    _selectedFilePath = null;
-                                    _selectedFileName = null;
-                                    _totalPages = 0;
-                                    _cachedPdfBytes = null;
-                                    _fromController.clear();
-                                    _toController.clear();
-                                  _ranges.clear();
-                                  _selectedPages.clear();
-                                  _pagePreviews = [];
-                                });
+                                    setState(() {
+                                      _selectedFilePath = null;
+                                      _selectedFileName = null;
+                                      _totalPages = 0;
+                                      _cachedPdfBytes = null;
+                                      _fromController.clear();
+                                      _toController.clear();
+                                      _ranges.clear();
+                                      _selectedPages.clear();
+                                      _pagePreviews = [];
+                                    });
                                     _pdfDocument?.dispose();
                                     _pdfDocument = null;
                                   },
@@ -659,20 +691,20 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
                               ],
                             ),
                           ),
-                    ),
                   ),
                 ),
               ),
+            ),
 
             // Content area
             Expanded(
               child: _selectedFilePath == null
                   ? const SizedBox()
                   : _usePreviewMode
-                      ? _buildPreviewMode()
-                      : _buildRangeMode(),
+                  ? _buildPreviewMode()
+                  : _buildRangeMode(),
             ),
-            
+
             // Split button
             if (_selectedFilePath != null)
               Padding(
@@ -713,7 +745,9 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
                                 value: _splitProgress,
                                 minHeight: 8,
                                 backgroundColor: _colors.cardBackground,
-                                valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFFFFC107)),
+                                valueColor: const AlwaysStoppedAnimation<Color>(
+                                  Color(0xFFFFC107),
+                                ),
                               ),
                             ),
                           ],
@@ -727,7 +761,9 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
                         onPressed: _isProcessing ? null : _splitPdf,
                         style: ElevatedButton.styleFrom(
                           backgroundColor: const Color(0xFFFFC107),
-                          disabledBackgroundColor: const Color(0xFFFFC107).withValues(alpha: 0.5),
+                          disabledBackgroundColor: const Color(
+                            0xFFFFC107,
+                          ).withValues(alpha: 0.5),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(15),
                           ),
@@ -745,14 +781,18 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
                             : Row(
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
-                                  const Icon(Icons.content_cut_rounded, color: Colors.black87, size: 22),
+                                  const Icon(
+                                    Icons.content_cut_rounded,
+                                    color: Colors.black87,
+                                    size: 22,
+                                  ),
                                   const SizedBox(width: 10),
                                   Text(
                                     _usePreviewMode
                                         ? 'Extract ${_selectedPages.length} Page${_selectedPages.length != 1 ? 's' : ''}'
                                         : _ranges.isNotEmpty
-                                            ? 'Split into ${_ranges.length} PDF${_ranges.length > 1 ? 's' : ''}'
-                                            : 'Split PDF',
+                                        ? 'Split into ${_ranges.length} PDF${_ranges.length > 1 ? 's' : ''}'
+                                        : 'Split PDF',
                                     style: const TextStyle(
                                       color: Colors.black87,
                                       fontSize: 17,
@@ -791,7 +831,10 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
               const Spacer(),
               if (_selectedPages.isNotEmpty)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: const Color(0xFFFFC107).withValues(alpha: 0.2),
                     borderRadius: BorderRadius.circular(12),
@@ -809,7 +852,9 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
               TextButton(
                 onPressed: _selectAllPages,
                 child: Text(
-                  _selectedPages.length == _totalPages ? 'Deselect All' : 'Select All',
+                  _selectedPages.length == _totalPages
+                      ? 'Deselect All'
+                      : 'Select All',
                   style: const TextStyle(
                     color: Color(0xFF00D9FF),
                     fontSize: 13,
@@ -820,7 +865,7 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
             ],
           ),
         ),
-        
+
         // Hint
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -852,7 +897,7 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
           ),
         ),
         const SizedBox(height: 12),
-        
+
         // Page grid
         Expanded(
           child: _isLoadingPreviews
@@ -860,9 +905,7 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      const CircularProgressIndicator(
-                        color: Color(0xFFFFC107),
-                      ),
+                      const CircularProgressIndicator(color: Color(0xFFFFC107)),
                       const SizedBox(height: 16),
                       Text(
                         'Loading previews...',
@@ -885,8 +928,10 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
                   itemCount: _totalPages,
                   itemBuilder: (context, index) {
                     final isSelected = _selectedPages.contains(index);
-                    final hasPreview = index < _pagePreviews.length && _pagePreviews[index] != null;
-                    
+                    final hasPreview =
+                        index < _pagePreviews.length &&
+                        _pagePreviews[index] != null;
+
                     return GestureDetector(
                       onTap: () => _togglePageSelection(index),
                       child: AnimatedContainer(
@@ -894,15 +939,17 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(
-                            color: isSelected 
-                                ? const Color(0xFFFFC107) 
+                            color: isSelected
+                                ? const Color(0xFFFFC107)
                                 : _colors.divider,
                             width: isSelected ? 3 : 1,
                           ),
                           boxShadow: isSelected
                               ? [
                                   BoxShadow(
-                                    color: const Color(0xFFFFC107).withValues(alpha: 0.3),
+                                    color: const Color(
+                                      0xFFFFC107,
+                                    ).withValues(alpha: 0.3),
                                     blurRadius: 8,
                                     spreadRadius: 1,
                                   ),
@@ -936,21 +983,26 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
                                     ),
                                   ),
                                 ),
-                              
+
                               // Selection overlay
                               if (isSelected)
                                 Container(
-                                  color: const Color(0xFFFFC107).withValues(alpha: 0.2),
+                                  color: const Color(
+                                    0xFFFFC107,
+                                  ).withValues(alpha: 0.2),
                                 ),
-                              
+
                               // Page number badge
                               Positioned(
                                 bottom: 4,
                                 left: 4,
                                 child: Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 4,
+                                  ),
                                   decoration: BoxDecoration(
-                                    color: isSelected 
+                                    color: isSelected
                                         ? const Color(0xFFFFC107)
                                         : Colors.black.withValues(alpha: 0.7),
                                     borderRadius: BorderRadius.circular(8),
@@ -958,14 +1010,16 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
                                   child: Text(
                                     '${index + 1}',
                                     style: TextStyle(
-                                      color: isSelected ? Colors.black87 : Colors.white,
+                                      color: isSelected
+                                          ? Colors.black87
+                                          : Colors.white,
                                       fontSize: 12,
                                       fontWeight: FontWeight.bold,
                                     ),
                                   ),
                                 ),
                               ),
-                              
+
                               // Selection checkmark
                               if (isSelected)
                                 Positioned(
@@ -1067,13 +1121,9 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
                       decoration: InputDecoration(
                         border: InputBorder.none,
                         labelText: 'From',
-                        labelStyle: TextStyle(
-                          color: _colors.textSecondary,
-                        ),
+                        labelStyle: TextStyle(color: _colors.textSecondary),
                         hintText: '1',
-                        hintStyle: TextStyle(
-                          color: _colors.textTertiary,
-                        ),
+                        hintStyle: TextStyle(color: _colors.textTertiary),
                       ),
                     ),
                   ),
@@ -1106,13 +1156,9 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
                       decoration: InputDecoration(
                         border: InputBorder.none,
                         labelText: 'To',
-                        labelStyle: TextStyle(
-                          color: _colors.textSecondary,
-                        ),
+                        labelStyle: TextStyle(color: _colors.textSecondary),
                         hintText: '$_totalPages',
-                        hintStyle: TextStyle(
-                          color: _colors.textTertiary,
-                        ),
+                        hintStyle: TextStyle(color: _colors.textTertiary),
                       ),
                     ),
                   ),
@@ -1281,14 +1327,18 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
           children: [
             Icon(
               icon,
-              color: isSelected ? const Color(0xFFFFC107) : _colors.textSecondary,
+              color: isSelected
+                  ? const Color(0xFFFFC107)
+                  : _colors.textSecondary,
               size: 28,
             ),
             const SizedBox(height: 8),
             Text(
               label,
               style: TextStyle(
-                color: isSelected ? const Color(0xFFFFC107) : _colors.textSecondary,
+                color: isSelected
+                    ? const Color(0xFFFFC107)
+                    : _colors.textSecondary,
                 fontSize: 13,
                 fontWeight: FontWeight.w500,
               ),

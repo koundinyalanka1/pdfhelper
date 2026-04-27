@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../providers/theme_provider.dart';
 import '../services/permission_service.dart';
 import '../widgets/settings_widgets.dart';
@@ -19,6 +20,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool get _notifications => _themeProvider.notifications;
   String get _saveLocation => _themeProvider.saveLocation;
   String get _outputQuality => _themeProvider.outputQuality;
+  bool get _skipPreview => _themeProvider.skipPreview;
   AppColors get _colors => AppColors(_isDarkMode);
 
   Future<void> _handleNotificationToggle(bool value) async {
@@ -47,6 +49,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  // TODO: Replace these placeholder URLs with the real store listing /
+  // privacy policy / terms of service URLs before publishing.
+  static const String _rateAppUrl = 'https://example.com/pdfhelper/rate';
+  static const String _privacyPolicyUrl =
+      'https://example.com/pdfhelper/privacy';
+  static const String _termsOfServiceUrl =
+      'https://example.com/pdfhelper/terms';
+
+  Future<void> _launchExternalUrl(String url, String label) async {
+    final uri = Uri.parse(url);
+    try {
+      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!ok && mounted) {
+        _showSnackBar('Could not open $label');
+      }
+    } catch (e) {
+      debugPrint('Error launching $label: $e');
+      if (mounted) {
+        _showSnackBar('Could not open $label');
+      }
+    }
+  }
+
+  void _showSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: const Color(0xFFE94560),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -121,10 +154,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         SizedBox(height: 5),
                         Text(
                           'Version 1.0.0',
-                          style: TextStyle(
-                            color: Colors.white70,
-                            fontSize: 14,
-                          ),
+                          style: TextStyle(color: Colors.white70, fontSize: 14),
                         ),
                       ],
                     ),
@@ -136,12 +166,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               // Appearance settings
               SettingsSectionHeader(title: 'Appearance', colors: _colors),
               const SizedBox(height: 15),
-              SettingsCard(
-                colors: _colors,
-                children: [
-                  _buildThemeTile(),
-                ],
-              ),
+              SettingsCard(colors: _colors, children: [_buildThemeTile()]),
               const SizedBox(height: 25),
 
               // General settings
@@ -151,23 +176,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 colors: _colors,
                 children: [
                   _buildSwitchTile(
-                  'Auto Save',
-                  'Save to app storage (PDFHelper/$_saveLocation)',
-                  Icons.save_rounded,
-                  _autoSave,
-                  (value) => context.read<ThemeProvider>().setAutoSave(value),
-                ),
-                SettingsDivider(colors: _colors),
-                _buildSwitchTile(
-                  'Notifications',
-                  _notifications 
-                      ? 'Get notified when operations complete'
-                      : 'Tap to enable notifications',
-                  Icons.notifications_rounded,
-                  _notifications,
-                  (value) => _handleNotificationToggle(value),
-                ),
-              ]),
+                    'Auto Save',
+                    'Save to app storage (PDFHelper/$_saveLocation)',
+                    Icons.save_rounded,
+                    _autoSave,
+                    (value) => context.read<ThemeProvider>().setAutoSave(value),
+                  ),
+                  SettingsDivider(colors: _colors),
+                  _buildSwitchTile(
+                    'Notifications',
+                    _notifications
+                        ? 'Get notified when operations complete'
+                        : 'Tap to enable notifications',
+                    Icons.notifications_rounded,
+                    _notifications,
+                    (value) => _handleNotificationToggle(value),
+                  ),
+                  SettingsDivider(colors: _colors),
+                  _buildSwitchTile(
+                    'Skip Preview',
+                    _skipPreview
+                        ? 'Save merged/scanned PDFs immediately'
+                        : 'Preview before saving',
+                    Icons.flash_on_rounded,
+                    _skipPreview,
+                    (value) =>
+                        context.read<ThemeProvider>().setSkipPreview(value),
+                  ),
+                ],
+              ),
               const SizedBox(height: 25),
 
               // Output settings
@@ -182,18 +219,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     Icons.high_quality_rounded,
                     _outputQuality,
                     ['Low', 'Medium', 'High', 'Maximum'],
-                    (value) => context.read<ThemeProvider>().setOutputQuality(value!),
+                    (value) =>
+                        context.read<ThemeProvider>().setOutputQuality(value!),
                   ),
-                SettingsDivider(colors: _colors),
-                _buildDropdownTile(
-                  'Save Location',
-                  'Auto-save destination',
-                  Icons.folder_rounded,
-                  _saveLocation,
-                  ['Downloads', 'Documents'],
-                  (value) => context.read<ThemeProvider>().setSaveLocation(value!),
-                ),
-              ]),
+                  SettingsDivider(colors: _colors),
+                  _buildDropdownTile(
+                    'Save Location',
+                    'Auto-save destination',
+                    Icons.folder_rounded,
+                    _saveLocation,
+                    ['Downloads', 'Documents'],
+                    (value) =>
+                        context.read<ThemeProvider>().setSaveLocation(value!),
+                  ),
+                ],
+              ),
               const SizedBox(height: 25),
 
               // About section
@@ -206,23 +246,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     'Rate App',
                     'Love the app? Rate us!',
                     Icons.star_rounded,
-                    () {},
+                    () => _launchExternalUrl(_rateAppUrl, 'Rate App'),
                   ),
-                SettingsDivider(colors: _colors),
-                _buildActionTile(
-                  'Privacy Policy',
-                  'Read our privacy policy',
-                  Icons.privacy_tip_rounded,
-                  () {},
-                ),
-                SettingsDivider(colors: _colors),
-                _buildActionTile(
-                  'Terms of Service',
-                  'Read terms of service',
-                  Icons.description_rounded,
-                  () {},
-                ),
-              ],
+                  SettingsDivider(colors: _colors),
+                  _buildActionTile(
+                    'Privacy Policy',
+                    'Read our privacy policy',
+                    Icons.privacy_tip_rounded,
+                    () =>
+                        _launchExternalUrl(_privacyPolicyUrl, 'Privacy Policy'),
+                  ),
+                  SettingsDivider(colors: _colors),
+                  _buildActionTile(
+                    'Terms of Service',
+                    'Read terms of service',
+                    Icons.description_rounded,
+                    () => _launchExternalUrl(
+                      _termsOfServiceUrl,
+                      'Terms of Service',
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: 30),
 
@@ -230,10 +274,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               Center(
                 child: Text(
                   'Made with ❤️ for PDF lovers',
-                  style: TextStyle(
-                    color: _colors.textTertiary,
-                    fontSize: 13,
-                  ),
+                  style: TextStyle(color: _colors.textTertiary, fontSize: 13),
                 ),
               ),
               const SizedBox(height: 20),
@@ -277,10 +318,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const SizedBox(height: 2),
                 Text(
                   _isDarkMode ? 'Dark mode enabled' : 'Light mode enabled',
-                  style: TextStyle(
-                    color: _colors.textSecondary,
-                    fontSize: 12,
-                  ),
+                  style: TextStyle(color: _colors.textSecondary, fontSize: 12),
                 ),
               ],
             ),
@@ -370,10 +408,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const SizedBox(height: 2),
                 Text(
                   subtitle,
-                  style: TextStyle(
-                    color: _colors.textSecondary,
-                    fontSize: 12,
-                  ),
+                  style: TextStyle(color: _colors.textSecondary, fontSize: 12),
                 ),
               ],
             ),
@@ -381,7 +416,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           Switch(
             value: value,
             onChanged: onChanged,
-            activeColor: const Color(0xFFE94560),
+            activeThumbColor: const Color(0xFFE94560),
             activeTrackColor: const Color(0xFFE94560).withValues(alpha: 0.4),
             inactiveThumbColor: _colors.textSecondary,
             inactiveTrackColor: _colors.divider,
@@ -427,10 +462,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const SizedBox(height: 2),
                 Text(
                   subtitle,
-                  style: TextStyle(
-                    color: _colors.textSecondary,
-                    fontSize: 12,
-                  ),
+                  style: TextStyle(color: _colors.textSecondary, fontSize: 12),
                 ),
               ],
             ),
@@ -447,20 +479,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
               underline: const SizedBox(),
               isDense: true,
               dropdownColor: _colors.cardBackground,
-              style: TextStyle(
-                color: _colors.textPrimary,
-                fontSize: 13,
-              ),
+              style: TextStyle(color: _colors.textPrimary, fontSize: 13),
               icon: Icon(
                 Icons.keyboard_arrow_down_rounded,
                 color: _colors.textSecondary,
                 size: 20,
               ),
               items: options.map((option) {
-                return DropdownMenuItem(
-                  value: option,
-                  child: Text(option),
-                );
+                return DropdownMenuItem(value: option, child: Text(option));
               }).toList(),
             ),
           ),
@@ -514,10 +540,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ],
               ),
             ),
-            Icon(
-              Icons.chevron_right_rounded,
-              color: _colors.textTertiary,
-            ),
+            Icon(Icons.chevron_right_rounded, color: _colors.textTertiary),
           ],
         ),
       ),

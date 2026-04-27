@@ -11,6 +11,23 @@ import 'package:open_file/open_file.dart';
 class PdfService {
   static String? _cachedOutputDir;
 
+  /// Map the user-facing quality string to a JPEG encoder quality (1-100).
+  /// Used when re-encoding images during image-to-PDF conversion.
+  static int qualityStringToJpegQuality(String quality) {
+    switch (quality) {
+      case 'Low':
+        return 50;
+      case 'Medium':
+        return 70;
+      case 'High':
+        return 85;
+      case 'Maximum':
+        return 100;
+      default:
+        return 85;
+    }
+  }
+
   static Future<String> _getOutputDir() async {
     _cachedOutputDir ??= (await getApplicationDocumentsDirectory()).path;
     return _cachedOutputDir!;
@@ -36,11 +53,11 @@ class PdfService {
       final List<PdfDocument> sourceDocs = [];
       for (final bytes in pdfBytesList) {
         sourceDocs.add(
-            await PdfDocument.openData(bytes, sourceName: 'memory:'));
+          await PdfDocument.openData(bytes, sourceName: 'memory:'),
+        );
       }
 
-      final outputDoc =
-          await PdfDocument.createNew(sourceName: 'merged.pdf');
+      final outputDoc = await PdfDocument.createNew(sourceName: 'merged.pdf');
       final List<PdfPage> allPages = [];
       for (final doc in sourceDocs) {
         await doc.loadPagesProgressively();
@@ -51,7 +68,9 @@ class PdfService {
       final pdfData = await outputDoc.encodePdf();
       await File(outputPath).writeAsBytes(pdfData);
 
-      for (final doc in sourceDocs) doc.dispose();
+      for (final doc in sourceDocs) {
+        doc.dispose();
+      }
       outputDoc.dispose();
 
       return outputPath;
@@ -69,7 +88,10 @@ class PdfService {
     final List<String> outputPaths = [];
     for (final batch in batches) {
       if (batch.length >= 2) {
-        final path = await mergePdfsFromBytes(batch, outputQuality: outputQuality);
+        final path = await mergePdfsFromBytes(
+          batch,
+          outputQuality: outputQuality,
+        );
         if (path != null) outputPaths.add(path);
       }
     }
@@ -83,8 +105,9 @@ class PdfService {
   }) async {
     if (pdfPaths.length < 2) return null;
     try {
-      final bytesList =
-          await Future.wait(pdfPaths.map((p) => File(p).readAsBytes()));
+      final bytesList = await Future.wait(
+        pdfPaths.map((p) => File(p).readAsBytes()),
+      );
       return mergePdfsFromBytes(bytesList, outputQuality: outputQuality);
     } catch (e) {
       debugPrint('Error merging PDFs: $e');
@@ -92,7 +115,9 @@ class PdfService {
     }
   }
 
-  /// Convert images to PDF
+  /// Convert images to PDF.
+  /// Each image is decoded and re-encoded as JPEG at the requested quality so
+  /// the user-selected Output Quality setting actually controls file size.
   static Future<String?> imagesToPdf(
     List<String> imagePaths, {
     String outputQuality = 'High',
@@ -100,30 +125,43 @@ class PdfService {
     if (imagePaths.isEmpty) return null;
 
     try {
-      final imageBytesList =
-          await Future.wait(imagePaths.map((p) => File(p).readAsBytes()));
+      final jpegQuality = qualityStringToJpegQuality(outputQuality);
+      final imageBytesList = await Future.wait(
+        imagePaths.map((p) => File(p).readAsBytes()),
+      );
+
+      // Re-encode every image as JPEG at the chosen quality off the UI thread.
+      final List<Uint8List> jpegBytesList = await compute(
+        _reencodeImagesAsJpeg,
+        _ReencodeRequest(imageBytesList, jpegQuality),
+      );
 
       final List<PdfDocument> imageDocs = [];
-      for (final bytes in imageBytesList) {
-        imageDocs.add(await PdfDocument.createFromJpegData(
-          bytes,
-          width: 595,
-          height: 842,
-          sourceName: 'image.pdf',
-        ));
+      for (final bytes in jpegBytesList) {
+        imageDocs.add(
+          await PdfDocument.createFromJpegData(
+            bytes,
+            width: 595,
+            height: 842,
+            sourceName: 'image.pdf',
+          ),
+        );
       }
 
-      final outputDoc =
-          await PdfDocument.createNew(sourceName: 'images.pdf');
+      final outputDoc = await PdfDocument.createNew(sourceName: 'images.pdf');
       final List<PdfPage> allPages = [];
-      for (final doc in imageDocs) allPages.addAll(doc.pages);
+      for (final doc in imageDocs) {
+        allPages.addAll(doc.pages);
+      }
       outputDoc.pages = allPages;
 
       final pdfData = await outputDoc.encodePdf();
       final outputPath = await _getOutputPath('images_to_pdf');
       await File(outputPath).writeAsBytes(pdfData);
 
-      for (final doc in imageDocs) doc.dispose();
+      for (final doc in imageDocs) {
+        doc.dispose();
+      }
       outputDoc.dispose();
 
       return outputPath;
@@ -142,8 +180,12 @@ class PdfService {
   }) async {
     try {
       final bytes = await File(pdfPath).readAsBytes();
-      return splitPdfByRangeFromBytes(bytes, startPage, endPage,
-          outputQuality: outputQuality);
+      return splitPdfByRangeFromBytes(
+        bytes,
+        startPage,
+        endPage,
+        outputQuality: outputQuality,
+      );
     } catch (e) {
       debugPrint('Error splitting PDF: $e');
       return null;
@@ -177,8 +219,10 @@ class PdfService {
     String outputQuality = 'High',
   }) async {
     try {
-      final sourceDoc =
-          await PdfDocument.openData(pdfBytes, sourceName: 'memory:');
+      final sourceDoc = await PdfDocument.openData(
+        pdfBytes,
+        sourceName: 'memory:',
+      );
       await sourceDoc.loadPagesProgressively();
 
       final totalPages = sourceDoc.pages.length;
@@ -188,13 +232,11 @@ class PdfService {
       }
 
       final selectedPages = sourceDoc.pages.sublist(startPage - 1, endPage);
-      final outputDoc =
-          await PdfDocument.createNew(sourceName: 'split.pdf');
+      final outputDoc = await PdfDocument.createNew(sourceName: 'split.pdf');
       outputDoc.pages = List.from(selectedPages);
 
       final pdfData = await outputDoc.encodePdf();
-      final outputPath =
-          await _getOutputPath('split_${startPage}_to_$endPage');
+      final outputPath = await _getOutputPath('split_${startPage}_to_$endPage');
       await File(outputPath).writeAsBytes(pdfData);
 
       sourceDoc.dispose();
@@ -214,8 +256,10 @@ class PdfService {
     String outputQuality = 'High',
   }) async {
     try {
-      final sourceDoc =
-          await PdfDocument.openData(pdfBytes, sourceName: 'memory:');
+      final sourceDoc = await PdfDocument.openData(
+        pdfBytes,
+        sourceName: 'memory:',
+      );
       await sourceDoc.loadPagesProgressively();
 
       final totalPages = sourceDoc.pages.length;
@@ -226,10 +270,10 @@ class PdfService {
         }
       }
 
-      final selectedPages =
-          pageIndices.map((i) => sourceDoc.pages[i]).toList();
-      final outputDoc =
-          await PdfDocument.createNew(sourceName: 'extracted.pdf');
+      final selectedPages = pageIndices.map((i) => sourceDoc.pages[i]).toList();
+      final outputDoc = await PdfDocument.createNew(
+        sourceName: 'extracted.pdf',
+      );
       outputDoc.pages = selectedPages;
 
       final pdfData = await outputDoc.encodePdf();
@@ -268,16 +312,19 @@ class PdfService {
     final List<String> outputPaths = [];
 
     try {
-      final sourceDoc =
-          await PdfDocument.openData(pdfBytes, sourceName: 'memory:');
+      final sourceDoc = await PdfDocument.openData(
+        pdfBytes,
+        sourceName: 'memory:',
+      );
       await sourceDoc.loadPagesProgressively();
 
       final dir = await getApplicationDocumentsDirectory();
       final ts = DateTime.now().millisecondsSinceEpoch.toString();
 
       for (int i = 0; i < sourceDoc.pages.length; i++) {
-        final outputDoc =
-            await PdfDocument.createNew(sourceName: 'page_${i + 1}.pdf');
+        final outputDoc = await PdfDocument.createNew(
+          sourceName: 'page_${i + 1}.pdf',
+        );
         outputDoc.pages = [sourceDoc.pages[i]];
 
         final pdfData = await outputDoc.encodePdf();
@@ -323,7 +370,9 @@ class PdfService {
   }
 
   /// Get first page aspect ratio (width/height) from bytes. Returns null on error.
-  static Future<double?> getFirstPageAspectRatioFromBytes(Uint8List bytes) async {
+  static Future<double?> getFirstPageAspectRatioFromBytes(
+    Uint8List bytes,
+  ) async {
     try {
       final doc = await PdfDocument.openData(bytes, sourceName: 'memory:');
       if (doc.pages.isEmpty) {
@@ -371,9 +420,7 @@ class PdfService {
         Uint8List? bytes;
         if (pageImage != null) {
           final imgObj = pageImage.createImageNF();
-          if (imgObj != null) {
-            bytes = Uint8List.fromList(img.encodeJpg(imgObj, quality: 92));
-          }
+          bytes = Uint8List.fromList(img.encodeJpg(imgObj, quality: 92));
           pageImage.dispose();
         }
         previews.add(bytes);
@@ -406,9 +453,7 @@ class PdfService {
       Uint8List? bytes;
       if (pageImage != null) {
         final imgObj = pageImage.createImageNF();
-        if (imgObj != null) {
-            bytes = Uint8List.fromList(img.encodeJpg(imgObj, quality: 95));
-        }
+        bytes = Uint8List.fromList(img.encodeJpg(imgObj, quality: 95));
         pageImage.dispose();
       }
 
@@ -432,4 +477,29 @@ class PdfService {
   static Future<String> getOutputDirectory() async {
     return (await getApplicationDocumentsDirectory()).path;
   }
+}
+
+/// Payload for [_reencodeImagesAsJpeg] (must be a top-level / simple class for `compute`).
+class _ReencodeRequest {
+  const _ReencodeRequest(this.imageBytesList, this.jpegQuality);
+  final List<Uint8List> imageBytesList;
+  final int jpegQuality;
+}
+
+/// Top-level helper run via [compute] to decode arbitrary image formats and
+/// re-encode them as JPEG at the requested quality. Falls back to the original
+/// bytes if decoding fails (assumed already-JPEG).
+List<Uint8List> _reencodeImagesAsJpeg(_ReencodeRequest request) {
+  final out = <Uint8List>[];
+  for (final bytes in request.imageBytesList) {
+    final decoded = img.decodeImage(bytes);
+    if (decoded == null) {
+      out.add(bytes);
+      continue;
+    }
+    out.add(
+      Uint8List.fromList(img.encodeJpg(decoded, quality: request.jpegQuality)),
+    );
+  }
+  return out;
 }

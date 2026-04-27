@@ -32,6 +32,35 @@ class PdfPreviewScreen extends StatefulWidget {
 
 enum PdfPreviewSourceType { merge, convert }
 
+/// Auto-save the produced PDFs and (optionally) post a completion notification.
+/// Used both by [PdfPreviewScreen._onSave] and by the "Skip Preview" fast path.
+/// Returns the list of saved paths (may be empty if auto-save is off).
+Future<List<String>> autoSavePdfs({
+  required ThemeProvider themeProvider,
+  required List<String> filePaths,
+  required PdfPreviewSourceType sourceType,
+  required int pageCount,
+}) async {
+  final List<String> autoSavedPaths = [];
+  if (themeProvider.autoSave) {
+    for (int i = 0; i < filePaths.length; i++) {
+      final prefix = sourceType == PdfPreviewSourceType.merge
+          ? 'merged_${i + 1}'
+          : 'scanned';
+      final saved = await themeProvider.autoSaveFile(filePaths[i], prefix);
+      if (saved != null) autoSavedPaths.add(saved);
+    }
+  }
+  if (themeProvider.notifications) {
+    if (sourceType == PdfPreviewSourceType.merge) {
+      NotificationService().showMergeComplete(pageCount);
+    } else {
+      NotificationService().showScanComplete(pageCount);
+    }
+  }
+  return autoSavedPaths;
+}
+
 class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
   List<Uint8List?> _previews = [];
   double _previewAspectRatio = 0.7;
@@ -77,6 +106,12 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
       debugPrint('Error loading previews: $e');
       if (mounted) {
         setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not load PDF preview: $e'),
+            backgroundColor: const Color(0xFFE94560),
+          ),
+        );
       }
     }
   }
@@ -86,40 +121,24 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
     setState(() => _isSaving = true);
 
     try {
-      List<String>? autoSavedPaths;
-      if (themeProvider.autoSave) {
-        autoSavedPaths = [];
-        for (int i = 0; i < widget.filePaths.length; i++) {
-          final prefix = widget.sourceType == PdfPreviewSourceType.merge
-              ? 'merged_${i + 1}'
-              : 'scanned';
-          final saved =
-              await themeProvider.autoSaveFile(widget.filePaths[i], prefix);
-          if (saved != null) autoSavedPaths.add(saved);
-        }
-      }
-
-      if (themeProvider.notifications) {
-        if (widget.sourceType == PdfPreviewSourceType.merge) {
-          NotificationService().showMergeComplete(
-              widget.pageCount ?? _previews.length);
-        } else {
-          NotificationService().showScanComplete(
-              widget.pageCount ?? _previews.length);
-        }
-      }
+      final autoSavedPaths = await autoSavePdfs(
+        themeProvider: themeProvider,
+        filePaths: widget.filePaths,
+        sourceType: widget.sourceType,
+        pageCount: widget.pageCount ?? _previews.length,
+      );
 
       widget.onSaved?.call();
 
       if (mounted) {
-        _showSuccessDialog(autoSavedPaths);
+        _showSuccessDialog(autoSavedPaths.isEmpty ? null : autoSavedPaths);
       }
     } catch (e) {
       if (mounted) {
         setState(() => _isSaving = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error saving: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error saving: $e')));
       }
     }
   }
@@ -127,9 +146,8 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
   void _showSuccessDialog(List<String>? autoSavedPaths) {
     final themeProvider = context.read<ThemeProvider>();
     final saveLocation = themeProvider.saveLocation;
-    final hasAutoSaved =
-        autoSavedPaths != null && autoSavedPaths.isNotEmpty;
-    final shareFiles = hasAutoSaved ? autoSavedPaths! : widget.filePaths;
+    final hasAutoSaved = autoSavedPaths != null && autoSavedPaths.isNotEmpty;
+    final shareFiles = hasAutoSaved ? autoSavedPaths : widget.filePaths;
     final nav = Navigator.of(context);
 
     showDialog(
@@ -164,8 +182,11 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.folder_rounded,
-                        color: Color(0xFF4CAF50), size: 18),
+                    const Icon(
+                      Icons.folder_rounded,
+                      color: Color(0xFF4CAF50),
+                      size: 18,
+                    ),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
@@ -189,7 +210,10 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
               Navigator.pop(ctx);
               nav.pop(true);
             },
-            child: Text('Close', style: TextStyle(color: _colors.textSecondary)),
+            child: Text(
+              'Close',
+              style: TextStyle(color: _colors.textSecondary),
+            ),
           ),
           TextButton(
             onPressed: () {
@@ -202,7 +226,10 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
                     : 'Scanned PDF',
               );
             },
-            child: const Text('Share', style: TextStyle(color: Color(0xFF00D9FF))),
+            child: const Text(
+              'Share',
+              style: TextStyle(color: Color(0xFF00D9FF)),
+            ),
           ),
           ElevatedButton(
             onPressed: () {
@@ -211,10 +238,7 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
               final name = path.split(RegExp(r'[/\\]')).last;
               nav.pushReplacement(
                 MaterialPageRoute(
-                  builder: (_) => PdfViewerScreen(
-                    pdfPath: path,
-                    title: name,
-                  ),
+                  builder: (_) => PdfViewerScreen(pdfPath: path, title: name),
                 ),
               );
             },
@@ -234,7 +258,7 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
   void _onBack() {
     HapticFeedback.lightImpact();
     for (final path in widget.filePaths) {
-      unawaited(File(path).delete().catchError((_) {}));
+      unawaited(File(path).delete().catchError((_) => File(path)));
     }
     Navigator.pop(context, false);
   }
@@ -248,8 +272,8 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
           widget.filePaths.length > 1
               ? 'Preview PDF (${_currentFileIndex + 1}/${widget.filePaths.length})'
               : widget.sourceType == PdfPreviewSourceType.merge
-                  ? 'Preview merged PDF'
-                  : 'Preview PDF',
+              ? 'Preview merged PDF'
+              : 'Preview PDF',
           style: TextStyle(color: _colors.textPrimary),
         ),
         actions: [
@@ -263,10 +287,8 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (_) => PdfViewerScreen(
-                          pdfPath: path,
-                          title: name,
-                        ),
+                        builder: (_) =>
+                            PdfViewerScreen(pdfPath: path, title: name),
                       ),
                     );
                   },
@@ -320,13 +342,13 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
                     ),
                   )
                 : _previews.isEmpty
-                    ? Center(
-                        child: Text(
-                          'No pages to preview',
-                          style: TextStyle(color: _colors.textSecondary),
-                        ),
-                      )
-                    : _buildPreviewsGrid(),
+                ? Center(
+                    child: Text(
+                      'No pages to preview',
+                      style: TextStyle(color: _colors.textSecondary),
+                    ),
+                  )
+                : _buildPreviewsGrid(),
           ),
           _buildBottomBar(),
         ],
@@ -361,10 +383,7 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
           child: ClipRRect(
             borderRadius: BorderRadius.circular(12),
             child: bytes != null
-                ? Image.memory(
-                    bytes,
-                    fit: BoxFit.contain,
-                  )
+                ? Image.memory(bytes, fit: BoxFit.contain)
                 : Center(
                     child: Icon(
                       Icons.picture_as_pdf,

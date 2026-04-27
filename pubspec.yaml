@@ -47,6 +47,9 @@ dependencies:
   # Receive intents (e.g. open PDF from file manager)
   receive_intent: ^0.2.7
 
+  # Open external URLs (Rate App, Privacy Policy, Terms of Service)
+  url_launcher: ^6.3.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

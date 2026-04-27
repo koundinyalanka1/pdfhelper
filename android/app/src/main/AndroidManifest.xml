@@ -53,6 +53,9 @@
             android:targetActivity=".PdfIntentTrampolineActivity"
             android:exported="true"
             android:label="View PDF">
+            <meta-data
+                android:name="com.example.pdfhelper.PDF_ACTION"
+                android:value="view"/>
             <intent-filter android:priority="100">
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
@@ -60,6 +63,54 @@
                 <data android:mimeType="application/pdf"/>
             </intent-filter>
             <intent-filter android:priority="100">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:scheme="file"/>
+                <data android:host="*"/>
+                <data android:pathPattern=".*\\.pdf"/>
+            </intent-filter>
+        </activity-alias>
+
+        <!-- Merge PDF: appears in "Open with" menu for PDF files -->
+        <activity-alias
+            android:name=".MergePdfAlias"
+            android:targetActivity=".PdfIntentTrampolineActivity"
+            android:exported="true"
+            android:label="Merge with PDF Helper">
+            <meta-data
+                android:name="com.example.pdfhelper.PDF_ACTION"
+                android:value="merge"/>
+            <intent-filter android:priority="90">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:mimeType="application/pdf"/>
+            </intent-filter>
+            <intent-filter android:priority="90">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:scheme="file"/>
+                <data android:host="*"/>
+                <data android:pathPattern=".*\\.pdf"/>
+            </intent-filter>
+        </activity-alias>
+
+        <!-- Split PDF: appears in "Open with" menu for PDF files -->
+        <activity-alias
+            android:name=".SplitPdfAlias"
+            android:targetActivity=".PdfIntentTrampolineActivity"
+            android:exported="true"
+            android:label="Split with PDF Helper">
+            <meta-data
+                android:name="com.example.pdfhelper.PDF_ACTION"
+                android:value="split"/>
+            <intent-filter android:priority="90">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:mimeType="application/pdf"/>
+            </intent-filter>
+            <intent-filter android:priority="90">
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
                 <data android:scheme="file"/>
@@ -92,6 +143,15 @@
         <intent>
             <action android:name="android.intent.action.VIEW"/>
             <data android:mimeType="application/pdf"/>
+        </intent>
+        <!-- url_launcher: opening external URLs (Rate App, Privacy, Terms) -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="https"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="http"/>
         </intent>
     </queries>
 </manifest>

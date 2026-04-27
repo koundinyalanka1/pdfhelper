@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -10,11 +9,11 @@ import '../providers/theme_provider.dart';
 
 enum ScanFilter {
   original,
-  auto,        // Auto enhance - smart detection
-  document,    // CamScanner-style document (white bg, dark text)
-  magicColor,  // Enhanced colors like CamScanner Magic Color
-  blackWhite,  // High contrast B&W for documents
-  grayscale,   // Clean grayscale
+  auto, // Auto enhance - smart detection
+  document, // CamScanner-style document (white bg, dark text)
+  magicColor, // Enhanced colors like CamScanner Magic Color
+  blackWhite, // High contrast B&W for documents
+  grayscale, // Clean grayscale
 }
 
 /// Data class for passing to isolate - must be a simple class with primitives
@@ -22,8 +21,12 @@ class ImageFilterRequest {
   final Uint8List imageBytes;
   final int filterIndex; // Use int instead of enum for isolate compatibility
   final int imageQuality; // JPEG quality 1-100
-  
-  ImageFilterRequest(this.imageBytes, this.filterIndex, {this.imageQuality = 85});
+
+  ImageFilterRequest(
+    this.imageBytes,
+    this.filterIndex, {
+    this.imageQuality = 85,
+  });
 }
 
 /// Top-level function for isolate processing
@@ -53,24 +56,26 @@ Uint8List processImageInBackground(ImageFilterRequest request) {
       processed = image;
   }
 
-  return Uint8List.fromList(img.encodeJpg(processed, quality: request.imageQuality));
+  return Uint8List.fromList(
+    img.encodeJpg(processed, quality: request.imageQuality),
+  );
 }
 
 /// Auto enhance - intelligent enhancement based on image characteristics
 img.Image applyAutoEnhance(img.Image image) {
   // Normalize the image (auto levels)
   img.Image result = img.normalize(image, min: 0, max: 255);
-  
+
   // Moderate contrast boost
   result = img.contrast(result, contrast: 115);
-  
+
   // Slight sharpening
-  result = img.convolution(result, filter: [
-    0, -0.5, 0,
-    -0.5, 3, -0.5,
-    0, -0.5, 0,
-  ], div: 1);
-  
+  result = img.convolution(
+    result,
+    filter: [0, -0.5, 0, -0.5, 3, -0.5, 0, -0.5, 0],
+    div: 1,
+  );
+
   return result;
 }
 
@@ -79,31 +84,33 @@ img.Image applyAutoEnhance(img.Image image) {
 img.Image applyDocumentFilter(img.Image image) {
   final width = image.width;
   final height = image.height;
-  
+
   // Step 1: Convert to grayscale for analysis
-  img.Image grayImage = img.grayscale(img.copyResize(image, width: width, height: height));
-  
+  img.Image grayImage = img.grayscale(
+    img.copyResize(image, width: width, height: height),
+  );
+
   // Step 2: Calculate adaptive threshold using local mean
   // This helps separate text from background
   final int blockSize = 15;
-  
+
   // Step 3: Process the image with background whitening
   img.Image result = img.Image(width: width, height: height);
-  
+
   for (int y = 0; y < height; y++) {
     for (int x = 0; x < width; x++) {
       final pixel = image.getPixel(x, y);
       final grayPixel = grayImage.getPixel(x, y);
-      
+
       // Get luminance value
       final int luminance = grayPixel.r.toInt();
-      
+
       // Calculate local region statistics for adaptive thresholding
       int localSum = 0;
       int count = 0;
       int minVal = 255;
       int maxVal = 0;
-      
+
       for (int dy = -blockSize; dy <= blockSize; dy += 3) {
         for (int dx = -blockSize; dx <= blockSize; dx += 3) {
           final int nx = (x + dx).clamp(0, width - 1);
@@ -115,15 +122,15 @@ img.Image applyDocumentFilter(img.Image image) {
           if (val > maxVal) maxVal = val;
         }
       }
-      
+
       final double localMean = localSum / count;
       final double localContrast = (maxVal - minVal) / 255.0;
-      
+
       // Adaptive threshold - considers local contrast
       final double threshold = localMean * 0.85 - 8;
-      
+
       int newR, newG, newB;
-      
+
       if (localContrast < 0.15) {
         // Low contrast area - likely background, make it white
         newR = 255;
@@ -137,23 +144,24 @@ img.Image applyDocumentFilter(img.Image image) {
         newB = (pixel.b * factor).clamp(0, 80).toInt();
       } else {
         // Light pixel (background) - push towards white
-        final double factor = 0.3 + ((luminance - threshold) / (255 - threshold)) * 0.7;
+        final double factor =
+            0.3 + ((luminance - threshold) / (255 - threshold)) * 0.7;
         newR = (255 - (255 - pixel.r) * (1 - factor)).clamp(240, 255).toInt();
         newG = (255 - (255 - pixel.g) * (1 - factor)).clamp(240, 255).toInt();
         newB = (255 - (255 - pixel.b) * (1 - factor)).clamp(240, 255).toInt();
       }
-      
+
       result.setPixel(x, y, img.ColorRgba8(newR, newG, newB, 255));
     }
   }
-  
+
   // Step 4: Apply slight sharpening to crisp up text edges
-  result = img.convolution(result, filter: [
-    0, -0.8, 0,
-    -0.8, 4.2, -0.8,
-    0, -0.8, 0,
-  ], div: 1);
-  
+  result = img.convolution(
+    result,
+    filter: [0, -0.8, 0, -0.8, 4.2, -0.8, 0, -0.8, 0],
+    div: 1,
+  );
+
   return result;
 }
 
@@ -162,23 +170,23 @@ img.Image applyDocumentFilter(img.Image image) {
 img.Image applyMagicColorFilter(img.Image image) {
   // Step 1: Normalize to fix exposure issues
   img.Image result = img.normalize(image, min: 0, max: 255);
-  
+
   // Step 2: Increase saturation slightly for vivid colors
   result = img.adjustColor(result, saturation: 1.2);
-  
+
   // Step 3: Apply strong contrast for pop
   result = img.contrast(result, contrast: 140);
-  
+
   // Step 4: Brighten shadows, compress highlights
   result = img.adjustColor(result, brightness: 1.08, gamma: 0.9);
-  
+
   // Step 5: Sharpen for crisp details
-  result = img.convolution(result, filter: [
-    0, -1, 0,
-    -1, 5, -1,
-    0, -1, 0,
-  ], div: 1);
-  
+  result = img.convolution(
+    result,
+    filter: [0, -1, 0, -1, 5, -1, 0, -1, 0],
+    div: 1,
+  );
+
   return result;
 }
 
@@ -187,13 +195,13 @@ img.Image applyMagicColorFilter(img.Image image) {
 img.Image applyBlackWhiteFilter(img.Image image) {
   final width = image.width;
   final height = image.height;
-  
+
   // Convert to grayscale first
   img.Image grayImage = img.grayscale(image);
-  
+
   // Normalize the grayscale
   grayImage = img.normalize(grayImage, min: 0, max: 255);
-  
+
   // Apply Otsu-like thresholding for clean B&W
   // Calculate histogram
   List<int> histogram = List.filled(256, 0);
@@ -202,47 +210,47 @@ img.Image applyBlackWhiteFilter(img.Image image) {
       histogram[grayImage.getPixel(x, y).r.toInt()]++;
     }
   }
-  
+
   // Find optimal threshold using Otsu's method
   int total = width * height;
   double sum = 0;
   for (int i = 0; i < 256; i++) {
     sum += i * histogram[i];
   }
-  
+
   double sumB = 0;
   int wB = 0;
   double maxVariance = 0;
   int threshold = 128;
-  
+
   for (int i = 0; i < 256; i++) {
     wB += histogram[i];
     if (wB == 0) continue;
-    
+
     int wF = total - wB;
     if (wF == 0) break;
-    
+
     sumB += i * histogram[i];
     double mB = sumB / wB;
     double mF = (sum - sumB) / wF;
-    
+
     double variance = wB * wF * (mB - mF) * (mB - mF);
     if (variance > maxVariance) {
       maxVariance = variance;
       threshold = i;
     }
   }
-  
+
   // Adjust threshold for document scanning (slightly lower to catch more text)
   threshold = (threshold * 0.9).toInt();
-  
+
   // Apply threshold with anti-aliasing for smoother edges
   img.Image result = img.Image(width: width, height: height);
-  
+
   for (int y = 0; y < height; y++) {
     for (int x = 0; x < width; x++) {
       final int gray = grayImage.getPixel(x, y).r.toInt();
-      
+
       // Soft threshold for anti-aliased edges
       int value;
       if (gray < threshold - 20) {
@@ -253,11 +261,11 @@ img.Image applyBlackWhiteFilter(img.Image image) {
         // Gradient for anti-aliasing
         value = ((gray - (threshold - 20)) * 255 / 40).clamp(0, 255).toInt();
       }
-      
+
       result.setPixel(x, y, img.ColorRgba8(value, value, value, 255));
     }
   }
-  
+
   return result;
 }
 
@@ -265,23 +273,23 @@ img.Image applyBlackWhiteFilter(img.Image image) {
 img.Image applyGrayscaleFilter(img.Image image) {
   // Convert to grayscale
   img.Image result = img.grayscale(image);
-  
+
   // Normalize levels
   result = img.normalize(result, min: 0, max: 255);
-  
+
   // Moderate contrast
   result = img.contrast(result, contrast: 125);
-  
+
   // Slight brightness boost
   result = img.adjustColor(result, brightness: 1.05);
-  
+
   // Light sharpening
-  result = img.convolution(result, filter: [
-    0, -0.5, 0,
-    -0.5, 3, -0.5,
-    0, -0.5, 0,
-  ], div: 1);
-  
+  result = img.convolution(
+    result,
+    filter: [0, -0.5, 0, -0.5, 3, -0.5, 0, -0.5, 0],
+    div: 1,
+  );
+
   return result;
 }
 
@@ -308,6 +316,56 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
   Uint8List? _originalImageBytes;
   String _currentImagePath = '';
 
+  // Undo/redo history (capped). Each entry snapshots the post-edit state.
+  static const int _maxHistory = 10;
+  final List<_EditSnapshot> _undoStack = [];
+  final List<_EditSnapshot> _redoStack = [];
+
+  bool get _canUndo => _undoStack.isNotEmpty;
+  bool get _canRedo => _redoStack.isNotEmpty;
+
+  /// Snapshot of the *current* state, ready to push onto the undo stack
+  /// before applying a new edit.
+  _EditSnapshot _currentSnapshot() => _EditSnapshot(
+    originalBytes: _originalImageBytes,
+    processedBytes: _processedImageBytes,
+    imagePath: _currentImagePath,
+    filter: _selectedFilter,
+  );
+
+  /// Push the current state onto undo and clear the redo stack
+  /// (called before any user-driven edit: crop or filter).
+  void _pushUndo() {
+    if (_originalImageBytes == null) return;
+    _undoStack.add(_currentSnapshot());
+    if (_undoStack.length > _maxHistory) _undoStack.removeAt(0);
+    _redoStack.clear();
+  }
+
+  void _undo() {
+    if (!_canUndo) return;
+    final snapshot = _undoStack.removeLast();
+    _redoStack.add(_currentSnapshot());
+    setState(() {
+      _originalImageBytes = snapshot.originalBytes;
+      _processedImageBytes = snapshot.processedBytes;
+      _currentImagePath = snapshot.imagePath;
+      _selectedFilter = snapshot.filter;
+    });
+  }
+
+  void _redo() {
+    if (!_canRedo) return;
+    final snapshot = _redoStack.removeLast();
+    _undoStack.add(_currentSnapshot());
+    setState(() {
+      _originalImageBytes = snapshot.originalBytes;
+      _processedImageBytes = snapshot.processedBytes;
+      _currentImagePath = snapshot.imagePath;
+      _selectedFilter = snapshot.filter;
+    });
+  }
+
   bool get _isDarkMode => context.watch<ThemeProvider>().isDarkMode;
   AppColors get _colors => AppColors(_isDarkMode);
 
@@ -328,7 +386,7 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
 
   Future<void> _cropImage() async {
     if (_originalImageBytes == null) return;
-    
+
     final result = await Navigator.push<Uint8List>(
       context,
       MaterialPageRoute(
@@ -340,20 +398,15 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
       try {
         // Save cropped image
         final Directory appDir = await getApplicationDocumentsDirectory();
-        final String fileName = 'cropped_${DateTime.now().millisecondsSinceEpoch}.jpg';
+        final String fileName =
+            'cropped_${DateTime.now().millisecondsSinceEpoch}.jpg';
         final String savedPath = '${appDir.path}/$fileName';
         await File(savedPath).writeAsBytes(result);
 
-        // Delete old file if different
-        if (_currentImagePath != widget.imagePath) {
-          try {
-            await File(_currentImagePath).delete();
-          } catch (e) {
-            debugPrint('Could not delete old file: $e');
-          }
-        }
+        // Snapshot the pre-crop state so the user can undo.
+        _pushUndo();
 
-        // Update state
+        // Update state (do NOT delete the previous file: undo may need it)
         setState(() {
           _currentImagePath = savedPath;
           _originalImageBytes = result;
@@ -376,6 +429,10 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
 
   Future<void> _applyFilter(ScanFilter filter) async {
     if (_originalImageBytes == null || _isProcessing) return;
+    if (filter == _selectedFilter) return;
+
+    // Snapshot current state so the user can undo this filter change.
+    _pushUndo();
 
     setState(() {
       _isProcessing = true;
@@ -384,14 +441,18 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
 
     try {
       final Uint8List resultBytes;
-      
+
       if (filter == ScanFilter.original) {
         resultBytes = _originalImageBytes!;
       } else {
         // Process image in background isolate using int index for better serialization
         resultBytes = await compute(
           processImageInBackground,
-          ImageFilterRequest(_originalImageBytes!, filter.index, imageQuality: widget.imageQuality),
+          ImageFilterRequest(
+            _originalImageBytes!,
+            filter.index,
+            imageQuality: widget.imageQuality,
+          ),
         );
       }
 
@@ -425,11 +486,12 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
     try {
       // Save the processed image
       final Directory appDir = await getApplicationDocumentsDirectory();
-      final String fileName = 'processed_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final String fileName =
+          'processed_${DateTime.now().millisecondsSinceEpoch}.jpg';
       final String savedPath = '${appDir.path}/$fileName';
-      
+
       await File(savedPath).writeAsBytes(_processedImageBytes!);
-      
+
       // Delete temporary files
       if (_currentImagePath != widget.imagePath) {
         try {
@@ -485,10 +547,33 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
         ),
         title: Text(
           'Edit Scan',
-          style: TextStyle(color: _colors.textPrimary, fontWeight: FontWeight.w600),
+          style: TextStyle(
+            color: _colors.textPrimary,
+            fontWeight: FontWeight.w600,
+          ),
         ),
         centerTitle: true,
         actions: [
+          IconButton(
+            tooltip: 'Undo',
+            icon: Icon(
+              Icons.undo_rounded,
+              color: _canUndo
+                  ? _colors.textPrimary
+                  : _colors.textPrimary.withValues(alpha: 0.3),
+            ),
+            onPressed: _canUndo && !_isProcessing ? _undo : null,
+          ),
+          IconButton(
+            tooltip: 'Redo',
+            icon: Icon(
+              Icons.redo_rounded,
+              color: _canRedo
+                  ? _colors.textPrimary
+                  : _colors.textPrimary.withValues(alpha: 0.3),
+            ),
+            onPressed: _canRedo && !_isProcessing ? _redo : null,
+          ),
           TextButton(
             onPressed: _isProcessing ? null : _saveAndReturn,
             child: const Text(
@@ -526,10 +611,7 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
                   fit: StackFit.expand,
                   children: [
                     if (_processedImageBytes != null)
-                      Image.memory(
-                        _processedImageBytes!,
-                        fit: BoxFit.contain,
-                      )
+                      Image.memory(_processedImageBytes!, fit: BoxFit.contain)
                     else
                       const Center(
                         child: CircularProgressIndicator(
@@ -572,7 +654,9 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
             ),
             decoration: BoxDecoration(
               color: _colors.cardBackground,
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(25)),
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(25),
+              ),
               boxShadow: [
                 BoxShadow(
                   color: _colors.shadowColor,
@@ -585,13 +669,19 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
               children: [
                 // Crop button
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 8,
+                  ),
                   child: SizedBox(
                     width: double.infinity,
                     height: 50,
                     child: OutlinedButton.icon(
                       onPressed: _isProcessing ? null : _cropImage,
-                      icon: const Icon(Icons.crop_rounded, color: Color(0xFF00D9FF)),
+                      icon: const Icon(
+                        Icons.crop_rounded,
+                        color: Color(0xFF00D9FF),
+                      ),
                       label: const Text(
                         'Crop Image',
                         style: TextStyle(
@@ -601,7 +691,10 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
                         ),
                       ),
                       style: OutlinedButton.styleFrom(
-                        side: const BorderSide(color: Color(0xFF00D9FF), width: 1.5),
+                        side: const BorderSide(
+                          color: Color(0xFF00D9FF),
+                          width: 1.5,
+                        ),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
                         ),
@@ -609,7 +702,7 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
                     ),
                   ),
                 ),
-                
+
                 Padding(
                   padding: const EdgeInsets.only(top: 8, bottom: 12),
                   child: Text(
@@ -669,7 +762,7 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
 
   Widget _buildFilterOption(ScanFilter filter, String label, IconData icon) {
     final isSelected = _selectedFilter == filter;
-    
+
     return GestureDetector(
       onTap: () => _applyFilter(filter),
       child: Container(
@@ -683,14 +776,12 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
               decoration: BoxDecoration(
                 color: isSelected
                     ? const Color(0xFF00D9FF)
-                    : _isDarkMode 
-                        ? Colors.white.withValues(alpha: 0.1)
-                        : Colors.black.withValues(alpha: 0.05),
+                    : _isDarkMode
+                    ? Colors.white.withValues(alpha: 0.1)
+                    : Colors.black.withValues(alpha: 0.05),
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(
-                  color: isSelected
-                      ? const Color(0xFF00D9FF)
-                      : _colors.divider,
+                  color: isSelected ? const Color(0xFF00D9FF) : _colors.divider,
                   width: 2,
                 ),
               ),
@@ -704,7 +795,9 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
             Text(
               label,
               style: TextStyle(
-                color: isSelected ? const Color(0xFF00D9FF) : _colors.textSecondary,
+                color: isSelected
+                    ? const Color(0xFF00D9FF)
+                    : _colors.textSecondary,
                 fontSize: 12,
                 fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
               ),
@@ -751,7 +844,10 @@ class _CropScreenState extends State<_CropScreen> {
         ),
         title: Text(
           'Crop Document',
-          style: TextStyle(color: _colors.textPrimary, fontWeight: FontWeight.w600),
+          style: TextStyle(
+            color: _colors.textPrimary,
+            fontWeight: FontWeight.w600,
+          ),
         ),
         centerTitle: true,
         actions: [
@@ -789,7 +885,7 @@ class _CropScreenState extends State<_CropScreen> {
                   controller: _cropController,
                   aspectRatio: _aspectRatio,
                   baseColor: _colors.background,
-                  maskColor: _isDarkMode 
+                  maskColor: _isDarkMode
                       ? Colors.black.withValues(alpha: 0.7)
                       : Colors.white.withValues(alpha: 0.7),
                   initialSize: 0.9,
@@ -825,7 +921,9 @@ class _CropScreenState extends State<_CropScreen> {
               ),
               decoration: BoxDecoration(
                 color: _colors.cardBackground,
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(25)),
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(25),
+                ),
                 boxShadow: [
                   BoxShadow(
                     color: _colors.shadowColor,
@@ -847,7 +945,7 @@ class _CropScreenState extends State<_CropScreen> {
                       ),
                     ),
                   ),
-                    SingleChildScrollView(
+                  SingleChildScrollView(
                     scrollDirection: Axis.horizontal,
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
@@ -895,9 +993,9 @@ class _CropScreenState extends State<_CropScreen> {
         decoration: BoxDecoration(
           color: isSelected
               ? const Color(0xFF00D9FF)
-              : _isDarkMode 
-                  ? Colors.white.withValues(alpha: 0.1)
-                  : Colors.black.withValues(alpha: 0.05),
+              : _isDarkMode
+              ? Colors.white.withValues(alpha: 0.1)
+              : Colors.black.withValues(alpha: 0.05),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
             color: isSelected ? const Color(0xFF00D9FF) : _colors.divider,
@@ -915,4 +1013,19 @@ class _CropScreenState extends State<_CropScreen> {
       ),
     );
   }
+}
+
+/// Immutable snapshot used by the undo/redo stacks in [_ScanEditScreenState].
+class _EditSnapshot {
+  const _EditSnapshot({
+    required this.originalBytes,
+    required this.processedBytes,
+    required this.imagePath,
+    required this.filter,
+  });
+
+  final Uint8List? originalBytes;
+  final Uint8List? processedBytes;
+  final String imagePath;
+  final ScanFilter filter;
 }
