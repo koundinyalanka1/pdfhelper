@@ -1,12 +1,12 @@
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:image/image.dart' as img;
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:pdfrx_engine/pdfrx_engine.dart';
+import 'package:pdfrx/pdfrx.dart';
+import '../services/ads_service.dart';
 import '../services/pdf_service.dart';
 import '../services/notification_service.dart';
 import '../providers/theme_provider.dart';
@@ -447,7 +447,12 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () {
+              Navigator.pop(context);
+              // Friendliest moment for an interstitial: user is done and not
+              // navigating into Share / Viewer.
+              AdsService.instance.maybeShowInterstitial(trigger: 'split_close');
+            },
             child: Text(
               'Close',
               style: TextStyle(color: _colors.textSecondary),

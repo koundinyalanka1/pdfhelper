@@ -1,4 +1,4 @@
-package com.example.pdfhelper
+package com.yourmateapps.pdfhelper
 
 import android.content.Intent
 import android.util.Log
@@ -18,7 +18,7 @@ class MainActivity : FlutterActivity() {
         private const val TAG = "MainActivity"
     }
 
-    private val CHANNEL = "com.example.pdfhelper/pdf"
+    private val CHANNEL = "com.yourmateapps.pdfhelper/pdf"
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)

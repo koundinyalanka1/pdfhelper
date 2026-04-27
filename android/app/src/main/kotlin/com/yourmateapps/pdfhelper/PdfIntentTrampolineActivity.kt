@@ -1,4 +1,4 @@
-package com.example.pdfhelper
+package com.yourmateapps.pdfhelper
 
 import android.app.Activity
 import android.content.ClipData
@@ -69,7 +69,7 @@ class PdfIntentTrampolineActivity : Activity() {
 
     companion object {
         private const val TAG = "PdfIntentTrampoline"
-        const val EXTRA_PDF_ACTION = "com.example.pdfhelper.PDF_ACTION"
-        private const val META_PDF_ACTION = "com.example.pdfhelper.PDF_ACTION"
+        const val EXTRA_PDF_ACTION = "com.yourmateapps.pdfhelper.PDF_ACTION"
+        private const val META_PDF_ACTION = "com.yourmateapps.pdfhelper.PDF_ACTION"
     }
 }

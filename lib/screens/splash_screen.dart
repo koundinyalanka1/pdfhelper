@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import '../services/ads_service.dart';
+import '../services/firebase_service.dart';
 import '../services/intent_service.dart';
 import '../utils/format_utils.dart';
 import 'home_screen.dart';
@@ -45,12 +47,28 @@ class _SplashScreenState extends State<SplashScreen>
   }
 
   Future<void> _initializeApp() async {
+    // Kick off Firebase + Ads init in parallel with the splash animation so
+    // they don't add to perceived startup time. Both are guarded internally —
+    // if Firebase config files are missing, the app still boots.
+    final initFuture = Future.wait([
+      FirebaseService.initialize(),
+      AdsService.instance.initialize(),
+    ]);
+
     // Wait for animation to start
     await Future.delayed(const Duration(milliseconds: 800));
 
     if (mounted) {
       setState(() => _statusText = 'Ready to go!');
     }
+
+    // Make sure init completes before navigating, but cap the wait so we
+    // never block the user on a slow network. The services are no-ops if
+    // they haven't finished by the time they're called later.
+    await initFuture.timeout(
+      const Duration(seconds: 3),
+      onTimeout: () => <void>[],
+    );
 
     // Small delay before navigation
     await Future.delayed(const Duration(milliseconds: 500));
@@ -68,7 +86,9 @@ class _SplashScreenState extends State<SplashScreen>
     }
     if (!mounted) return;
 
-    debugPrint('[SplashScreen] _navigateToHome: intentResult=$intentResult action=${intentResult?.action}');
+    debugPrint(
+      '[SplashScreen] _navigateToHome: intentResult=$intentResult action=${intentResult?.action}',
+    );
 
     if (intentResult != null) {
       final path = intentResult.path;
@@ -82,9 +102,10 @@ class _SplashScreenState extends State<SplashScreen>
             PageRouteBuilder(
               pageBuilder: (context, animation, secondaryAnimation) =>
                   PdfViewerScreen(pdfPath: path, title: title),
-              transitionsBuilder: (context, animation, secondaryAnimation, child) {
-                return FadeTransition(opacity: animation, child: child);
-              },
+              transitionsBuilder:
+                  (context, animation, secondaryAnimation, child) {
+                    return FadeTransition(opacity: animation, child: child);
+                  },
               transitionDuration: const Duration(milliseconds: 500),
             ),
           );
@@ -133,11 +154,7 @@ class _SplashScreenState extends State<SplashScreen>
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
-            colors: [
-              Color(0xFF1A1A2E),
-              Color(0xFF16213E),
-              Color(0xFF0F3460),
-            ],
+            colors: [Color(0xFF1A1A2E), Color(0xFF16213E), Color(0xFF0F3460)],
           ),
         ),
         child: Center(
@@ -159,7 +176,9 @@ class _SplashScreenState extends State<SplashScreen>
                           borderRadius: BorderRadius.circular(30),
                           boxShadow: [
                             BoxShadow(
-                              color: const Color(0xFFE94560).withValues(alpha: 0.4),
+                              color: const Color(
+                                0xFFE94560,
+                              ).withValues(alpha: 0.4),
                               blurRadius: 30,
                               spreadRadius: 5,
                             ),

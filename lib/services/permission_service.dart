@@ -19,6 +19,7 @@ class PermissionService {
 
     if (status.isGranted) return true;
     if (status.isPermanentlyDenied) {
+      if (!context.mounted) return false;
       return await _showSettingsDialog(
         context: context,
         title: deniedTitle,

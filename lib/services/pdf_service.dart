@@ -3,7 +3,6 @@ import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
 import 'package:path_provider/path_provider.dart';
 import 'package:pdfrx/pdfrx.dart';
-import 'package:pdfrx_engine/pdfrx_engine.dart';
 import 'package:open_file/open_file.dart';
 
 /// PDF service using pdfrx - single library for merge, split, create, and render.

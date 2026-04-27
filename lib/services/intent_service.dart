@@ -16,7 +16,7 @@ class PdfIntentResult {
 /// Handles Android intents (e.g. opening PDF from file manager).
 /// Returns resolved file path or null.
 class IntentService {
-  static const _channel = MethodChannel('com.example.pdfhelper/pdf');
+  static const _channel = MethodChannel('com.yourmateapps.pdfhelper/pdf');
 
   /// Gets the PDF path and action if app was launched via one of the PDF aliases.
   /// Returns null if not launched via PDF intent or on non-Android.

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -22,6 +23,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String get _outputQuality => _themeProvider.outputQuality;
   bool get _skipPreview => _themeProvider.skipPreview;
   AppColors get _colors => AppColors(_isDarkMode);
+
+  String _appVersion = '';
+
+  @override
+  void initState() {
+    super.initState();
+    PackageInfo.fromPlatform().then((info) {
+      if (mounted) {
+        setState(() => _appVersion = '${info.version}+${info.buildNumber}');
+      }
+    });
+  }
 
   Future<void> _handleNotificationToggle(bool value) async {
     final provider = context.read<ThemeProvider>();
@@ -50,12 +63,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   // TODO: Replace these placeholder URLs with the real store listing /
-  // privacy policy / terms of service URLs before publishing.
+  // privacy policy URLs before publishing.
   static const String _rateAppUrl = 'https://example.com/pdfhelper/rate';
   static const String _privacyPolicyUrl =
-      'https://example.com/pdfhelper/privacy';
-  static const String _termsOfServiceUrl =
-      'https://example.com/pdfhelper/terms';
+      'https://yourmateapps.github.io/pdfhelper/privacy-policy.html';
 
   Future<void> _launchExternalUrl(String url, String label) async {
     final uri = Uri.parse(url);
@@ -140,10 +151,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                     ),
                     const SizedBox(width: 20),
-                    const Column(
+                    Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
+                        const Text(
                           'PDF Helper',
                           style: TextStyle(
                             color: Colors.white,
@@ -151,10 +162,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             fontWeight: FontWeight.w700,
                           ),
                         ),
-                        SizedBox(height: 5),
+                        const SizedBox(height: 5),
                         Text(
-                          'Version 1.0.0',
-                          style: TextStyle(color: Colors.white70, fontSize: 14),
+                          _appVersion.isEmpty ? '' : 'Version $_appVersion',
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 14,
+                          ),
                         ),
                       ],
                     ),
@@ -255,16 +269,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     Icons.privacy_tip_rounded,
                     () =>
                         _launchExternalUrl(_privacyPolicyUrl, 'Privacy Policy'),
-                  ),
-                  SettingsDivider(colors: _colors),
-                  _buildActionTile(
-                    'Terms of Service',
-                    'Read terms of service',
-                    Icons.description_rounded,
-                    () => _launchExternalUrl(
-                      _termsOfServiceUrl,
-                      'Terms of Service',
-                    ),
                   ),
                 ],
               ),

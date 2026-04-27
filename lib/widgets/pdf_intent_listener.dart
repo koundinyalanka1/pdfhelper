@@ -50,7 +50,7 @@ class _PdfIntentListenerState extends State<PdfIntentListener> {
     // always call getOpenedPdfIntent to read from native.
     final hasPdfIntent = intent.action == 'android.intent.action.VIEW' ||
         (intent.extra != null &&
-            intent.extra.toString().contains('com.example.pdfhelper.PDF_ACTION'));
+            intent.extra.toString().contains('com.yourmateapps.pdfhelper.PDF_ACTION'));
     if (!hasPdfIntent) {
       debugPrint('[PdfIntentListener] _onNewIntent: not a PDF intent, ignoring');
       return;

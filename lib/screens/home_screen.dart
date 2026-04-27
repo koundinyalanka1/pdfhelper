@@ -5,14 +5,11 @@ import 'convert_screen.dart';
 import 'split_pdf_screen.dart';
 import 'settings_screen.dart';
 import '../providers/theme_provider.dart';
+import '../widgets/banner_ad_widget.dart';
 import '../widgets/lazy_indexed_stack.dart';
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({
-    super.key,
-    this.initialPdfPath,
-    this.initialTab = 0,
-  });
+  const HomeScreen({super.key, this.initialPdfPath, this.initialTab = 0});
 
   final String? initialPdfPath;
   final int initialTab;
@@ -56,31 +53,47 @@ class _HomeScreenState extends State<HomeScreen> {
         itemCount: 4,
         itemBuilder: _buildScreen,
       ),
-      bottomNavigationBar: Container(
-        decoration: BoxDecoration(
-          color: _colors.bottomNavBackground,
-          boxShadow: [
-            BoxShadow(
-              color: _colors.shadowColor,
-              blurRadius: 20,
-              offset: const Offset(0, -5),
-            ),
-          ],
-        ),
-        child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: [
-                _buildNavItem(0, Icons.merge_rounded, 'Merge'),
-                _buildNavItem(1, Icons.camera_alt_rounded, 'Convert'),
-                _buildNavItem(2, Icons.content_cut_rounded, 'Split'),
-                _buildNavItem(3, Icons.settings_rounded, 'Settings'),
+      bottomNavigationBar: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            decoration: BoxDecoration(
+              color: _colors.bottomNavBackground,
+              boxShadow: [
+                BoxShadow(
+                  color: _colors.shadowColor,
+                  blurRadius: 20,
+                  offset: const Offset(0, -5),
+                ),
               ],
             ),
+            child: SafeArea(
+              bottom: false,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: [
+                    _buildNavItem(0, Icons.merge_rounded, 'Merge'),
+                    _buildNavItem(1, Icons.camera_alt_rounded, 'Convert'),
+                    _buildNavItem(2, Icons.content_cut_rounded, 'Split'),
+                    _buildNavItem(3, Icons.settings_rounded, 'Settings'),
+                  ],
+                ),
+              ),
+            ),
           ),
-        ),
+          // Banner ad sits below the nav, inside the device safe area so it
+          // doesn't get clipped by the iOS home indicator / Android gesture bar.
+          Container(
+            color: _colors.bottomNavBackground,
+            width: double.infinity,
+            child: SafeArea(
+              top: false,
+              child: const Center(child: BannerAdWidget()),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -101,33 +114,35 @@ class _HomeScreenState extends State<HomeScreen> {
         },
         behavior: HitTestBehavior.opaque,
         child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        decoration: BoxDecoration(
-          color: isSelected ? activeColor.withValues(alpha: 0.15) : Colors.transparent,
-          borderRadius: BorderRadius.circular(15),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              icon,
-              color: isSelected ? activeColor : inactiveColor,
-              size: 26,
-            ),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: TextStyle(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          decoration: BoxDecoration(
+            color: isSelected
+                ? activeColor.withValues(alpha: 0.15)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(15),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
                 color: isSelected ? activeColor : inactiveColor,
-                fontSize: 12,
-                fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                size: 26,
               ),
-            ),
-          ],
+              const SizedBox(height: 4),
+              Text(
+                label,
+                style: TextStyle(
+                  color: isSelected ? activeColor : inactiveColor,
+                  fontSize: 12,
+                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
-    ),
     );
   }
 

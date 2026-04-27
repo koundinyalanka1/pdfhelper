@@ -1,10 +1,10 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
+import '../services/ads_service.dart';
 import '../services/pdf_service.dart';
 import '../services/notification_service.dart';
 import '../providers/theme_provider.dart';
@@ -209,6 +209,13 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
             onPressed: () {
               Navigator.pop(ctx);
               nav.pop(true);
+              // User is truly finished here (not navigating into Share/Viewer),
+              // so this is the friendliest moment to show an interstitial.
+              AdsService.instance.maybeShowInterstitial(
+                trigger: widget.sourceType == PdfPreviewSourceType.merge
+                    ? 'merge_preview_close'
+                    : 'convert_preview_close',
+              );
             },
             child: Text(
               'Close',

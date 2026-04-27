@@ -1,11 +1,11 @@
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import '../models/selected_pdf_file.dart';
+import '../services/ads_service.dart';
 import '../services/pdf_service.dart';
 import '../providers/theme_provider.dart';
 import '../utils/format_utils.dart';
@@ -223,6 +223,7 @@ class _MergePdfScreenState extends State<MergePdfScreen>
             'Merged ${outputPaths.length} PDF${outputPaths.length > 1 ? "s" : ""}',
           );
           setState(() => _batches = [[]]);
+          AdsService.instance.maybeShowInterstitial(trigger: 'merge');
         } else {
           await Navigator.push(
             context,
@@ -464,8 +465,9 @@ class _MergePdfScreenState extends State<MergePdfScreen>
                         path = temp.path;
                       } catch (e) {
                         debugPrint('Error writing temp PDF: $e');
-                        if (mounted)
+                        if (mounted) {
                           _showSnackBar('Could not open PDF', isError: true);
+                        }
                         return;
                       }
                     }

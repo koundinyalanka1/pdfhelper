@@ -6,6 +6,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
+import '../services/ads_service.dart';
 import '../services/pdf_service.dart';
 import '../services/permission_service.dart';
 import '../providers/theme_provider.dart';
@@ -375,6 +376,7 @@ class _ConvertScreenState extends State<ConvertScreen>
           if (!mounted) return;
           _showSnackBar('PDF saved (${_capturedImages.length} page(s))');
           setState(() => _capturedImages.clear());
+          AdsService.instance.maybeShowInterstitial(trigger: 'convert');
         } else {
           await Navigator.push(
             context,

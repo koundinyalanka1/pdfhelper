@@ -1,4 +1,4 @@
-package com.example.pdfhelper
+package com.yourmateapps.pdfhelper
 
 import android.util.Log
 
