@@ -132,7 +132,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
             }
           },
           // fitZoom = whole page visible; coverZoom = page fills view (may crop)
-          calculateInitialZoom: (_, __, fitZoom, ___) => fitZoom,
+          calculateInitialZoom: (_, _, fitZoom, _) => fitZoom,
         ),
       ),
     );

@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../services/intent_service.dart';
 import '../utils/format_utils.dart';
