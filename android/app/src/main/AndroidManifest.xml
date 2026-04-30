@@ -126,7 +126,7 @@
              ca-app-pub-XXXXXXXXXXXXXXXX~YYYYYYYYYY before publishing. -->
         <meta-data
             android:name="com.google.android.gms.ads.APPLICATION_ID"
-            android:value="ca-app-pub-3940256099942544~3347511713"/>
+            android:value="ca-app-pub-2596031675923197~6127791234"/>
             
         <!-- File Provider for sharing files -->
         <provider

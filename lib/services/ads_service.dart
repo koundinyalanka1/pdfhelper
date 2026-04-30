@@ -40,13 +40,13 @@ class AdsService {
 
   // ---------- Test ad-unit IDs (Google's official, safe to ship in dev) ----------
   static String get bannerAdUnitId {
-    if (Platform.isAndroid) return 'ca-app-pub-3940256099942544/6300978111';
+    if (Platform.isAndroid) return 'ca-app-pub-2596031675923197/8869279306';
     if (Platform.isIOS) return 'ca-app-pub-3940256099942544/2934735716';
     return '';
   }
 
   static String get interstitialAdUnitId {
-    if (Platform.isAndroid) return 'ca-app-pub-3940256099942544/1033173712';
+    if (Platform.isAndroid) return 'ca-app-pub-2596031675923197/1158310245';
     if (Platform.isIOS) return 'ca-app-pub-3940256099942544/4411468910';
     return '';
   }
