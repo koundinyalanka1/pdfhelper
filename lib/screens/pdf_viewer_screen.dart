@@ -9,11 +9,7 @@ import 'home_screen.dart';
 
 /// Full-featured PDF viewer with zoom, pan, and page navigation.
 class PdfViewerScreen extends StatefulWidget {
-  const PdfViewerScreen({
-    super.key,
-    required this.pdfPath,
-    this.title,
-  });
+  const PdfViewerScreen({super.key, required this.pdfPath, this.title});
 
   final String pdfPath;
   final String? title;
@@ -26,12 +22,38 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
   final PdfViewerController _controller = PdfViewerController();
   int _currentPage = 1;
   int _totalPages = 0;
+  bool? _fileExists; // null = checking, true/false = result
 
   bool get _isDarkMode => context.watch<ThemeProvider>().isDarkMode;
   AppColors get _colors => AppColors(_isDarkMode);
 
   String get _fileName =>
       widget.title ?? widget.pdfPath.split(RegExp(r'[/\\]')).last;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkFileExists();
+  }
+
+  Future<void> _checkFileExists() async {
+    final exists = await File(widget.pdfPath).exists();
+    if (mounted) setState(() => _fileExists = exists);
+  }
+
+  /// Pop the viewer if there's a route to return to (e.g. preview or split
+  /// success dialog), otherwise fall back to HomeScreen — happens when the
+  /// app was launched directly via a PDF intent and the viewer is the root.
+  void _onBack() {
+    if (Navigator.of(context).canPop()) {
+      Navigator.pop(context);
+    } else {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const HomeScreen()),
+      );
+    }
+  }
 
   void _onViewerReady(PdfDocument document, PdfViewerController ctrl) {
     if (mounted) {
@@ -44,7 +66,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (!File(widget.pdfPath).existsSync()) {
+    if (_fileExists == false) {
       return Scaffold(
         backgroundColor: _colors.background,
         appBar: AppBar(
@@ -52,10 +74,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
           backgroundColor: Colors.transparent,
           leading: IconButton(
             icon: const Icon(Icons.arrow_back),
-            onPressed: () => Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(builder: (_) => const HomeScreen()),
-            ),
+            onPressed: _onBack,
             color: _colors.textPrimary,
           ),
         ),
@@ -87,10 +106,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (_) => const HomeScreen()),
-          ),
+          onPressed: _onBack,
           color: _colors.textPrimary,
         ),
         actions: [
@@ -100,10 +116,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: Text(
                   '$_currentPage / $_totalPages',
-                  style: TextStyle(
-                    color: _colors.textSecondary,
-                    fontSize: 14,
-                  ),
+                  style: TextStyle(color: _colors.textSecondary, fontSize: 14),
                 ),
               ),
             ),

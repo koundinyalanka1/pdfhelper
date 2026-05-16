@@ -164,7 +164,12 @@ class ThemeProvider extends ChangeNotifier {
     return null;
   }
 
-  /// Auto-save a file to the configured location
+  /// Auto-save a file to the configured location.
+  ///
+  /// On success the source file (typically in
+  /// `getApplicationDocumentsDirectory()`) is deleted so we don't keep two
+  /// copies on disk indefinitely. Callers should reference the returned path
+  /// (the saved copy) for any subsequent share/open operations.
   Future<String?> autoSaveFile(String sourcePath, String prefix) async {
     if (!_autoSave) return null;
 
@@ -183,9 +188,15 @@ class ThemeProvider extends ChangeNotifier {
       final fileName = '${prefix}_$timestamp.pdf';
       final destPath = '$savePath/$fileName';
 
-      // Copy file to save location
+      // Copy file to save location, then drop the source.
       final sourceFile = File(sourcePath);
       await sourceFile.copy(destPath);
+      try {
+        await sourceFile.delete();
+      } catch (e) {
+        // Non-fatal: caller still has a usable saved copy.
+        debugPrint('Auto-save: could not delete source $sourcePath: $e');
+      }
 
       return destPath;
     } catch (e) {

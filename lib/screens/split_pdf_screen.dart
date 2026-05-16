@@ -248,11 +248,9 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
 
         // OPTIMIZED: Extract all selected pages at once using cached bytes
         final themeProvider = context.read<ThemeProvider>();
-        final outputQuality = themeProvider.outputQuality;
         final String? outputPath = await PdfService.extractPagesFromBytes(
           _cachedPdfBytes!,
           sortedPages, // Already 0-based
-          outputQuality: outputQuality,
         );
 
         setState(() => _splitProgress = 0.9);
@@ -279,7 +277,6 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
         }
       } else if (_splitMode == 'range') {
         final themeProvider = context.read<ThemeProvider>();
-        final outputQuality = themeProvider.outputQuality;
         List<({int start, int end})> rangesToUse = [];
 
         if (_ranges.isNotEmpty) {
@@ -303,7 +300,6 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
         final outputPaths = await PdfService.splitPdfByRangesFromBytes(
           _cachedPdfBytes!,
           rangesToUse,
-          outputQuality: outputQuality,
         );
 
         setState(() => _splitProgress = 0.9);
@@ -336,12 +332,8 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
         });
 
         final themeProvider = context.read<ThemeProvider>();
-        final outputQuality = themeProvider.outputQuality;
         final List<String> outputPaths =
-            await PdfService.splitPdfAllPagesFromBytes(
-              _cachedPdfBytes!,
-              outputQuality: outputQuality,
-            );
+            await PdfService.splitPdfAllPagesFromBytes(_cachedPdfBytes!);
 
         setState(() => _splitProgress = 0.9);
 

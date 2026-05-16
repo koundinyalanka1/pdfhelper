@@ -37,11 +37,11 @@ class PdfService {
     return '${dir.path}/${prefix}_${DateTime.now().millisecondsSinceEpoch}.pdf';
   }
 
-  /// Merge PDFs from pre-loaded bytes
+  /// Merge PDFs from pre-loaded bytes.
+  /// Source PDF quality is preserved by design (no re-encode).
   static Future<String?> mergePdfsFromBytes(
-    List<Uint8List> pdfBytesList, {
-    String outputQuality = 'High',
-  }) async {
+    List<Uint8List> pdfBytesList,
+  ) async {
     if (pdfBytesList.length < 2) return null;
 
     try {
@@ -81,37 +81,16 @@ class PdfService {
 
   /// Merge multiple batches of PDFs - each batch becomes one output file
   static Future<List<String>> mergePdfsBatch(
-    List<List<Uint8List>> batches, {
-    String outputQuality = 'High',
-  }) async {
+    List<List<Uint8List>> batches,
+  ) async {
     final List<String> outputPaths = [];
     for (final batch in batches) {
       if (batch.length >= 2) {
-        final path = await mergePdfsFromBytes(
-          batch,
-          outputQuality: outputQuality,
-        );
+        final path = await mergePdfsFromBytes(batch);
         if (path != null) outputPaths.add(path);
       }
     }
     return outputPaths;
-  }
-
-  /// Merge multiple PDF files into one
-  static Future<String?> mergePdfs(
-    List<String> pdfPaths, {
-    String outputQuality = 'High',
-  }) async {
-    if (pdfPaths.length < 2) return null;
-    try {
-      final bytesList = await Future.wait(
-        pdfPaths.map((p) => File(p).readAsBytes()),
-      );
-      return mergePdfsFromBytes(bytesList, outputQuality: outputQuality);
-    } catch (e) {
-      debugPrint('Error merging PDFs: $e');
-      return null;
-    }
   }
 
   /// Convert images to PDF.
@@ -174,17 +153,11 @@ class PdfService {
   static Future<String?> splitPdfByRange(
     String pdfPath,
     int startPage,
-    int endPage, {
-    String outputQuality = 'High',
-  }) async {
+    int endPage,
+  ) async {
     try {
       final bytes = await File(pdfPath).readAsBytes();
-      return splitPdfByRangeFromBytes(
-        bytes,
-        startPage,
-        endPage,
-        outputQuality: outputQuality,
-      );
+      return splitPdfByRangeFromBytes(bytes, startPage, endPage);
     } catch (e) {
       debugPrint('Error splitting PDF: $e');
       return null;
@@ -194,29 +167,27 @@ class PdfService {
   /// Split PDF into multiple ranges - each range becomes one output file
   static Future<List<String>> splitPdfByRangesFromBytes(
     Uint8List pdfBytes,
-    List<({int start, int end})> ranges, {
-    String outputQuality = 'High',
-  }) async {
+    List<({int start, int end})> ranges,
+  ) async {
     final List<String> outputPaths = [];
     for (final range in ranges) {
       final path = await splitPdfByRangeFromBytes(
         pdfBytes,
         range.start,
         range.end,
-        outputQuality: outputQuality,
       );
       if (path != null) outputPaths.add(path);
     }
     return outputPaths;
   }
 
-  /// Split PDF by page range from pre-loaded bytes
+  /// Split PDF by page range from pre-loaded bytes.
+  /// Source quality is preserved by design (no re-encode).
   static Future<String?> splitPdfByRangeFromBytes(
     Uint8List pdfBytes,
     int startPage,
-    int endPage, {
-    String outputQuality = 'High',
-  }) async {
+    int endPage,
+  ) async {
     try {
       final sourceDoc = await PdfDocument.openData(
         pdfBytes,
@@ -248,12 +219,12 @@ class PdfService {
     }
   }
 
-  /// Extract multiple specific pages into one PDF
+  /// Extract multiple specific pages into one PDF.
+  /// Source quality is preserved by design (no re-encode).
   static Future<String?> extractPagesFromBytes(
     Uint8List pdfBytes,
-    List<int> pageIndices, {
-    String outputQuality = 'High',
-  }) async {
+    List<int> pageIndices,
+  ) async {
     try {
       final sourceDoc = await PdfDocument.openData(
         pdfBytes,
@@ -290,24 +261,21 @@ class PdfService {
   }
 
   /// Split PDF into individual pages
-  static Future<List<String>> splitPdfAllPages(
-    String pdfPath, {
-    String outputQuality = 'High',
-  }) async {
+  static Future<List<String>> splitPdfAllPages(String pdfPath) async {
     try {
       final bytes = await File(pdfPath).readAsBytes();
-      return splitPdfAllPagesFromBytes(bytes, outputQuality: outputQuality);
+      return splitPdfAllPagesFromBytes(bytes);
     } catch (e) {
       debugPrint('Error splitting PDF into pages: $e');
       return [];
     }
   }
 
-  /// Split PDF into individual pages from cached bytes
+  /// Split PDF into individual pages from cached bytes.
+  /// Source quality is preserved by design (no re-encode).
   static Future<List<String>> splitPdfAllPagesFromBytes(
-    Uint8List pdfBytes, {
-    String outputQuality = 'High',
-  }) async {
+    Uint8List pdfBytes,
+  ) async {
     final List<String> outputPaths = [];
 
     try {
@@ -406,20 +374,29 @@ class PdfService {
     }
   }
 
-  /// Load page preview thumbnails for a PDF file (for preview screen)
+  /// Load page preview thumbnails for a PDF file (for preview/grid screens).
+  ///
+  /// These are grid thumbnails — never displayed larger than ~half the
+  /// screen — so we render at ~400px on the long side and use moderate JPEG
+  /// quality. A 30-page PDF previously held ~30–60MB of decoded bitmaps; this
+  /// keeps the entire grid well under ~5MB.
   static Future<List<Uint8List?>> loadPagePreviews(String pdfPath) async {
     try {
       final doc = await PdfDocument.openFile(pdfPath);
       await doc.loadPagesProgressively();
       final List<Uint8List?> previews = [];
+      const maxLongEdge = 400.0;
       for (final page in doc.pages) {
-        final w = (page.width * 1.0).round().clamp(350, 1500).toDouble();
-        final h = (page.height * 1.0).round().clamp(350, 1700).toDouble();
+        final pw = page.width;
+        final ph = page.height;
+        final scale = pw >= ph ? maxLongEdge / pw : maxLongEdge / ph;
+        final w = (pw * scale).clamp(120.0, maxLongEdge);
+        final h = (ph * scale).clamp(120.0, maxLongEdge);
         final pageImage = await page.render(fullWidth: w, fullHeight: h);
         Uint8List? bytes;
         if (pageImage != null) {
           final imgObj = pageImage.createImageNF();
-          bytes = Uint8List.fromList(img.encodeJpg(imgObj, quality: 92));
+          bytes = Uint8List.fromList(img.encodeJpg(imgObj, quality: 80));
           pageImage.dispose();
         }
         previews.add(bytes);

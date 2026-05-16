@@ -175,7 +175,6 @@ class _MergePdfScreenState extends State<MergePdfScreen>
 
     try {
       final themeProvider = context.read<ThemeProvider>();
-      final outputQuality = themeProvider.outputQuality;
 
       // Build batch bytes
       final List<List<Uint8List>> batchBytesList = [];
@@ -197,10 +196,16 @@ class _MergePdfScreenState extends State<MergePdfScreen>
         _mergeStatus = 'Merging ${batchBytesList.length} batch(es)...';
       });
 
-      final outputPaths = await PdfService.mergePdfsBatch(
-        batchBytesList,
-        outputQuality: outputQuality,
-      );
+      final outputPaths = await PdfService.mergePdfsBatch(batchBytesList);
+
+      // Free input bytes ASAP — for several large PDFs these dominate heap
+      // and we no longer need them once the merged file is on disk.
+      batchBytesList.clear();
+      for (final batch in _batches) {
+        for (final file in batch) {
+          file.cachedBytes = null;
+        }
+      }
 
       setState(() {
         _mergeProgress = 0.8;

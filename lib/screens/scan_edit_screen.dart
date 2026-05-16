@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -80,55 +82,90 @@ img.Image applyAutoEnhance(img.Image image) {
 }
 
 /// CamScanner-style document filter
-/// Creates clean white background with crisp dark text
+/// Creates clean white background with crisp dark text.
+///
+/// Performance: the previous implementation iterated a 31x31 (step-3) window
+/// per pixel — ~120 random reads per pixel, freezing the isolate for many
+/// seconds on large photos. This version:
+///   1. Downscales the input to a max dimension of 1500 px (still enough for
+///      sharp document text in the final JPEG/PDF).
+///   2. Builds integral images (summed-area tables) of the grayscale values
+///      and their squares, so each window's mean and variance are O(1).
+/// Local contrast is approximated by std-deviation/50 instead of (max-min)/255
+/// — a close enough proxy that retains the original "low-contrast = background"
+/// behaviour without an O(window^2) min/max scan.
 img.Image applyDocumentFilter(img.Image image) {
-  final width = image.width;
-  final height = image.height;
+  const int maxDim = 1500;
+  img.Image src = image;
+  if (image.width > maxDim || image.height > maxDim) {
+    if (image.width >= image.height) {
+      src = img.copyResize(image, width: maxDim);
+    } else {
+      src = img.copyResize(image, height: maxDim);
+    }
+  }
 
-  // Step 1: Convert to grayscale for analysis
-  img.Image grayImage = img.grayscale(
-    img.copyResize(image, width: width, height: height),
-  );
+  final int width = src.width;
+  final int height = src.height;
+  final int n = width * height;
 
-  // Step 2: Calculate adaptive threshold using local mean
-  // This helps separate text from background
-  final int blockSize = 15;
-
-  // Step 3: Process the image with background whitening
-  img.Image result = img.Image(width: width, height: height);
+  // Grayscale + integral image of grayscale + integral image of grayscale^2.
+  // Int64List avoids overflow on sum-of-squares for large inputs
+  // (255^2 * 1500 * 1500 ~ 1.46e11, exceeds int32).
+  final Uint8List gray = Uint8List(n);
+  final Int64List sat = Int64List(n);
+  final Int64List sat2 = Int64List(n);
 
   for (int y = 0; y < height; y++) {
+    int rowSum = 0;
+    int rowSum2 = 0;
+    final int yOff = y * width;
     for (int x = 0; x < width; x++) {
-      final pixel = image.getPixel(x, y);
-      final grayPixel = grayImage.getPixel(x, y);
+      final p = src.getPixel(x, y);
+      // Rec. 601 luma
+      final int g = (0.299 * p.r + 0.587 * p.g + 0.114 * p.b).toInt() & 0xFF;
+      gray[yOff + x] = g;
+      rowSum += g;
+      rowSum2 += g * g;
+      final int above = y > 0 ? sat[yOff - width + x] : 0;
+      final int above2 = y > 0 ? sat2[yOff - width + x] : 0;
+      sat[yOff + x] = above + rowSum;
+      sat2[yOff + x] = above2 + rowSum2;
+    }
+  }
 
-      // Get luminance value
-      final int luminance = grayPixel.r.toInt();
+  int areaSum(int x0, int y0, int x1, int y1, Int64List s) {
+    int total = s[y1 * width + x1];
+    if (x0 > 0) total -= s[y1 * width + (x0 - 1)];
+    if (y0 > 0) total -= s[(y0 - 1) * width + x1];
+    if (x0 > 0 && y0 > 0) total += s[(y0 - 1) * width + (x0 - 1)];
+    return total;
+  }
 
-      // Calculate local region statistics for adaptive thresholding
-      int localSum = 0;
-      int count = 0;
-      int minVal = 255;
-      int maxVal = 0;
+  const int block = 15;
+  final result = img.Image(width: width, height: height);
 
-      for (int dy = -blockSize; dy <= blockSize; dy += 3) {
-        for (int dx = -blockSize; dx <= blockSize; dx += 3) {
-          final int nx = (x + dx).clamp(0, width - 1);
-          final int ny = (y + dy).clamp(0, height - 1);
-          final int val = grayImage.getPixel(nx, ny).r.toInt();
-          localSum += val;
-          count++;
-          if (val < minVal) minVal = val;
-          if (val > maxVal) maxVal = val;
-        }
-      }
+  for (int y = 0; y < height; y++) {
+    final int y0 = (y - block).clamp(0, height - 1);
+    final int y1 = (y + block).clamp(0, height - 1);
+    final int yOff = y * width;
+    for (int x = 0; x < width; x++) {
+      final int x0 = (x - block).clamp(0, width - 1);
+      final int x1 = (x + block).clamp(0, width - 1);
+      final int area = (x1 - x0 + 1) * (y1 - y0 + 1);
+      final int s = areaSum(x0, y0, x1, y1, sat);
+      final int s2 = areaSum(x0, y0, x1, y1, sat2);
+      final double mean = s / area;
+      final double variance = (s2 / area) - mean * mean;
+      final double stdDev = variance > 0 ? math.sqrt(variance) : 0.0;
+      // Map std-dev (~0..70 typical) to 0..1 contrast metric, replacing the
+      // old (maxVal - minVal) / 255 measurement.
+      final double localContrast = (stdDev / 50.0).clamp(0.0, 1.0);
 
-      final double localMean = localSum / count;
-      final double localContrast = (maxVal - minVal) / 255.0;
+      final int luminance = gray[yOff + x];
+      final double threshold = mean * 0.85 - 8;
 
-      // Adaptive threshold - considers local contrast
-      final double threshold = localMean * 0.85 - 8;
-
+      final pixel = src.getPixel(x, y);
       int newR, newG, newB;
 
       if (localContrast < 0.15) {
@@ -137,7 +174,7 @@ img.Image applyDocumentFilter(img.Image image) {
         newG = 255;
         newB = 255;
       } else if (luminance < threshold) {
-        // Dark pixel (text) - make it darker and preserve some color hint
+        // Dark pixel (text) - make it darker, preserve some color hint
         final double factor = 0.3 + (luminance / 255.0) * 0.4;
         newR = (pixel.r * factor).clamp(0, 80).toInt();
         newG = (pixel.g * factor).clamp(0, 80).toInt();
@@ -155,14 +192,12 @@ img.Image applyDocumentFilter(img.Image image) {
     }
   }
 
-  // Step 4: Apply slight sharpening to crisp up text edges
-  result = img.convolution(
+  // Slight sharpening to crisp up text edges.
+  return img.convolution(
     result,
     filter: [0, -0.8, 0, -0.8, 4.2, -0.8, 0, -0.8, 0],
     div: 1,
   );
-
-  return result;
 }
 
 /// Magic Color filter - enhanced colors like CamScanner
@@ -533,14 +568,22 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
         leading: IconButton(
           icon: Icon(Icons.close, color: _colors.textPrimary),
           onPressed: () {
-            // Delete the captured image and go back
-            try {
-              File(widget.imagePath).deleteSync();
-              if (_currentImagePath != widget.imagePath) {
-                File(_currentImagePath).deleteSync();
-              }
-            } catch (e) {
-              debugPrint('Error deleting: $e');
+            // Delete the captured image asynchronously and go back.
+            final originalPath = widget.imagePath;
+            final currentPath = _currentImagePath;
+            unawaited(
+              File(originalPath).delete().catchError((Object e) {
+                debugPrint('Error deleting: $e');
+                return File(originalPath);
+              }),
+            );
+            if (currentPath != originalPath) {
+              unawaited(
+                File(currentPath).delete().catchError((Object e) {
+                  debugPrint('Error deleting: $e');
+                  return File(currentPath);
+                }),
+              );
             }
             Navigator.pop(context);
           },

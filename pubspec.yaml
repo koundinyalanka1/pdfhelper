@@ -2,7 +2,7 @@ name: pdfhelper
 description: "A PDF toolkit app for merging, splitting, and converting images to PDF."
 publish_to: 'none'
 
-version: 2.0.0+2
+version: 3.0.0+3
 
 environment:
   sdk: ">=3.10.4 <4.0.0"

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -22,6 +23,7 @@ class PermissionService {
       if (!context.mounted) return false;
       return await _showSettingsDialog(
         context: context,
+        permission: permission,
         title: deniedTitle,
         message: deniedMessage,
         settingsButtonText: settingsButtonText,
@@ -58,6 +60,7 @@ class PermissionService {
     if (status.isPermanentlyDenied && context.mounted) {
       return await _showSettingsDialog(
         context: context,
+        permission: permission,
         title: deniedTitle,
         message: deniedMessage,
         settingsButtonText: settingsButtonText,
@@ -69,6 +72,7 @@ class PermissionService {
 
   static Future<bool> _showSettingsDialog({
     required BuildContext context,
+    required Permission permission,
     required String title,
     required String message,
     required String settingsButtonText,
@@ -86,19 +90,39 @@ class PermissionService {
             child: Text(cancelButtonText),
           ),
           FilledButton(
-            onPressed: () {
-              Navigator.pop(ctx, true);
-              openAppSettings();
-            },
+            onPressed: () => Navigator.pop(ctx, true),
             child: Text(settingsButtonText),
           ),
         ],
       ),
     );
     if (result != true) return false;
-    // User tapped Settings - wait for return and recheck
-    await Future.delayed(const Duration(milliseconds: 500));
-    return false; // Caller should re-check permission after settings
+
+    // Open the OS app-info screen, then wait for the app to resume so we can
+    // re-check the permission. permission_handler's openAppSettings() returns
+    // as soon as the settings UI is launched, NOT when the user comes back —
+    // so we register a one-shot lifecycle observer.
+    await openAppSettings();
+    await _waitForAppResume();
+    return await permission.isGranted;
+  }
+
+  /// Resolves the next time the app transitions back to [AppLifecycleState.resumed].
+  /// Caps at 60s so a misbehaving platform never deadlocks the future.
+  static Future<void> _waitForAppResume() {
+    final completer = Completer<void>();
+    late final _ResumeObserver observer;
+    observer = _ResumeObserver(() {
+      if (!completer.isCompleted) completer.complete();
+      WidgetsBinding.instance.removeObserver(observer);
+    });
+    WidgetsBinding.instance.addObserver(observer);
+    return completer.future.timeout(
+      const Duration(seconds: 60),
+      onTimeout: () {
+        WidgetsBinding.instance.removeObserver(observer);
+      },
+    );
   }
 
   /// Check if permission is permanently denied (user must open settings).
@@ -111,5 +135,15 @@ class PermissionService {
   static Future<bool> isGranted(Permission permission) async {
     final status = await permission.status;
     return status.isGranted;
+  }
+}
+
+class _ResumeObserver extends WidgetsBindingObserver {
+  _ResumeObserver(this._onResumed);
+  final VoidCallback _onResumed;
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _onResumed();
   }
 }

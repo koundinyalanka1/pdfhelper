@@ -486,14 +486,17 @@ class _ConvertScreenState extends State<ConvertScreen>
   }
 
   void _removeImage(int index) {
+    final path = _capturedImages[index];
     setState(() {
-      try {
-        File(_capturedImages[index]).deleteSync();
-      } catch (e) {
-        debugPrint('Error deleting file: $e');
-      }
       _capturedImages.removeAt(index);
     });
+    // Delete asynchronously off the UI thread.
+    unawaited(
+      File(path).delete().catchError((Object e) {
+        debugPrint('Error deleting file: $e');
+        return File(path);
+      }),
+    );
   }
 
   void _editImage(int index) {
