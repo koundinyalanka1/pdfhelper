@@ -29,11 +29,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
-    PackageInfo.fromPlatform().then((info) {
-      if (mounted) {
-        setState(() => _appVersion = '${info.version}+${info.buildNumber}');
-      }
-    });
+    // A version string is decoration; failing to read one must not take the
+    // whole Settings tab down with an unhandled async error.
+    PackageInfo.fromPlatform()
+        .then((info) {
+          if (mounted) {
+            setState(() => _appVersion = '${info.version}+${info.buildNumber}');
+          }
+        })
+        .catchError((Object e) {
+          debugPrint('[Settings] could not read package info: $e');
+        });
   }
 
   Future<void> _handleNotificationToggle(bool value) async {
@@ -97,13 +103,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Scaffold(
       backgroundColor: _colors.background,
       appBar: AppBar(
-        backgroundColor: Colors.transparent,
+        backgroundColor: _colors.cardBackground,
         elevation: 0,
+        // A destination in the bottom bar, not a pushed route: there is
+        // nothing above it to go back to.
+        automaticallyImplyLeading: false,
         title: Text(
           'Settings',
           style: TextStyle(
             color: _colors.textPrimary,
-            fontWeight: FontWeight.w600,
+            fontSize: 20,
+            fontWeight: FontWeight.w700,
           ),
         ),
         centerTitle: true,

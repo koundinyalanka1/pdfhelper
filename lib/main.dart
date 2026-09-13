@@ -1,17 +1,23 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
-import 'package:pdfrx/pdfrx.dart';
 import 'screens/splash_screen.dart';
 import 'providers/theme_provider.dart';
+import 'services/firebase_service.dart';
 import 'services/notification_service.dart';
+import 'services/pdf_core_service.dart';
 import 'widgets/pdf_intent_listener.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize pdfrx (required before any PDF operations)
-  pdfrxFlutterInitialize();
+  // Crash reporting first: anything that fails during the rest of startup
+  // should be reported rather than lost. Safe if the config file is missing.
+  await FirebaseService.initialize();
+
+  // Resolve the native PDF core once. Never throws — screens check
+  // PdfCoreService.isAvailable and explain themselves if it is missing.
+  await PdfCoreService.probe();
 
   // Initialize notifications
   await NotificationService().initialize();

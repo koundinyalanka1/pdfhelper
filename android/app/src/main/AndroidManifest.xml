@@ -6,9 +6,24 @@
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
     
-    <!-- Storage: app-private dirs + SAF (file_picker) need no broad storage perms.
-         READ_MEDIA_IMAGES is still required for the gallery picker on Android 13+. -->
+    <!-- Gallery picker on Android 13+. -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
+
+    <!-- The Files tab lists every PDF on the device, which is what a document
+         reader is for. Android 11+ gates that behind All files access; older
+         releases only need READ_EXTERNAL_STORAGE, which is capped at API 32
+         because it does nothing after that.
+
+         Both are optional at runtime: without them the app still works and
+         the Files tab shows its own documents, says so, and offers the grant.
+
+         Play Console note: MANAGE_EXTERNAL_STORAGE requires a Permissions
+         Declaration. The applicable use case is "File manager / document
+         management app" — see the pre-publish checklist in README.md. -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32"/>
 
     <!-- Notification permission (Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>

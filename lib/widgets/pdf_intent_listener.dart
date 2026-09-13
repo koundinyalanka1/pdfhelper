@@ -90,7 +90,10 @@ class _PdfIntentListenerState extends State<PdfIntentListener> {
         case PdfIntentAction.merge:
           widget.navigatorKey.currentState!.pushAndRemoveUntil(
             MaterialPageRoute(
-              builder: (_) => HomeScreen(initialPdfPath: path, initialTab: 0),
+              builder: (_) => HomeScreen(
+                initialPdfPath: path,
+                initialAction: DocHandoff.merge,
+              ),
             ),
             (route) => false,
           );
@@ -98,7 +101,10 @@ class _PdfIntentListenerState extends State<PdfIntentListener> {
         case PdfIntentAction.split:
           widget.navigatorKey.currentState!.pushAndRemoveUntil(
             MaterialPageRoute(
-              builder: (_) => HomeScreen(initialPdfPath: path, initialTab: 2),
+              builder: (_) => HomeScreen(
+                initialPdfPath: path,
+                initialAction: DocHandoff.split,
+              ),
             ),
             (route) => false,
           );

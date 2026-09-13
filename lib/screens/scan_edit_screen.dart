@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:image/image.dart' as img;
 import 'package:crop_your_image/crop_your_image.dart';
+
+import '../utils/error_logger.dart';
 import 'package:path_provider/path_provider.dart';
 import '../providers/theme_provider.dart';
 
@@ -931,7 +933,12 @@ class _CropScreenState extends State<_CropScreen> {
                   maskColor: _isDarkMode
                       ? Colors.black.withValues(alpha: 0.7)
                       : Colors.white.withValues(alpha: 0.7),
-                  initialSize: 0.9,
+                  // crop_your_image 2 folded initialArea/initialSize into
+                  // initialRectBuilder.
+                  initialRectBuilder: InitialRectBuilder.withSizeAndRatio(
+                    size: 0.9,
+                    aspectRatio: _aspectRatio,
+                  ),
                   onStatusChanged: (status) {
                     if (status == CropStatus.cropping) {
                       setState(() => _isCropping = true);
@@ -946,9 +953,22 @@ class _CropScreenState extends State<_CropScreen> {
                       border: Border.all(color: Colors.white, width: 2),
                     ),
                   ),
-                  onCropped: (croppedImage) {
+                  // crop_your_image 2 reports a CropResult rather than raw
+                  // bytes, so a failed crop is now visible instead of being
+                  // popped back as an unusable value.
+                  onCropped: (result) {
                     setState(() => _isCropping = false);
-                    Navigator.pop(context, croppedImage);
+                    switch (result) {
+                      case CropSuccess(:final croppedImage):
+                        Navigator.pop(context, croppedImage);
+                      case CropFailure(:final cause):
+                        logError('CropScreen', cause);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Could not crop that image.'),
+                          ),
+                        );
+                    }
                   },
                 ),
               ),

@@ -89,12 +89,8 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
     });
     try {
       final path = widget.filePaths[idx];
-      final results = await Future.wait([
-        PdfService.loadPagePreviews(path),
-        PdfService.getFirstPageAspectRatio(path),
-      ]);
-      final previews = results[0] as List<Uint8List?>;
-      final aspectRatio = results[1] as double?;
+      final aspectRatio = await PdfService.getFirstPageAspectRatio(path);
+      final previews = await PdfService.loadPagePreviews(path);
       if (mounted) {
         setState(() {
           _previews = previews;
@@ -226,11 +222,13 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
             onPressed: () {
               Navigator.pop(ctx);
               nav.pop(true);
-              Share.shareXFiles(
-                shareFiles.map((p) => XFile(p)).toList(),
-                text: widget.sourceType == PdfPreviewSourceType.merge
-                    ? 'Merged PDFs'
-                    : 'Scanned PDF',
+              SharePlus.instance.share(
+                ShareParams(
+                  files: shareFiles.map((p) => XFile(p)).toList(),
+                  text: widget.sourceType == PdfPreviewSourceType.merge
+                      ? 'Merged PDFs'
+                      : 'Scanned PDF',
+                ),
               );
             },
             child: const Text(

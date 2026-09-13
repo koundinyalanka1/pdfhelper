@@ -20,3 +20,25 @@ String getPdfDisplayTitle(String path) {
   if (stripped == 'opened.pdf') return 'View PDF';
   return stripped;
 }
+
+const List<String> _monthAbbreviations = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
+
+/// Date label for the Files library.
+///
+/// Short form drops the year for dates in [now]'s year, the way a file
+/// listing does — "Sep 12" this year, "Mar 2024" for anything older. [now] is
+/// injectable so the rollover is testable rather than dependent on the clock.
+String formatLibraryDate(DateTime date, {bool long = false, DateTime? now}) {
+  final month = _monthAbbreviations[date.month - 1];
+  if (long) {
+    final hour = date.hour.toString().padLeft(2, '0');
+    final minute = date.minute.toString().padLeft(2, '0');
+    return '$month ${date.day}, ${date.year} at $hour:$minute';
+  }
+  final reference = now ?? DateTime.now();
+  if (date.year == reference.year) return '$month ${date.day}';
+  return '$month ${date.year}';
+}

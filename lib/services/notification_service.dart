@@ -17,10 +17,15 @@ class NotificationService {
 
     const AndroidInitializationSettings androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
     
+    // Deliberately does NOT request permission here. main() awaits
+    // initialize(), and asking at this point put a system alert in front of a
+    // blank launch screen before the user had seen the app at all — and on
+    // iOS startup blocked until they answered it. Permission is requested at
+    // the moment a notification is actually needed, see [requestPermission].
     const DarwinInitializationSettings iosSettings = DarwinInitializationSettings(
-      requestAlertPermission: true,
-      requestBadgePermission: true,
-      requestSoundPermission: true,
+      requestAlertPermission: false,
+      requestBadgePermission: false,
+      requestSoundPermission: false,
     );
 
     const InitializationSettings settings = InitializationSettings(
@@ -28,7 +33,7 @@ class NotificationService {
       iOS: iosSettings,
     );
 
-    await _notifications.initialize(settings);
+    await _notifications.initialize(settings: settings);
     _isInitialized = true;
     
     // Check if we already have permission
@@ -39,9 +44,11 @@ class NotificationService {
     if (Platform.isAndroid) {
       final status = await Permission.notification.status;
       _hasPermission = status.isGranted;
-    } else {
-      _hasPermission = true; // iOS handles this during initialization
+      return;
     }
+    // iOS: not granted until asked. Leaving this optimistically true made
+    // every just-in-time check below a no-op.
+    _hasPermission = false;
   }
 
   /// Check if notification permission is granted
@@ -49,16 +56,27 @@ class NotificationService {
     if (Platform.isAndroid) {
       final status = await Permission.notification.status;
       _hasPermission = status.isGranted;
-      return _hasPermission;
     }
-    return true;
+    return _hasPermission;
   }
 
-  /// Request notification permission and return if granted
+  /// Request notification permission and return if granted.
+  ///
+  /// Called the first time a notification would actually be shown, and from
+  /// the Settings toggle — never at startup.
   Future<bool> requestPermission() async {
     if (Platform.isAndroid) {
       final status = await Permission.notification.request();
       _hasPermission = status.isGranted;
+      return _hasPermission;
+    }
+    if (Platform.isIOS) {
+      final granted = await _notifications
+          .resolvePlatformSpecificImplementation<
+            IOSFlutterLocalNotificationsPlugin
+          >()
+          ?.requestPermissions(alert: true, badge: true, sound: true);
+      _hasPermission = granted ?? false;
       return _hasPermission;
     }
     return true;
@@ -101,10 +119,10 @@ class NotificationService {
     );
 
     await _notifications.show(
-      DateTime.now().millisecondsSinceEpoch ~/ 1000,
-      title,
-      body,
-      details,
+      id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      title: title,
+      body: body,
+      notificationDetails: details,
       payload: payload,
     );
   }

@@ -2,7 +2,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import '../models/selected_pdf_file.dart';
 import '../services/ads_service.dart';
@@ -70,21 +69,27 @@ class _MergePdfScreenState extends State<MergePdfScreen>
 
   Future<void> _pickPdfFiles() async {
     try {
-      FilePickerResult? result = await FilePicker.platform.pickFiles(
+      // file_picker 12: pickFiles is static and returns the selected files
+      // directly — an empty list on cancel, never null.
+      final List<PlatformFile> result = await FilePicker.pickFiles(
         type: FileType.custom,
         allowedExtensions: ['pdf'],
-        allowMultiple: true,
       );
 
-      if (result != null && result.files.isNotEmpty) {
+      if (result.isNotEmpty) {
         // Add all files immediately with loading state
         final List<SelectedPdfFile> newFiles = [];
-        for (var file in result.files) {
+        for (var file in result) {
           if (file.path != null) {
             final newFile = SelectedPdfFile(
               path: file.path!,
               name: file.name,
-              fileSize: file.size,
+              // file_picker 12 replaced `size` with lengthSync(), which
+              // returns null when the platform picker didn't report a size
+              // rather than doing I/O for it. SelectedPdfFile.fileSize is
+              // already nullable and the card renders "0 B" for null, so the
+              // list still appears instantly.
+              fileSize: file.lengthSync(),
               isLoading: true,
             );
             newFiles.add(newFile);
@@ -108,16 +113,12 @@ class _MergePdfScreenState extends State<MergePdfScreen>
 
   Future<void> _loadPdfDetails(SelectedPdfFile file) async {
     try {
-      final Uint8List pdfBytes = await File(file.path).readAsBytes();
-
-      if (mounted) {
-        setState(() => file.cachedBytes = pdfBytes);
-      }
-
+      // The native core reads the file itself, so nothing is buffered here —
+      // this used to hold every selected PDF in memory at once.
       final results = await Future.wait([
-        PdfService.getPageCountFromBytes(pdfBytes),
-        PdfService.generateThumbnail(pdfBytes),
-        PdfService.getFirstPageAspectRatioFromBytes(pdfBytes),
+        PdfService.getPageCount(file.path),
+        PdfService.generateThumbnail(file.path),
+        PdfService.getFirstPageAspectRatio(file.path),
       ]);
       final pageCount = results[0] as int;
       final thumbnail = results[1] as Uint8List?;
@@ -176,35 +177,28 @@ class _MergePdfScreenState extends State<MergePdfScreen>
     try {
       final themeProvider = context.read<ThemeProvider>();
 
-      // Build batch bytes
-      final List<List<Uint8List>> batchBytesList = [];
-      for (final batch in _batches) {
-        if (batch.length < 2) continue;
-        final List<Uint8List> bytes = [];
-        for (final file in batch) {
-          if (file.cachedBytes != null) {
-            bytes.add(file.cachedBytes!);
-          } else {
-            bytes.add(await File(file.path).readAsBytes());
-          }
-        }
-        batchBytesList.add(bytes);
-      }
+      // Group the mergeable batches by *path*: the native core streams files
+      // from disk, so it never needs the bytes we cached for thumbnails.
+      final List<List<SelectedPdfFile>> mergeable =
+          _batches.where((b) => b.length >= 2).toList();
 
       setState(() {
         _mergeProgress = 0.2;
-        _mergeStatus = 'Merging ${batchBytesList.length} batch(es)...';
+        _mergeStatus = 'Merging ${mergeable.length} batch(es)...';
       });
 
-      final outputPaths = await PdfService.mergePdfsBatch(batchBytesList);
-
-      // Free input bytes ASAP — for several large PDFs these dominate heap
-      // and we no longer need them once the merged file is on disk.
-      batchBytesList.clear();
-      for (final batch in _batches) {
-        for (final file in batch) {
-          file.cachedBytes = null;
-        }
+      final List<String> outputPaths = [];
+      for (int i = 0; i < mergeable.length; i++) {
+        final batch = mergeable[i];
+        final path = await PdfService.mergeFiles(
+          batch.map((f) => f.path).toList(),
+        );
+        if (path != null) outputPaths.add(path);
+        if (!mounted) return;
+        setState(() {
+          _mergeProgress = 0.2 + 0.6 * ((i + 1) / mergeable.length);
+          _mergeStatus = 'Merged ${i + 1} of ${mergeable.length}...';
+        });
       }
 
       setState(() {
@@ -457,34 +451,20 @@ class _MergePdfScreenState extends State<MergePdfScreen>
                 label: 'View ${file.name}',
                 button: true,
                 child: IconButton(
-                  onPressed: () async {
+                  onPressed: () {
                     HapticFeedback.lightImpact();
-                    String path = file.path;
-                    if (!File(path).existsSync() && file.cachedBytes != null) {
-                      try {
-                        final dir = await getTemporaryDirectory();
-                        final temp = File(
-                          '${dir.path}/view_${DateTime.now().millisecondsSinceEpoch}.pdf',
-                        );
-                        await temp.writeAsBytes(file.cachedBytes!);
-                        path = temp.path;
-                      } catch (e) {
-                        debugPrint('Error writing temp PDF: $e');
-                        if (mounted) {
-                          _showSnackBar('Could not open PDF', isError: true);
-                        }
-                        return;
-                      }
+                    if (!File(file.path).existsSync()) {
+                      _showSnackBar('That file is no longer available',
+                          isError: true);
+                      return;
                     }
-                    if (mounted) {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) =>
-                              PdfViewerScreen(pdfPath: path, title: file.name),
-                        ),
-                      );
-                    }
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) =>
+                            PdfViewerScreen(pdfPath: file.path, title: file.name),
+                      ),
+                    );
                   },
                   icon: Icon(
                     Icons.visibility_rounded,

@@ -10,7 +10,12 @@ plugins {
 
 android {
     namespace = "com.yourmateapps.pdfhelper"
-    compileSdk = flutter.compileSdkVersion
+    // Pinned ahead of flutter.compileSdkVersion (36): permission_handler_android
+    // 14 compiles against SDK 37, and Gradle warns on every build until the app
+    // matches the highest SDK its plugins need. Android SDKs are backward
+    // compatible, so this does not change what the app runs on — targetSdk and
+    // minSdk still follow Flutter.
+    compileSdk = 37
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
@@ -20,22 +25,38 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_17.toString()
-    }
+}
 
+// Kotlin 2.3 removed the string-valued `kotlinOptions.jvmTarget`; the
+// compilerOptions DSL with a typed JvmTarget is the replacement. It lives
+// outside the `android` block because it configures the Kotlin plugin, not AGP.
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+    }
+}
+
+android {
+
+    // Release signing is configured only when android/key.properties exists.
+    // Reading the properties unconditionally used to fail *every* build,
+    // debug included, on a fresh clone with "null cannot be cast to
+    // non-null type kotlin.String".
     val keystorePropertiesFile = rootProject.file("key.properties")
     val keystoreProperties = Properties()
-    if (keystorePropertiesFile.exists()) {
-        keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+    val hasKeystore = keystorePropertiesFile.exists()
+    if (hasKeystore) {
+        FileInputStream(keystorePropertiesFile).use { keystoreProperties.load(it) }
     }
 
     signingConfigs {
-        create("release") {
-            keyAlias = keystoreProperties["keyAlias"] as String
-            keyPassword = keystoreProperties["keyPassword"] as String
-            storeFile = file(keystoreProperties["storeFile"] as String)
-            storePassword = keystoreProperties["storePassword"] as String
+        if (hasKeystore) {
+            create("release") {
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+                storeFile = file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+            }
         }
     }
 
@@ -53,8 +74,35 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Installs as com.yourmateapps.pdfhelper.debug, so a development
+            // build can sit alongside the published app on the same phone
+            // instead of demanding an uninstall (which would take the released
+            // app's data with it). Everything that keys off applicationId —
+            // the FileProvider authority, for one — follows automatically.
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+        }
+
         release {
-            signingConfig = signingConfigs.getByName("release")
+            // Without key.properties this falls through to the debug key, so
+            // `flutter build apk --release` still produces an installable
+            // (but unpublishable) APK instead of failing.
+            signingConfig = if (hasKeystore) {
+                signingConfigs.getByName("release")
+            } else {
+                logger.warn(
+                    "android/key.properties not found — signing the release " +
+                        "build with the debug key. Do not publish this artifact."
+                )
+                signingConfigs.getByName("debug")
+            }
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
     }
 }

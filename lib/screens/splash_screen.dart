@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../services/ads_service.dart';
-import '../services/firebase_service.dart';
 import '../services/intent_service.dart';
 import '../utils/format_utils.dart';
 import 'home_screen.dart';
@@ -47,13 +46,9 @@ class _SplashScreenState extends State<SplashScreen>
   }
 
   Future<void> _initializeApp() async {
-    // Kick off Firebase + Ads init in parallel with the splash animation so
-    // they don't add to perceived startup time. Both are guarded internally —
-    // if Firebase config files are missing, the app still boots.
-    final initFuture = Future.wait([
-      FirebaseService.initialize(),
-      AdsService.instance.initialize(),
-    ]);
+    // Ads initialize in parallel with the splash animation so they never add
+    // to perceived startup time. Firebase is already up (see main()).
+    final initFuture = AdsService.instance.initialize();
 
     // Wait for animation to start
     await Future.delayed(const Duration(milliseconds: 800));
@@ -65,10 +60,7 @@ class _SplashScreenState extends State<SplashScreen>
     // Make sure init completes before navigating, but cap the wait so we
     // never block the user on a slow network. The services are no-ops if
     // they haven't finished by the time they're called later.
-    await initFuture.timeout(
-      const Duration(seconds: 3),
-      onTimeout: () => <void>[],
-    );
+    await initFuture.timeout(const Duration(seconds: 3), onTimeout: () {});
 
     // Small delay before navigation
     await Future.delayed(const Duration(milliseconds: 500));
@@ -111,27 +103,27 @@ class _SplashScreenState extends State<SplashScreen>
           );
           break;
         case PdfIntentAction.split:
-          debugPrint('[SplashScreen] Navigating to HomeScreen Split tab');
-          _goToHome(path, 2);
+          debugPrint('[SplashScreen] Navigating to Home, opening Split');
+          _goToHome(path, action: DocHandoff.split);
           break;
         case PdfIntentAction.merge:
-          debugPrint('[SplashScreen] Navigating to HomeScreen Merge tab');
-          _goToHome(path, 0);
+          debugPrint('[SplashScreen] Navigating to Home, opening Merge');
+          _goToHome(path, action: DocHandoff.merge);
           break;
       }
     } else {
       debugPrint('[SplashScreen] No intent, navigating to HomeScreen default');
-      _goToHome(null, 0);
+      _goToHome(null);
     }
   }
 
-  void _goToHome(String? pdfPath, int tab) {
+  void _goToHome(String? pdfPath, {DocHandoff? action}) {
     if (!mounted) return;
     Navigator.pushReplacement(
       context,
       PageRouteBuilder(
         pageBuilder: (context, animation, secondaryAnimation) =>
-            HomeScreen(initialPdfPath: pdfPath, initialTab: tab),
+            HomeScreen(initialPdfPath: pdfPath, initialAction: action),
         transitionsBuilder: (context, animation, secondaryAnimation, child) {
           return FadeTransition(opacity: animation, child: child);
         },

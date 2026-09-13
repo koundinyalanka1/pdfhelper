@@ -1,0 +1,3 @@
+[submodule "packages/flutter_pdf_core"]
+	path = packages/flutter_pdf_core
+	url = https://github.com/koundinyalanka1/flutter_pdf_core.git

@@ -27,43 +27,46 @@ class LazyIndexedStack extends StatefulWidget {
 
 class _LazyIndexedStackState extends State<LazyIndexedStack> {
   final Set<int> _builtIndices = {};
-  late List<Widget?> _children;
 
   @override
   void initState() {
     super.initState();
-    _children = List.filled(widget.itemCount, null);
-    // Build initial screen synchronously so first frame shows correct content
-    _ensureBuilt(widget.index, scheduleRebuild: false);
+    // Mark the initial screen built so the first frame shows real content.
+    _markBuilt(widget.index, scheduleRebuild: false);
   }
 
   @override
   void didUpdateWidget(LazyIndexedStack oldWidget) {
     super.didUpdateWidget(oldWidget);
-    _ensureBuilt(widget.index, scheduleRebuild: true);
+    _markBuilt(widget.index, scheduleRebuild: true);
   }
 
-  void _ensureBuilt(int index, {bool scheduleRebuild = true}) {
-    if (index >= 0 && index < widget.itemCount && !_builtIndices.contains(index)) {
-      _builtIndices.add(index);
-      _children[index] = widget.itemBuilder(index);
-      if (scheduleRebuild && mounted) {
-        setState(() {});
-      }
-    }
+  void _markBuilt(int index, {bool scheduleRebuild = true}) {
+    if (index < 0 || index >= widget.itemCount) return;
+    if (!_builtIndices.add(index)) return;
+    if (scheduleRebuild && mounted) setState(() {});
   }
 
   @override
   Widget build(BuildContext context) {
     return IndexedStack(
-      index: widget.index,
+      // IndexedStack asserts on an index past the end of its children. A null
+      // index shows nothing instead, which is the right outcome for a tab
+      // that does not exist and is a far better one than a crash.
+      index: (widget.index >= 0 && widget.index < widget.itemCount)
+          ? widget.index
+          : null,
       alignment: widget.alignment,
       textDirection: widget.textDirection,
       sizing: widget.sizing,
+      // itemBuilder is re-invoked for every visited index on each rebuild
+      // rather than being called once and cached. Widgets are configuration,
+      // not state — element and State objects are preserved across rebuilds —
+      // so this costs nothing and lets a screen pick up new constructor
+      // arguments (a newly handed-over PDF path, say). Caching the widget
+      // instance froze those arguments at first visit.
       children: List.generate(widget.itemCount, (i) {
-        if (_children[i] != null) {
-          return _children[i]!;
-        }
+        if (_builtIndices.contains(i)) return widget.itemBuilder(i);
         return const SizedBox.expand();
       }),
     );

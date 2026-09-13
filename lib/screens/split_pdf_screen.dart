@@ -1,12 +1,10 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:image/image.dart' as img;
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:pdfrx/pdfrx.dart';
 import '../services/ads_service.dart';
+import '../services/pdf_raster.dart';
 import '../services/pdf_service.dart';
 import '../services/notification_service.dart';
 import '../providers/theme_provider.dart';
@@ -31,27 +29,31 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
   int _totalPages = 0;
   final TextEditingController _fromController = TextEditingController();
   final TextEditingController _toController = TextEditingController();
-  String _splitMode = 'range';
+  String _splitMode = 'pages';
   final List<({int start, int end})> _ranges = [];
   bool _isProcessing = false;
   bool _isLoadingPreviews = false;
   double _splitProgress = 0.0;
   String _splitStatus = '';
 
-  // For page previews (PDFs < 30 pages)
+  // Page thumbnails, rendered on demand by the native rasterizer.
   List<Uint8List?> _pagePreviews = [];
   Set<int> _selectedPages = {};
-  PdfDocument? _pdfDocument;
   double _firstPageAspectRatio = 0.7;
-
-  // Cache PDF bytes to avoid re-reading
-  Uint8List? _cachedPdfBytes;
+  int _previewsRendered = 0;
 
   bool get _isDarkMode => context.watch<ThemeProvider>().isDarkMode;
   AppColors get _colors => AppColors(_isDarkMode);
 
-  // Show preview mode for PDFs with less than 30 pages
-  bool get _usePreviewMode => _totalPages > 0 && _totalPages < 30;
+  /// Page-thumbnail picking is only offered for smaller documents (rendering
+  /// 100+ previews is slow and memory-hungry), and only while the user has
+  /// actually chosen that mode — previously it silently overrode the
+  /// "Page Range" and "Extract All" modes for every PDF under 30 pages,
+  /// making them unreachable.
+  bool get _canUsePreviewMode => _totalPages > 0 && _totalPages < _previewModeMaxPages;
+  bool get _usePreviewMode => _canUsePreviewMode && _splitMode == 'pages';
+
+  static const int _previewModeMaxPages = 30;
 
   @override
   void initState() {
@@ -65,7 +67,6 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
 
   Future<void> _loadPdfFromPath(String path) async {
     try {
-      final Uint8List bytes = await File(path).readAsBytes();
       final int pageCount = await PdfService.getPageCount(path);
       final String name = path.split(RegExp(r'[/\\]')).last;
 
@@ -74,7 +75,6 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
           _selectedFilePath = path;
           _selectedFileName = name;
           _totalPages = pageCount;
-          _cachedPdfBytes = bytes;
           _fromController.clear();
           _toController.clear();
           _ranges.clear();
@@ -83,6 +83,9 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
         });
         if (_usePreviewMode) {
           await _loadPagePreviews(path);
+        } else if (!_canUsePreviewMode && _splitMode == 'pages') {
+          // Too many pages to thumbnail — fall back to range entry.
+          setState(() => _splitMode = 'range');
         }
       }
     } catch (e) {
@@ -94,30 +97,24 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
   void dispose() {
     _fromController.dispose();
     _toController.dispose();
-    _pdfDocument?.dispose();
     super.dispose();
   }
 
   Future<void> _pickPdfFile() async {
     try {
-      FilePickerResult? result = await FilePicker.platform.pickFiles(
+      final PlatformFile? result = await FilePicker.pickFile(
         type: FileType.custom,
         allowedExtensions: ['pdf'],
-        allowMultiple: false,
       );
 
-      if (result != null && result.files.single.path != null) {
-        final String path = result.files.single.path!;
-
-        // Read and cache bytes once
-        final Uint8List bytes = await File(path).readAsBytes();
+      if (result?.path != null) {
+        final String path = result!.path!;
         final int pageCount = await PdfService.getPageCount(path);
 
         setState(() {
           _selectedFilePath = path;
-          _selectedFileName = result.files.single.name;
+          _selectedFileName = result.name;
           _totalPages = pageCount;
-          _cachedPdfBytes = bytes;
           _fromController.clear();
           _toController.clear();
           _ranges.clear();
@@ -125,9 +122,11 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
           _pagePreviews = [];
         });
 
-        // Load previews for small PDFs
+        // Render thumbnails only when the page-picker mode is active.
         if (_usePreviewMode) {
           await _loadPagePreviews(path);
+        } else if (!_canUsePreviewMode && _splitMode == 'pages') {
+          setState(() => _splitMode = 'range');
         }
       }
     } catch (e) {
@@ -136,36 +135,27 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
   }
 
   Future<void> _loadPagePreviews(String path) async {
-    setState(() => _isLoadingPreviews = true);
+    setState(() {
+      _isLoadingPreviews = true;
+      _previewsRendered = 0;
+    });
 
     try {
-      _pdfDocument?.dispose();
-      _pdfDocument = await PdfDocument.openFile(path);
-      await _pdfDocument!.loadPagesProgressively();
-
-      final List<Uint8List?> previews = [];
-      double aspectRatio = 0.7;
-      for (final page in _pdfDocument!.pages) {
-        if (previews.isEmpty) {
-          aspectRatio = page.width / page.height;
-        }
-        final w = (page.width * 1.0).round().clamp(280, 1600).toDouble();
-        final h = (page.height * 1.0).round().clamp(280, 1700).toDouble();
-        final pageImage = await page.render(fullWidth: w, fullHeight: h);
-
-        Uint8List? bytes;
-        if (pageImage != null) {
-          final imgObj = pageImage.createImageNF();
-          bytes = Uint8List.fromList(img.encodeJpg(imgObj, quality: 92));
-          pageImage.dispose();
-        }
-        previews.add(bytes);
-      }
+      final ratio = await PdfRaster.aspectRatio(path);
+      final previews = await PdfRaster.renderAllPages(
+        path,
+        pageCount: _totalPages,
+        onProgress: (done, total) {
+          if (mounted) setState(() => _previewsRendered = done);
+        },
+        // Abandon the render loop if the user moves on.
+        isCancelled: () => !mounted || _selectedFilePath != path,
+      );
 
       if (mounted) {
         setState(() {
           _pagePreviews = previews;
-          _firstPageAspectRatio = aspectRatio;
+          _firstPageAspectRatio = ratio ?? 0.7;
           _isLoadingPreviews = false;
         });
       }
@@ -221,7 +211,7 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
   }
 
   Future<void> _splitPdf() async {
-    if (_selectedFilePath == null || _cachedPdfBytes == null) return;
+    if (_selectedFilePath == null) return;
 
     setState(() {
       _isProcessing = true;
@@ -248,8 +238,8 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
 
         // OPTIMIZED: Extract all selected pages at once using cached bytes
         final themeProvider = context.read<ThemeProvider>();
-        final String? outputPath = await PdfService.extractPagesFromBytes(
-          _cachedPdfBytes!,
+        final String? outputPath = await PdfService.extractPagesFromFile(
+          _selectedFilePath!,
           sortedPages, // Already 0-based
         );
 
@@ -297,8 +287,8 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
           _splitStatus = 'Extracting ${rangesToUse.length} range(s)...';
         });
 
-        final outputPaths = await PdfService.splitPdfByRangesFromBytes(
-          _cachedPdfBytes!,
+        final outputPaths = await PdfService.splitRangesFromFile(
+          _selectedFilePath!,
           rangesToUse,
         );
 
@@ -332,8 +322,10 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
         });
 
         final themeProvider = context.read<ThemeProvider>();
-        final List<String> outputPaths =
-            await PdfService.splitPdfAllPagesFromBytes(_cachedPdfBytes!);
+        final List<String> outputPaths = await PdfService.splitAllPagesFromFile(
+          _selectedFilePath!,
+          pageCount: _totalPages,
+        );
 
         setState(() => _splitProgress = 0.9);
 
@@ -455,9 +447,11 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
               Navigator.pop(context);
               // Share auto-saved files if available
               final shareFiles = hasAutoSaved ? autoSavedPaths : filePaths;
-              Share.shareXFiles(
-                shareFiles.map((p) => XFile(p)).toList(),
-                text: 'Split PDF',
+              SharePlus.instance.share(
+                ShareParams(
+                  files: shareFiles.map((p) => XFile(p)).toList(),
+                  text: 'Split PDF',
+                ),
               );
             },
             child: const Text(
@@ -670,15 +664,12 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
                                       _selectedFilePath = null;
                                       _selectedFileName = null;
                                       _totalPages = 0;
-                                      _cachedPdfBytes = null;
                                       _fromController.clear();
                                       _toController.clear();
                                       _ranges.clear();
                                       _selectedPages.clear();
                                       _pagePreviews = [];
                                     });
-                                    _pdfDocument?.dispose();
-                                    _pdfDocument = null;
                                   },
                                   icon: Icon(
                                     Icons.close_rounded,
@@ -697,9 +688,16 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
             Expanded(
               child: _selectedFilePath == null
                   ? const SizedBox()
-                  : _usePreviewMode
-                  ? _buildPreviewMode()
-                  : _buildRangeMode(),
+                  : Column(
+                      children: [
+                        _buildModeSelector(),
+                        Expanded(
+                          child: _usePreviewMode
+                              ? _buildPreviewMode()
+                              : _buildRangeMode(),
+                        ),
+                      ],
+                    ),
             ),
 
             // Split button
@@ -809,6 +807,52 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
     );
   }
 
+  /// Split modes, shown for every document. "Select Pages" is only offered
+  /// when the document is small enough to render thumbnails for.
+  Widget _buildModeSelector() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+      child: Row(
+        children: [
+          if (_canUsePreviewMode) ...[
+            Expanded(
+              child: _buildModeCard(
+                'pages',
+                'Select Pages',
+                Icons.grid_view_rounded,
+              ),
+            ),
+            const SizedBox(width: 10),
+          ],
+          Expanded(
+            child: _buildModeCard(
+              'range',
+              'Page Range',
+              Icons.horizontal_rule_rounded,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: _buildModeCard('all', 'Extract All', Icons.layers_rounded),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Switch split mode, rendering page thumbnails the first time the user
+  /// opens "Select Pages" (rather than eagerly on every file pick).
+  void _setSplitMode(String mode) {
+    if (_splitMode == mode) return;
+    setState(() => _splitMode = mode);
+    if (mode == 'pages' &&
+        _pagePreviews.isEmpty &&
+        !_isLoadingPreviews &&
+        _selectedFilePath != null) {
+      _loadPagePreviews(_selectedFilePath!);
+    }
+  }
+
   Widget _buildPreviewMode() {
     return Column(
       children: [
@@ -905,7 +949,9 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
                       const CircularProgressIndicator(color: Color(0xFFFFC107)),
                       const SizedBox(height: 16),
                       Text(
-                        'Loading previews...',
+                        _totalPages > 0
+                            ? 'Rendering page $_previewsRendered of $_totalPages...'
+                            : 'Loading previews...',
                         style: TextStyle(
                           color: _colors.textSecondary,
                           fontSize: 14,
@@ -1054,36 +1100,6 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const SizedBox(height: 10),
-          Text(
-            'Split Mode',
-            style: TextStyle(
-              color: _colors.textPrimary,
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 12),
-          // Split mode options
-          Row(
-            children: [
-              Expanded(
-                child: _buildModeCard(
-                  'range',
-                  'Page Range',
-                  Icons.horizontal_rule_rounded,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _buildModeCard(
-                  'all',
-                  'Extract All',
-                  Icons.layers_rounded,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 20),
           // Page range input
           if (_splitMode == 'range') ...[
             Text(
@@ -1296,11 +1312,7 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
   Widget _buildModeCard(String mode, String label, IconData icon) {
     final isSelected = _splitMode == mode;
     return GestureDetector(
-      onTap: () {
-        setState(() {
-          _splitMode = mode;
-        });
-      },
+      onTap: () => _setSplitMode(mode),
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(

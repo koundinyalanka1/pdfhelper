@@ -6,7 +6,6 @@ class SelectedPdfFile {
     required this.name,
     required this.fileSize,
     this.isLoading = false,
-    this.cachedBytes,
     this.thumbnail,
     this.pageCount = 0,
     this.aspectRatio,
@@ -16,7 +15,8 @@ class SelectedPdfFile {
   final String name;
   final int? fileSize;
   bool isLoading;
-  Uint8List? cachedBytes;
+
+  /// First-page preview, PNG bytes from the native rasterizer.
   Uint8List? thumbnail;
   int pageCount;
   /// First page width/height for responsive thumbnail sizing
