@@ -12,6 +12,8 @@ import '../services/pdf_core_service.dart';
 import '../services/pdf_raster.dart';
 import '../services/pdf_service.dart';
 import '../services/recent_files_service.dart';
+import '../utils/error_logger.dart';
+import '../widgets/password_prompt.dart';
 import 'ai_screen.dart';
 import 'extract_text_screen.dart';
 import 'home_screen.dart';
@@ -66,6 +68,22 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
   bool _isZoomed = false;
 
   AnimationController? _zoomAnimation;
+
+  /// The password actually in use. Starts as whatever the caller knew (Tools
+  /// passes one along) and is replaced by whatever the user types when the
+  /// document turns out to be locked.
+  late String _password = widget.password;
+
+  /// Set when the document is locked and we have no working password, so the
+  /// error view can offer another attempt instead of being a dead end.
+  bool _needsPassword = false;
+
+  /// The first "this page is not exactly as authored" note any page reported,
+  /// shown once and dismissible. Worth saying because the alternative — a
+  /// silently approximate page — is what made substituted fonts and skipped
+  /// images so hard to diagnose.
+  String? _approximateNotice;
+  bool _noticeDismissed = false;
 
   int _currentPage = 1;
   int _totalPages = 0;
@@ -147,28 +165,72 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
     // Anything that reaches the viewer belongs in Recent — including files
     // opened from another app, which the library sweep never sees.
     unawaited(RecentFilesService.markOpened(widget.pdfPath));
-    try {
-      final count = await PdfRaster.pageCountOf(
-        widget.pdfPath,
-        password: widget.password,
-      );
-      final ratio = await PdfRaster.aspectRatio(
-        widget.pdfPath,
-        password: widget.password,
-      );
-      if (!mounted) return;
-      setState(() {
-        _totalPages = count;
-        _aspectRatio = ratio ?? _aspectRatio;
-        _isLoading = false;
-        if (count == 0) _error = 'This PDF has no pages to display.';
-      });
-    } catch (e) {
-      if (mounted) {
+    await _load();
+  }
+
+  /// Read the document, asking for a password for as long as it takes.
+  ///
+  /// Every route into the viewer ends up here, which is why the prompt lives
+  /// in the viewer rather than at each call site: the library, a share intent
+  /// and the splash route all used to open locked files with an empty
+  /// password and report them as having no pages.
+  Future<void> _load() async {
+    bool isRetry = false;
+    while (true) {
+      try {
+        final count = await PdfRaster.pageCountOf(
+          widget.pdfPath,
+          password: _password,
+        );
+        final ratio = await PdfRaster.aspectRatio(
+          widget.pdfPath,
+          password: _password,
+        );
+        if (!mounted) return;
+        setState(() {
+          _totalPages = count;
+          _aspectRatio = ratio ?? _aspectRatio;
+          _isLoading = false;
+          _needsPassword = false;
+          if (count == 0) _error = 'This PDF has no pages to display.';
+        });
+        return;
+      } on PdfException catch (e) {
+        if (!mounted) return;
+        if (!e.isEncrypted && !e.isWrongPassword) {
+          setState(() {
+            _isLoading = false;
+            _error = PdfCoreService.describeError(e);
+          });
+          return;
+        }
+        final entered = await showPdfPasswordPrompt(
+          context,
+          retry: isRetry || e.isWrongPassword,
+          fileName: _fileName,
+        );
+        if (!mounted) return;
+        if (entered == null) {
+          setState(() {
+            _isLoading = false;
+            _needsPassword = true;
+            _error = 'This PDF is password protected.';
+          });
+          return;
+        }
+        isRetry = true;
+        setState(() {
+          _password = entered;
+          _isLoading = true;
+          _error = null;
+        });
+      } catch (e) {
+        if (!mounted) return;
         setState(() {
           _isLoading = false;
           _error = PdfCoreService.describeError(e);
         });
+        return;
       }
     }
   }
@@ -308,7 +370,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
                 () => _push(
                   OrganizePagesScreen(
                     pdfPath: widget.pdfPath,
-                    password: widget.password,
+                    password: _password,
                   ),
                 ),
               ),
@@ -319,7 +381,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
                 Icons.auto_awesome_rounded,
                 'Ask AI',
                 () => _push(
-                  AiScreen(pdfPath: widget.pdfPath, password: widget.password),
+                  AiScreen(pdfPath: widget.pdfPath, password: _password),
                 ),
               ),
               _action(
@@ -330,7 +392,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
                 () => _push(
                   ExtractTextScreen(
                     pdfPath: widget.pdfPath,
-                    password: widget.password,
+                    password: _password,
                   ),
                 ),
               ),
@@ -342,8 +404,8 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
                 () => _push(
                   ProtectScreen(
                     pdfPath: widget.pdfPath,
-                    password: widget.password,
-                    isEncrypted: widget.password.isNotEmpty,
+                    password: _password,
+                    isEncrypted: _password.isNotEmpty,
                   ),
                 ),
               ),
@@ -355,7 +417,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
                 () => _push(
                   MetadataScreen(
                     pdfPath: widget.pdfPath,
-                    password: widget.password,
+                    password: _password,
                   ),
                 ),
               ),
@@ -468,7 +530,48 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
           ),
         ],
       ),
-      body: _buildBody(),
+      body: Column(
+        children: [
+          _approximateBanner(),
+          Expanded(child: _buildBody()),
+        ],
+      ),
+    );
+  }
+
+  /// Remember the first page warning so the reader can be told once.
+  void _noteWarnings(List<String> warnings) {
+    if (warnings.isEmpty || _approximateNotice != null || !mounted) return;
+    setState(() => _approximateNotice = warnings.first);
+  }
+
+  /// A quiet strip above the pages, not a dialog: the document is readable,
+  /// it is just not pixel-exact.
+  Widget _approximateBanner() {
+    final notice = _approximateNotice;
+    if (notice == null || _noticeDismissed) return const SizedBox.shrink();
+    return Material(
+      color: _colors.cardBackground,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+        child: Row(
+          children: [
+            Icon(Icons.info_outline, size: 18, color: _colors.textTertiary),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                notice,
+                style: TextStyle(color: _colors.textSecondary, fontSize: 12),
+              ),
+            ),
+            IconButton(
+              icon: Icon(Icons.close, size: 18, color: _colors.textTertiary),
+              onPressed: () => setState(() => _noticeDismissed = true),
+              tooltip: 'Dismiss',
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -492,6 +595,20 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
                 textAlign: TextAlign.center,
                 style: TextStyle(color: _colors.textSecondary, fontSize: 16),
               ),
+              if (_needsPassword) ...[
+                const SizedBox(height: 20),
+                FilledButton.icon(
+                  onPressed: () {
+                    setState(() {
+                      _isLoading = true;
+                      _error = null;
+                    });
+                    _load();
+                  },
+                  icon: const Icon(Icons.lock_open_rounded),
+                  label: const Text('Enter password'),
+                ),
+              ],
             ],
           ),
         ),
@@ -523,12 +640,13 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
           itemBuilder: (context, index) => _PageView(
             key: ValueKey('${widget.pdfPath}#$index'),
             path: widget.pdfPath,
-            password: widget.password,
+            password: _password,
             pageIndex: index,
             fallbackAspectRatio: _aspectRatio,
             isDark: _colors.isDark,
             zoom: _zoom,
             onMeasured: (height) => _pageHeights[index] = height,
+            onWarnings: _noteWarnings,
           ),
         ),
       ),
@@ -547,6 +665,7 @@ class _PageView extends StatefulWidget {
     required this.isDark,
     required this.zoom,
     required this.onMeasured,
+    required this.onWarnings,
   });
 
   final String path;
@@ -556,6 +675,7 @@ class _PageView extends StatefulWidget {
   final bool isDark;
   final ValueListenable<double> zoom;
   final ValueChanged<double> onMeasured;
+  final ValueChanged<List<String>> onWarnings;
 
   @override
   State<_PageView> createState() => _PageViewState();
@@ -610,6 +730,7 @@ class _PageViewState extends State<_PageView> {
             pageIndex: widget.pageIndex,
             password: widget.password,
           );
+      final useCache = target <= PdfRaster.thumbnailSize * 4;
       final bytes = await PdfRaster.renderPage(
         widget.path,
         widget.pageIndex,
@@ -617,14 +738,29 @@ class _PageViewState extends State<_PageView> {
         password: widget.password,
         // High-resolution zoom renders are one-offs; keeping them would
         // evict every thumbnail in the cache.
-        useCache: target <= PdfRaster.thumbnailSize * 4,
+        useCache: useCache,
       );
+      if (bytes != null) {
+        widget.onWarnings(
+          PdfRaster.warningsFor(
+            widget.path,
+            widget.pageIndex,
+            longEdge: target,
+            password: widget.password,
+          ),
+        );
+      }
       if (!mounted) return;
       setState(() {
         _bytes = bytes ?? _bytes;
         _aspectRatio = ratio ?? _aspectRatio;
         _renderedLongEdge = target;
       });
+    } catch (e) {
+      // One page failing is not the document failing: keep whatever was
+      // already drawn and leave the placeholder for this one. The document
+      // itself already opened, so this is a per-page problem.
+      logError('PdfViewer._render', e);
     } finally {
       _isRendering = false;
     }

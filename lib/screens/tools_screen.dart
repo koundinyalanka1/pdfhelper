@@ -17,6 +17,8 @@ import 'pdf_viewer_screen.dart';
 import 'protect_screen.dart';
 import 'split_pdf_screen.dart';
 
+import '../widgets/password_prompt.dart';
+
 /// Every operation in the app, on one screen, grouped by what you are trying
 /// to get done.
 ///
@@ -127,7 +129,11 @@ class _ToolsScreenState extends State<ToolsScreen>
       if (!mounted) return false;
       setState(() => _isLoading = false);
       if (e.isEncrypted || e.isWrongPassword) {
-        final entered = await _promptPassword(retry: e.isWrongPassword);
+        final entered = await showPdfPasswordPrompt(
+          context,
+          retry: e.isWrongPassword,
+          fileName: _name,
+        );
         if (entered != null) return _load(path, password: entered);
       }
       if (mounted) {
@@ -154,53 +160,6 @@ class _ToolsScreenState extends State<ToolsScreen>
       _error = null;
       _password = '';
     });
-  }
-
-  Future<String?> _promptPassword({bool retry = false}) {
-    final controller = TextEditingController();
-    return showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: _colors.cardBackground,
-        title: Text(
-          'Password required',
-          style: TextStyle(color: _colors.textPrimary),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              retry
-                  ? 'That password did not work. Try again.'
-                  : 'This PDF is protected. Enter its password to open it.',
-              style: TextStyle(color: _colors.textSecondary, fontSize: 13),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: controller,
-              obscureText: true,
-              autofocus: true,
-              style: TextStyle(color: _colors.textPrimary),
-              decoration: const InputDecoration(labelText: 'Password'),
-              onSubmitted: (v) => Navigator.pop(ctx, v),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text(
-              'Cancel',
-              style: TextStyle(color: _colors.textSecondary),
-            ),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, controller.text),
-            child: const Text('Open'),
-          ),
-        ],
-      ),
-    );
   }
 
   // ---------------------------------------------------------------- launch
@@ -362,7 +321,8 @@ class _ToolsScreenState extends State<ToolsScreen>
           Icons.menu_book_rounded,
           const Color(0xFFE94560),
           () => _runOnDocument(
-            (p, _) => PdfViewerScreen(pdfPath: p, title: _name),
+            (p, pw) =>
+                PdfViewerScreen(pdfPath: p, title: _name, password: pw),
           ),
           needsDocument: true,
         ),

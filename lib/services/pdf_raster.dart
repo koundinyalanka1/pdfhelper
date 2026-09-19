@@ -60,13 +60,16 @@ class PdfRaster {
   /// [longEdge]-pixel box.
   ///
   /// Returns null rather than throwing when the page cannot be rendered, so a
-  /// single bad page never takes down a grid.
+  /// single bad page never takes down a grid — unless [throwOnError] is set,
+  /// which a foreground viewer wants so it can explain itself (and, for an
+  /// encrypted file, ask for the password).
   static Future<Uint8List?> renderPage(
     String path,
     int pageIndex, {
     int longEdge = thumbnailSize,
     String password = '',
     bool useCache = true,
+    bool throwOnError = false,
   }) async {
     final key = '$path|$pageIndex|$longEdge|${password.isEmpty ? 0 : 1}';
     if (useCache) {
@@ -78,25 +81,56 @@ class PdfRaster {
     }
     await _acquire();
     try {
-      final bytes = await PdfCore.renderPagePngAsync(
+      final rendered = await PdfCore.renderPagePngWithWarningsAsync(
         path,
         pageIndex,
         width: longEdge,
         height: longEdge,
         password: password,
       );
-      if (useCache) _store(key, bytes);
-      return bytes;
+      // Warnings are held only for cached renders, so that they are evicted
+      // with the bitmap they describe. Uncached renders — every library cover,
+      // and one-off zoom renders — would otherwise accumulate forever.
+      if (useCache) {
+        if (rendered.warnings.isEmpty) {
+          _warnings.remove(key);
+        } else {
+          _warnings[key] = rendered.warnings;
+        }
+        _store(key, rendered.bytes);
+      }
+      return rendered.bytes;
     } on PdfException catch (e) {
       logError('PdfRaster.renderPage', '${e.code}: ${e.message}');
+      if (throwOnError) rethrow;
       return null;
     } catch (e) {
       logError('PdfRaster.renderPage', e);
+      if (throwOnError) rethrow;
       return null;
     } finally {
       _release();
     }
   }
+
+  /// Notes from the most recent render of a page, keyed the same way the
+  /// bitmap cache is.
+  ///
+  /// A page can render and still not be exactly what the document says — a
+  /// substituted font, an image in a codec this build cannot read. The viewer
+  /// uses this to tell the reader so, instead of passing off an approximation
+  /// as the real thing.
+  static final Map<String, List<String>> _warnings = {};
+
+  /// Warnings recorded for a page already rendered, empty when there are none.
+  static List<String> warningsFor(
+    String path,
+    int pageIndex, {
+    int longEdge = thumbnailSize,
+    String password = '',
+  }) =>
+      _warnings['$path|$pageIndex|$longEdge|${password.isEmpty ? 0 : 1}'] ??
+      const [];
 
   /// First-page thumbnail — the one every file card shows.
   static Future<Uint8List?> thumbnail(String path, {String password = ''}) =>
@@ -121,7 +155,7 @@ class PdfRaster {
     String password = '',
   }) async {
     final target = coverSizeFor(longEdge);
-    final key = _coverKey(path, modifiedMs, target);
+    final key = _coverKey(path, modifiedMs, target, password: password);
     if (_libraryCache.containsKey(key)) {
       final hit = _libraryCache.remove(key);
       _libraryCache[key] = hit; // refresh LRU position
@@ -150,8 +184,9 @@ class PdfRaster {
     String path, {
     int modifiedMs = 0,
     int longEdge = libraryThumbnailSize,
+    String password = '',
   }) => _libraryCache.containsKey(
-    _coverKey(path, modifiedMs, coverSizeFor(longEdge)),
+    _coverKey(path, modifiedMs, coverSizeFor(longEdge), password: password),
   );
 
   /// The cached cover, or null when absent *or* known to be unrenderable.
@@ -160,7 +195,13 @@ class PdfRaster {
     String path, {
     int modifiedMs = 0,
     int longEdge = libraryThumbnailSize,
-  }) => _libraryCache[_coverKey(path, modifiedMs, coverSizeFor(longEdge))];
+    String password = '',
+  }) => _libraryCache[_coverKey(
+    path,
+    modifiedMs,
+    coverSizeFor(longEdge),
+    password: password,
+  )];
 
   /// Round a requested cover size up to the shared step, clamped to something
   /// a phone can afford.
@@ -169,8 +210,12 @@ class PdfRaster {
     return ((clamped + _coverSizeStep - 1) ~/ _coverSizeStep) * _coverSizeStep;
   }
 
-  static String _coverKey(String path, int modifiedMs, int longEdge) =>
-      '$path|$modifiedMs|$longEdge';
+  static String _coverKey(
+    String path,
+    int modifiedMs,
+    int longEdge, {
+    String password = '',
+  }) => '$path|$modifiedMs|$longEdge|${password.isEmpty ? 0 : 1}';
 
   /// Render every page, reporting progress as it goes.
   ///
@@ -185,7 +230,8 @@ class PdfRaster {
     void Function(int done, int total)? onProgress,
     bool Function()? isCancelled,
   }) async {
-    final total = pageCount ?? await pageCountOf(path, password: password);
+    final total =
+        pageCount ?? await pageCountOrZero(path, password: password);
     final pages = <Uint8List?>[];
     for (int i = 0; i < total; i++) {
       if (isCancelled?.call() ?? false) break;
@@ -198,11 +244,20 @@ class PdfRaster {
   }
 
   /// Page count straight from the xref — no rendering involved.
-  static Future<int> pageCountOf(String path, {String password = ''}) async {
+  ///
+  /// Throws [PdfException] rather than reporting zero pages. Swallowing it
+  /// here is what made an encrypted document indistinguishable from an empty
+  /// one: the caller never saw the `ENCRYPTED` code, so it never knew to ask
+  /// for a password. Callers that genuinely do not care use [pageCountOrZero].
+  static Future<int> pageCountOf(String path, {String password = ''}) =>
+      PdfCore.pageCountAsync(path, password: password);
+
+  /// [pageCountOf] for callers with no way to act on a failure.
+  static Future<int> pageCountOrZero(String path, {String password = ''}) async {
     try {
-      return await PdfCore.pageCountAsync(path, password: password);
+      return await pageCountOf(path, password: password);
     } catch (e) {
-      logError('PdfRaster.pageCountOf', e);
+      logError('PdfRaster.pageCountOrZero', e);
       return 0;
     }
   }
@@ -221,6 +276,10 @@ class PdfRaster {
         password: password,
       );
       return size.aspectRatio;
+    } on PdfException {
+      // A locked or damaged document is the caller's problem to report; here
+      // it only means the thumbnail box has to guess its shape.
+      rethrow;
     } catch (e) {
       logError('PdfRaster.aspectRatio', e);
       return null;
@@ -233,16 +292,20 @@ class PdfRaster {
     if (path == null) {
       _cache.clear();
       _libraryCache.clear();
+      _warnings.clear();
       return;
     }
     _cache.removeWhere((key, _) => key.startsWith('$path|'));
     _libraryCache.removeWhere((key, _) => key.startsWith('$path|'));
+    _warnings.removeWhere((key, _) => key.startsWith('$path|'));
   }
 
   static void _store(String key, Uint8List bytes) {
     _cache[key] = bytes;
     while (_cache.length > _maxCacheEntries) {
-      _cache.remove(_cache.keys.first);
+      final oldest = _cache.keys.first;
+      _warnings.remove(oldest);
+      _cache.remove(oldest);
     }
   }
 

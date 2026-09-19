@@ -462,7 +462,9 @@ class _LibraryScreenState extends State<LibraryScreen>
   }
 
   Future<void> _showDetails(PdfFileEntry entry) async {
-    final pageCount = await PdfRaster.pageCountOf(entry.path);
+    // A details sheet has no way to ask for a password, so an encrypted
+    // file simply reports an unknown page count here.
+    final pageCount = await PdfRaster.pageCountOrZero(entry.path);
     if (!mounted) return;
     await showDialog<void>(
       context: context,
