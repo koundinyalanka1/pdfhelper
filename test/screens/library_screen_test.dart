@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:pdfhelper/providers/theme_provider.dart';
 import 'package:pdfhelper/screens/library_screen.dart';
 import 'package:pdfhelper/services/pdf_library_service.dart';
@@ -104,6 +106,20 @@ void main() {
     // Titles are shown without the extension, the way a reader lists them.
     expect(find.text('Invoice'), findsOneWidget);
     expect(find.text('Contract'), findsOneWidget);
+  });
+
+  testWidgets('rescans after a short trip to another app', (tester) async {
+    seed('Before.pdf');
+    await settle(tester);
+    expect(find.text('Before'), findsOneWidget);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    seed('Downloaded.pdf');
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await flush(tester, rounds: 25);
+
+    expect(find.text('Downloaded'), findsOneWidget);
+    expect(find.text('Before'), findsOneWidget);
   });
 
   testWidgets('explains an empty library instead of showing a blank page', (
@@ -434,6 +450,26 @@ void main() {
     expect(find.text('Second'), findsNothing);
   });
 
+  testWidgets('queues a refresh requested while a scan is in progress', (
+    tester,
+  ) async {
+    seed('First.pdf');
+    await settle(tester);
+    final gated = _GatedPathProvider(root);
+    PathProviderPlatform.instance = gated;
+
+    await tester.pumpWidget(app(refreshToken: 1));
+    await flush(tester, rounds: 2);
+    expect(gated.documentRequests, 1);
+
+    await tester.pumpWidget(app(refreshToken: 2));
+    gated.release.complete();
+    await flush(tester, rounds: 25);
+
+    expect(gated.documentRequests, 2);
+    expect(find.text('First'), findsOneWidget);
+  });
+
   testWidgets('a rename with path separators cannot escape the folder', (
     tester,
   ) async {
@@ -458,4 +494,20 @@ void main() {
       isTrue,
     );
   });
+}
+
+/// Holds the next scan before it obtains its roots so a second refresh can
+/// arrive deterministically while that scan is active.
+class _GatedPathProvider extends FakePathProvider {
+  _GatedPathProvider(super.root);
+
+  final release = Completer<void>();
+  int documentRequests = 0;
+
+  @override
+  Future<String?> getApplicationDocumentsPath() async {
+    documentRequests++;
+    if (documentRequests == 1) await release.future;
+    return documents.path;
+  }
 }

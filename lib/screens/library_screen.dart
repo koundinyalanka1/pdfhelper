@@ -61,11 +61,6 @@ class _LibraryScreenState extends State<LibraryScreen>
   @override
   bool get wantKeepAlive => true;
 
-  /// Don't re-sweep on every single resume — only when the last one is stale
-  /// enough that something could plausibly have changed.
-  static const Duration _resweepAfter = Duration(minutes: 1);
-  DateTime _lastScan = DateTime.fromMillisecondsSinceEpoch(0);
-
   static const Color _accent = Color(0xFFE94560);
   static const String _viewModeKey = 'library.grid';
   static const String _sortKey = 'library.sort';
@@ -82,6 +77,8 @@ class _LibraryScreenState extends State<LibraryScreen>
 
   StorageAccess _access = StorageAccess.appOnly;
   bool _isScanning = false;
+  bool _refreshPending = false;
+  bool _isRequestingAccess = false;
   bool _hasScanned = false;
 
   final TextEditingController _searchController = TextEditingController();
@@ -114,10 +111,9 @@ class _LibraryScreenState extends State<LibraryScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Files can arrive while the app is in the background — a download, a
-    // document saved from another app.
+    // A file or a storage grant can change even during a brief visit to
+    // Settings/another app. Never suppress that refresh with a time throttle.
     if (state != AppLifecycleState.resumed) return;
-    if (DateTime.now().difference(_lastScan) < _resweepAfter) return;
     unawaited(_refresh(prune: true));
   }
 
@@ -166,10 +162,18 @@ class _LibraryScreenState extends State<LibraryScreen>
   }
 
   Future<void> _refresh({bool prune = false}) async {
-    if (_isScanning) return;
+    if (!mounted) return;
+    if (_isScanning) {
+      // A grant or a newly mounted volume may arrive during an older sweep.
+      // Queue a fresh sweep instead of dropping the request.
+      _refreshPending = true;
+      return;
+    }
     setState(() => _isScanning = true);
     try {
       final access = await PdfLibraryService.access();
+      if (!mounted) return;
+      setState(() => _access = access);
       if (prune) {
         final alive = await PdfLibraryService.prune(_entries);
         if (mounted && alive.length != _entries.length) {
@@ -196,13 +200,25 @@ class _LibraryScreenState extends State<LibraryScreen>
       // A failed sweep leaves whatever was already listed on screen. The one
       // outcome that must not happen is a spinner that never stops.
       logError('LibraryScreen._refresh', e);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Could not finish looking for PDFs. Pull down to try again.',
+            ),
+          ),
+        );
+      }
     } finally {
-      _lastScan = DateTime.now();
       if (mounted) {
         setState(() {
           _isScanning = false;
           _hasScanned = true;
         });
+        if (_refreshPending) {
+          _refreshPending = false;
+          unawaited(_refresh(prune: true));
+        }
       }
     }
   }
@@ -233,9 +249,14 @@ class _LibraryScreenState extends State<LibraryScreen>
   }
 
   Future<void> _requestAccess() async {
+    if (_isRequestingAccess) return;
+    setState(() => _isRequestingAccess = true);
     final granted = await PdfLibraryService.requestAccess();
     if (!mounted) return;
-    setState(() => _access = granted);
+    setState(() {
+      _access = granted;
+      _isRequestingAccess = false;
+    });
     if (granted == StorageAccess.full) {
       await _refresh();
       return;
@@ -245,7 +266,7 @@ class _LibraryScreenState extends State<LibraryScreen>
       SnackBar(
         content: const Text(
           'PDF Helper still cannot read shared storage. Turn on '
-          '"All files access" in Settings to list every PDF.',
+          'storage access in Settings to find PDFs outside this app.',
         ),
         duration: const Duration(seconds: 6),
         action: SnackBarAction(
@@ -860,8 +881,9 @@ class _LibraryScreenState extends State<LibraryScreen>
                 const SizedBox(height: 3),
                 Text(
                   isAndroid
-                      ? 'Allow access to all files and every PDF on this '
-                            'device appears here.'
+                      ? 'Allow all files access to find PDFs in internal '
+                            'storage and SD/USB drives. Android keeps other '
+                            'apps\' private folders restricted.'
                       : 'iOS keeps each app to its own documents. Import a '
                             'PDF to add it to your library.',
                   style: TextStyle(
@@ -874,7 +896,11 @@ class _LibraryScreenState extends State<LibraryScreen>
                 SizedBox(
                   height: 32,
                   child: FilledButton(
-                    onPressed: isAndroid ? _requestAccess : _import,
+                    onPressed: _isRequestingAccess
+                        ? null
+                        : isAndroid
+                        ? _requestAccess
+                        : _import,
                     style: FilledButton.styleFrom(
                       backgroundColor: _accent,
                       padding: const EdgeInsets.symmetric(horizontal: 14),

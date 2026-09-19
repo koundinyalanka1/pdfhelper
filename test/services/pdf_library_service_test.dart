@@ -5,8 +5,7 @@ import 'package:pdfhelper/services/pdf_library_service.dart';
 
 import '../support/fake_path_provider.dart';
 
-/// Writes a file with enough bytes that the scanner's zero-length filter
-/// keeps it. Content does not have to be a valid PDF — the sweep matches on
+/// Content does not have to be a valid PDF — the sweep matches on
 /// the extension, exactly like a file manager.
 File _pdf(String path, {String body = '%PDF-1.7 test'}) {
   final file = File(path);
@@ -40,10 +39,11 @@ void main() {
 
       final found = PdfLibraryService.walkForTesting([root.path]);
 
-      expect(
-        found.map((e) => e.name).toSet(),
-        {'lower.pdf', 'UPPER.PDF', 'Mixed.Pdf'},
-      );
+      expect(found.map((e) => e.name).toSet(), {
+        'lower.pdf',
+        'UPPER.PDF',
+        'Mixed.Pdf',
+      });
     });
 
     test('ignores non-PDF files', () {
@@ -56,26 +56,33 @@ void main() {
       expect(found.map((e) => e.name), ['keep.pdf']);
     });
 
-    test('skips zero-length files', () {
-      _pdf('${root.path}/real.pdf');
-      File('${root.path}/empty.pdf').writeAsStringSync('');
+    test(
+      'includes empty PDFs so the file list does not silently hide them',
+      () {
+        _pdf('${root.path}/real.pdf');
+        File('${root.path}/empty.pdf').writeAsStringSync('');
 
-      final found = PdfLibraryService.walkForTesting([root.path]);
+        final found = PdfLibraryService.walkForTesting([root.path]);
 
-      expect(found.map((e) => e.name), ['real.pdf']);
-    });
+        expect(found.map((e) => e.name).toSet(), {'real.pdf', 'empty.pdf'});
+      },
+    );
 
-    test('skips hidden files and hidden directories', () {
+    test('includes hidden PDFs and PDFs in hidden directories', () {
       _pdf('${root.path}/visible.pdf');
       _pdf('${root.path}/.secret.pdf');
       _pdf('${root.path}/.hidden/inside.pdf');
 
       final found = PdfLibraryService.walkForTesting([root.path]);
 
-      expect(found.map((e) => e.name), ['visible.pdf']);
+      expect(found.map((e) => e.name).toSet(), {
+        'visible.pdf',
+        '.secret.pdf',
+        'inside.pdf',
+      });
     });
 
-    test('skips cache-like directories', () {
+    test('does not exclude user folders based on their names', () {
       _pdf('${root.path}/keep.pdf');
       _pdf('${root.path}/cache/cached.pdf');
       _pdf('${root.path}/Caches/cached2.pdf');
@@ -84,62 +91,105 @@ void main() {
 
       final found = PdfLibraryService.walkForTesting([root.path]);
 
-      expect(found.map((e) => e.name), ['keep.pdf']);
+      expect(found.map((e) => e.name).toSet(), {
+        'keep.pdf',
+        'cached.pdf',
+        'cached2.pdf',
+        'orphan.pdf',
+        'doc.pdf',
+      });
     });
 
-    test('skips Android/data and Android/obb but keeps Android/media', () {
-      // Android/media is where messaging apps put received documents, and it
-      // stays readable without All files access — excluding it would drop the
-      // single largest source of PDFs on a real phone.
+    test('scans every readable Android folder, including Android/media', () {
+      // Android/media is shared storage used by messaging apps. It must be
+      // included in the full-storage scan.
       _pdf('${root.path}/Android/data/com.example/private.pdf');
       _pdf('${root.path}/Android/obb/com.example/blob.pdf');
       _pdf('${root.path}/Android/media/com.whatsapp/Documents/invoice.pdf');
 
       final found = PdfLibraryService.walkForTesting([root.path]);
 
-      expect(found.map((e) => e.name), ['invoice.pdf']);
+      expect(found.map((e) => e.name).toSet(), {
+        'private.pdf',
+        'blob.pdf',
+        'invoice.pdf',
+      });
     });
 
-    test('honours the depth cap', () {
+    test('finds PDFs below the old twelve-level depth limit', () {
       var path = root.path;
-      for (var i = 0; i < 15; i++) {
+      for (var i = 0; i < 20; i++) {
         path = '$path/d$i';
       }
       _pdf('$path/deep.pdf');
       _pdf('${root.path}/shallow.pdf');
 
       expect(
-        PdfLibraryService.walkForTesting([root.path], maxDepth: 12)
-            .map((e) => e.name),
-        ['shallow.pdf'],
-      );
-      expect(
-        PdfLibraryService.walkForTesting([root.path], maxDepth: 20)
+        PdfLibraryService.walkForTesting([root.path])
             .map((e) => e.name)
             .toSet(),
         {'shallow.pdf', 'deep.pdf'},
       );
     });
 
-    test('honours the file cap', () {
-      for (var i = 0; i < 12; i++) {
-        _pdf('${root.path}/file$i.pdf');
+    test('finds more than 5000 PDFs and continues to a second volume', () {
+      for (var i = 0; i < 5001; i++) {
+        _pdf('${root.path}/internal/file$i.pdf');
       }
+      _pdf('${root.path}/sdcard/Documents/on-card.pdf');
 
-      final found = PdfLibraryService.walkForTesting([root.path], maxFiles: 5);
+      final found = PdfLibraryService.walkForTesting([
+        '${root.path}/internal',
+        '${root.path}/sdcard',
+      ]);
 
-      expect(found, hasLength(5));
+      expect(found, hasLength(5002));
+      expect(found.map((e) => e.name), contains('on-card.pdf'));
     });
 
-    test('reaches shallow files before deep ones', () {
-      // Breadth-first matters: when the cap or the budget cuts a sweep short,
-      // what survives should be the documents nearest the top of the tree.
-      _pdf('${root.path}/a/b/c/d/deep.pdf');
-      _pdf('${root.path}/top.pdf');
+    test('keeps app-owned PDFs under Android/data while scanning shared media', () {
+      final own = '${root.path}/Android/data/com.yourmateapps.pdfhelper/files';
+      _pdf('$own/mine.pdf');
+      _pdf('${root.path}/Android/data/com.other/private.pdf');
+      _pdf(
+        '${root.path}/Android/media/com.whatsapp/Media/.Documents/invoice.pdf',
+      );
+      _pdf('${root.path}/Documents/Android/data/backup.pdf');
 
-      final found = PdfLibraryService.walkForTesting([root.path], maxFiles: 1);
+      final found = PdfLibraryService.walkForTesting(
+        [root.path],
+        appRoots: [own],
+      );
 
-      expect(found.map((e) => e.name), ['top.pdf']);
+      expect(found.map((e) => e.name).toSet(), {
+        'mine.pdf',
+        'private.pdf',
+        'invoice.pdf',
+        'backup.pdf',
+      });
+      expect(found.singleWhere((e) => e.name == 'mine.pdf').isAppOwned, isTrue);
+    });
+
+    test('deduplicates primary storage aliases', () {
+      final volume = Directory('${root.path}/volume')..createSync();
+      _pdf('${volume.path}/Download/one.pdf');
+      final alias = Link('${root.path}/sdcard')..createSync(volume.path);
+
+      final found = PdfLibraryService.walkForTesting([alias.path, volume.path]);
+
+      expect(found, hasLength(1));
+      expect(found.single.path, '${alias.path}/Download/one.pdf');
+    });
+
+    test('uses the supplied current-user storage root', () {
+      _pdf('${root.path}/storage/emulated/10/Download/work.pdf');
+      _pdf('${root.path}/storage/emulated/0/Download/personal.pdf');
+
+      final found = PdfLibraryService.walkForTesting([
+        '${root.path}/storage/emulated/10',
+      ]);
+
+      expect(found.map((e) => e.name), ['work.pdf']);
     });
 
     test('does not follow a directory symlink back into itself', () {
@@ -176,14 +226,12 @@ void main() {
       expect(entry.title, 'Q3');
       expect(entry.folder, 'Reports');
       expect(entry.sizeBytes, file.lengthSync());
-      expect(
-        entry.modifiedMs,
-        file.statSync().modified.millisecondsSinceEpoch,
-      );
+      expect(entry.modifiedMs, file.statSync().modified.millisecondsSinceEpoch);
     });
 
     test('flags files under an app root as app-owned', () {
       _pdf('${root.path}/shared/outside.pdf');
+      _pdf('${root.path}/appdir-backup/not-mine.pdf');
       _pdf('${root.path}/appdir/mine.pdf');
 
       final found = PdfLibraryService.walkForTesting(
@@ -194,6 +242,7 @@ void main() {
       final byName = {for (final e in found) e.name: e};
       expect(byName['mine.pdf']!.isAppOwned, isTrue);
       expect(byName['outside.pdf']!.isAppOwned, isFalse);
+      expect(byName['not-mine.pdf']!.isAppOwned, isFalse);
     });
 
     test('never returns the same file twice from overlapping roots', () {
@@ -210,6 +259,17 @@ void main() {
     test('returns nothing for a root that does not exist', () {
       final found = PdfLibraryService.walkForTesting(['${root.path}/nope']);
       expect(found, isEmpty);
+    });
+
+    test('an unavailable volume does not prevent scanning the next one', () {
+      _pdf('${root.path}/mounted/Download/keep.pdf');
+
+      final found = PdfLibraryService.walkForTesting([
+        '${root.path}/unmounted',
+        '${root.path}/mounted',
+      ]);
+
+      expect(found.map((e) => e.name), ['keep.pdf']);
     });
   });
 

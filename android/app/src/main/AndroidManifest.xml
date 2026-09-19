@@ -11,8 +11,8 @@
 
     <!-- The Files tab lists every PDF on the device, which is what a document
          reader is for. Android 11+ gates that behind All files access; older
-         releases only need READ_EXTERNAL_STORAGE, which is capped at API 32
-         because it does nothing after that.
+         releases only need READ_EXTERNAL_STORAGE. Android 10 also needs
+         requestLegacyExternalStorage for direct document discovery.
 
          Both are optional at runtime: without them the app still works and
          the Files tab shows its own documents, says so, and offers the grant.
@@ -23,7 +23,7 @@
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
-        android:maxSdkVersion="32"/>
+        android:maxSdkVersion="29"/>
 
     <!-- Notification permission (Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
@@ -31,6 +31,7 @@
     <application
         android:label="PDF Helper"
         android:name="${applicationName}"
+        android:requestLegacyExternalStorage="true"
         android:icon="@mipmap/ic_launcher">
         <activity
             android:name=".MainActivity"

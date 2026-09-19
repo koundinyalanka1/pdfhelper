@@ -215,11 +215,19 @@ the new binaries are picked up.
 
 ## Finding files on the device
 
-The Files tab walks shared storage on a background isolate, capped at 5000
-files, depth 12, and 30 seconds so a huge or slow volume can never hang the
-tab. Hidden directories, `cache`/`node_modules`-style directories and
-`Android/data` / `Android/obb` are skipped; `Android/media` is deliberately
-kept, because that is where messaging apps now store received documents.
+The Files tab walks all accessible shared-storage volumes on a background
+isolate. It uses Android's volume paths for the current user, including mounted
+SD/USB drives, and scans to completion without a file-count, depth, or time
+cutoff. Hidden files/folders and folders named `cache` or `node_modules` are
+included if they contain PDFs. Root aliases are deduplicated and nested symbolic
+links are not followed, preventing loops. An unreadable branch does not stop
+other folders or volumes from being scanned.
+
+Android 11+ still protects other apps' private directories (`Android/data` and
+`Android/obb`); the scan skips branches the OS denies access to. Readable folders
+on older Android versions remain included. PDF Helper's own document directories
+are scanned separately. `Android/media`, including messaging-app folders, is
+included. Cloud-only files need to be downloaded or imported first.
 
 What it can see depends on the grant:
 
@@ -228,10 +236,19 @@ What it can see depends on the grant:
 | Default | app's own directories | app's own directories | app's own documents |
 | After the grant | `READ_EXTERNAL_STORAGE` → all shared storage | All files access (`MANAGE_EXTERNAL_STORAGE`) → all shared storage | n/a — sandboxed; use Import |
 
-Access is *probed* (by trying to list the root) rather than inferred from a
-permission status, because the two disagree across Android versions. Without
-the grant the tab still works, says what it is showing, and offers the grant
-inline. On iOS the same banner offers Import instead.
+Access is checked with `Environment.isExternalStorageManager()` on Android 11+
+and the storage permission/legacy-storage state on older versions. Listing a
+root is not proof of full access: scoped storage can return a filtered view.
+Android 10 uses `requestLegacyExternalStorage`; Android 11+ uses the All files
+access Settings screen. The Files tab rechecks on every app resume and queues
+another scan if a refresh arrives during a sweep. Without the grant, the tab
+shows app documents and offers **Allow access**. On iOS it offers Import.
+
+Regression checks: `flutter test test/services/android_storage_service_test.dart
+test/services/pdf_library_service_test.dart test/screens/library_screen_test.dart`.
+On a phone, test granting/revoking access and returning immediately, then verify
+PDFs in Download, Documents, Android/media, hidden folders, deeply nested folders,
+and a mounted SD/USB drive. The list must refresh without restarting the app.
 
 ## Platform support
 

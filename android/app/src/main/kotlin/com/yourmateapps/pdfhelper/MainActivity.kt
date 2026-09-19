@@ -1,9 +1,14 @@
 package com.yourmateapps.pdfhelper
 
 import android.content.Intent
+import android.Manifest
+import android.content.pm.PackageManager
 import android.util.Log
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
+import android.os.storage.StorageManager
+import android.provider.Settings
 import android.provider.OpenableColumns
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -28,6 +33,21 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.yourmateapps.pdfhelper/storage")
+            .setMethodCallHandler { call, result ->
+                try {
+                    when (call.method) {
+                        "getStorageInfo" -> result.success(storageInfo())
+                        "openStorageSettings" -> {
+                            openStorageSettings()
+                            result.success(null)
+                        }
+                        else -> result.notImplemented()
+                    }
+                } catch (e: Exception) {
+                    result.error("STORAGE_ERROR", e.message, null)
+                }
+            }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "resolvePdfUri" -> {
@@ -93,6 +113,54 @@ class MainActivity : FlutterActivity() {
                 }
                 else -> result.notImplemented()
             }
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun storageInfo(): Map<String, Any> {
+        val hasFullAccess = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Environment.isExternalStorageManager()
+        } else {
+            val legacy = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
+                Environment.isExternalStorageLegacy()
+            legacy && checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) ==
+                PackageManager.PERMISSION_GRANTED
+        }
+        val roots = linkedSetOf<String>()
+        fun addRoot(directory: File?) {
+            if (directory == null) return
+            roots.add(try { directory.canonicalPath } catch (_: Exception) { directory.absolutePath })
+        }
+        // The OS supplies the current user's primary storage path. Hardcoding
+        // /storage/emulated/0 misses secondary users and work profiles.
+        addRoot(Environment.getExternalStorageDirectory())
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val manager = getSystemService(StorageManager::class.java)
+            for (volume in manager?.storageVolumes.orEmpty()) addRoot(volume.directory)
+        }
+        // Also discovers removable volumes on Android 10 and earlier.
+        for (directory in getExternalFilesDirs(null)) {
+            val path = directory?.absolutePath ?: continue
+            val marker = path.indexOf("/Android/data/")
+            if (marker > 0) addRoot(File(path.substring(0, marker)))
+        }
+        return mapOf(
+            "sdkInt" to Build.VERSION.SDK_INT,
+            "hasFullAccess" to hasFullAccess,
+            "roots" to roots.toList(),
+        )
+    }
+
+    private fun openStorageSettings() {
+        val appUri = Uri.parse("package:$packageName")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, appUri))
+            } catch (_: android.content.ActivityNotFoundException) {
+                startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+            }
+        } else {
+            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, appUri))
         }
     }
 
