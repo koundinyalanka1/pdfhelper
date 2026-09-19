@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 
 import '../providers/theme_provider.dart';
 import '../services/pdf_core_service.dart';
@@ -30,8 +29,9 @@ class _MetadataScreenState extends State<MetadataScreen> {
   bool _isSaving = false;
   String? _error;
 
-  bool get _isDarkMode => context.watch<ThemeProvider>().isDarkMode;
-  AppColors get _colors => AppColors(_isDarkMode);
+  /// Theme colours, assigned at the top of [build] rather than read
+  /// through a `context.watch()` getter — see [AppColors.of].
+  AppColors _colors = AppColors(false);
 
   static const _fields = <({String key, String label, IconData icon})>[
     (key: 'title', label: 'Title', icon: Icons.title_rounded),
@@ -153,6 +153,7 @@ class _MetadataScreenState extends State<MetadataScreen> {
 
   @override
   Widget build(BuildContext context) {
+    _colors = AppColors.of(context);
     return Scaffold(
       backgroundColor: _colors.background,
       appBar: AppBar(

@@ -12,7 +12,14 @@ import '../services/pdf_core_service.dart';
 import '../services/pdf_raster.dart';
 import '../services/pdf_service.dart';
 import '../services/recent_files_service.dart';
+import 'ai_screen.dart';
+import 'extract_text_screen.dart';
 import 'home_screen.dart';
+import 'merge_pdf_screen.dart';
+import 'metadata_screen.dart';
+import 'organize_pages_screen.dart';
+import 'protect_screen.dart';
+import 'split_pdf_screen.dart';
 
 /// Continuous-scroll PDF viewer built on the native Rust rasterizer.
 ///
@@ -66,8 +73,9 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
   bool _isLoading = true;
   String? _error;
 
-  bool get _isDarkMode => context.watch<ThemeProvider>().isDarkMode;
-  AppColors get _colors => AppColors(_isDarkMode);
+  /// Theme colours, assigned at the top of [build] rather than read
+  /// through a `context.watch()` getter — see [AppColors.of].
+  AppColors _colors = AppColors(false);
 
   String get _fileName =>
       widget.title ?? widget.pdfPath.split(RegExp(r'[/\\]')).last;
@@ -237,10 +245,184 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
     );
   }
 
+  /// Everything you can do to the document you are reading.
+  ///
+  /// This is the only route to the rest of the app for a PDF opened from
+  /// somewhere else: the "Open with" chooser offers one entry — view — rather
+  /// than a menu of verbs chosen before the user has seen the document. Once
+  /// it is on screen, picking a tool is an informed decision.
+  void _showActions() {
+    final isRoot = !Navigator.of(context).canPop();
+    // Read, not watch: this runs from a tap handler rather than from build,
+    // and `watch` outside build throws.
+    final colors = AppColors(context.read<ThemeProvider>().isDarkMode);
+
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: colors.cardBackground,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      isScrollControlled: true,
+      builder: (ctx) => SafeArea(
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.picture_as_pdf_rounded,
+                      color: Color(0xFFE94560),
+                      size: 22,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        _fileName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: colors.textPrimary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Divider(color: colors.divider, height: 20),
+              _action(ctx, colors, Icons.merge_rounded, 'Merge with…', () {
+                _push(MergePdfScreen(initialPdfPath: widget.pdfPath));
+              }),
+              _action(ctx, colors, Icons.content_cut_rounded, 'Split', () {
+                _push(SplitPdfScreen(initialPdfPath: widget.pdfPath));
+              }),
+              _action(
+                ctx,
+                colors,
+                Icons.dashboard_customize_rounded,
+                'Organize pages',
+                () => _push(
+                  OrganizePagesScreen(
+                    pdfPath: widget.pdfPath,
+                    password: widget.password,
+                  ),
+                ),
+              ),
+              Divider(color: colors.divider, height: 20),
+              _action(
+                ctx,
+                colors,
+                Icons.auto_awesome_rounded,
+                'Ask AI',
+                () => _push(
+                  AiScreen(pdfPath: widget.pdfPath, password: widget.password),
+                ),
+              ),
+              _action(
+                ctx,
+                colors,
+                Icons.text_snippet_rounded,
+                'Extract text',
+                () => _push(
+                  ExtractTextScreen(
+                    pdfPath: widget.pdfPath,
+                    password: widget.password,
+                  ),
+                ),
+              ),
+              _action(
+                ctx,
+                colors,
+                Icons.lock_rounded,
+                'Protect',
+                () => _push(
+                  ProtectScreen(
+                    pdfPath: widget.pdfPath,
+                    password: widget.password,
+                    isEncrypted: widget.password.isNotEmpty,
+                  ),
+                ),
+              ),
+              _action(
+                ctx,
+                colors,
+                Icons.info_outline_rounded,
+                'Document details',
+                () => _push(
+                  MetadataScreen(
+                    pdfPath: widget.pdfPath,
+                    password: widget.password,
+                  ),
+                ),
+              ),
+              Divider(color: colors.divider, height: 20),
+              _action(
+                ctx,
+                colors,
+                Icons.open_in_new_rounded,
+                'Open in another app',
+                () => PdfService.openPdf(widget.pdfPath),
+              ),
+              // Only when the viewer *is* the app — opened straight from
+              // another app's "Open with". Otherwise there is already a stack
+              // to go back through.
+              if (isRoot)
+                _action(
+                  ctx,
+                  colors,
+                  Icons.folder_rounded,
+                  'Browse all PDFs',
+                  () {
+                    Navigator.pushReplacement(
+                      context,
+                      MaterialPageRoute(builder: (_) => const HomeScreen()),
+                    );
+                  },
+                ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _action(
+    BuildContext sheetContext,
+    AppColors colors,
+    IconData icon,
+    String label,
+    VoidCallback onTap,
+  ) {
+    return ListTile(
+      dense: true,
+      leading: Icon(icon, color: const Color(0xFFE94560), size: 21),
+      title: Text(
+        label,
+        style: TextStyle(color: colors.textPrimary, fontSize: 14.5),
+      ),
+      onTap: () {
+        Navigator.pop(sheetContext);
+        onTap();
+      },
+    );
+  }
+
+  void _push(Widget screen) {
+    Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
+  }
+
   @override
   Widget build(BuildContext context) {
+    _colors = AppColors.of(context);
     return Scaffold(
-      backgroundColor: _isDarkMode ? const Color(0xFF12121C) : Colors.grey.shade300,
+      backgroundColor: _colors.isDark
+          ? const Color(0xFF12121C)
+          : Colors.grey.shade300,
       appBar: AppBar(
         title: Text(
           _fileName,
@@ -272,16 +454,16 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
             ),
           IconButton(
             icon: const Icon(Icons.share),
-            onPressed: () =>
-                SharePlus.instance.share(
-                  ShareParams(files: [XFile(widget.pdfPath)], text: 'PDF'),
-                ),
+            tooltip: 'Share',
+            onPressed: () => SharePlus.instance.share(
+              ShareParams(files: [XFile(widget.pdfPath)], text: 'PDF'),
+            ),
             color: _colors.textPrimary,
           ),
           IconButton(
-            icon: const Icon(Icons.open_in_new),
-            tooltip: 'Open in another app',
-            onPressed: () => PdfService.openPdf(widget.pdfPath),
+            icon: const Icon(Icons.more_vert),
+            tooltip: 'More actions',
+            onPressed: _showActions,
             color: _colors.textPrimary,
           ),
         ],
@@ -344,7 +526,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
             password: widget.password,
             pageIndex: index,
             fallbackAspectRatio: _aspectRatio,
-            isDark: _isDarkMode,
+            isDark: _colors.isDark,
             zoom: _zoom,
             onMeasured: (height) => _pageHeights[index] = height,
           ),

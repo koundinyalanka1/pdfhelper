@@ -57,12 +57,16 @@
             android:exported="false"
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
-        <!-- View PDF - "View" sorts last alphabetically; use "Display PDF" for first -->
+        <!-- The app's single "Open with" entry. Opening a PDF from another app
+             means one thing — read it — so the chooser gets one row labelled
+             with the app's name, not a menu of verbs. Merge, split and the
+             rest are reached from the viewer's own actions once the document
+             is on screen; see PdfViewerScreen. -->
         <activity-alias
             android:name=".ViewPdfAlias"
             android:targetActivity=".PdfIntentTrampolineActivity"
             android:exported="true"
-            android:label="View PDF">
+            android:label="PDF Helper">
             <meta-data
                 android:name="com.yourmateapps.pdfhelper.PDF_ACTION"
                 android:value="view"/>
@@ -73,54 +77,6 @@
                 <data android:mimeType="application/pdf"/>
             </intent-filter>
             <intent-filter android:priority="100">
-                <action android:name="android.intent.action.VIEW"/>
-                <category android:name="android.intent.category.DEFAULT"/>
-                <data android:scheme="file"/>
-                <data android:host="*"/>
-                <data android:pathPattern=".*\\.pdf"/>
-            </intent-filter>
-        </activity-alias>
-
-        <!-- Merge PDF: appears in "Open with" menu for PDF files -->
-        <activity-alias
-            android:name=".MergePdfAlias"
-            android:targetActivity=".PdfIntentTrampolineActivity"
-            android:exported="true"
-            android:label="Merge with PDF Helper">
-            <meta-data
-                android:name="com.yourmateapps.pdfhelper.PDF_ACTION"
-                android:value="merge"/>
-            <intent-filter android:priority="90">
-                <action android:name="android.intent.action.VIEW"/>
-                <category android:name="android.intent.category.DEFAULT"/>
-                <category android:name="android.intent.category.BROWSABLE"/>
-                <data android:mimeType="application/pdf"/>
-            </intent-filter>
-            <intent-filter android:priority="90">
-                <action android:name="android.intent.action.VIEW"/>
-                <category android:name="android.intent.category.DEFAULT"/>
-                <data android:scheme="file"/>
-                <data android:host="*"/>
-                <data android:pathPattern=".*\\.pdf"/>
-            </intent-filter>
-        </activity-alias>
-
-        <!-- Split PDF: appears in "Open with" menu for PDF files -->
-        <activity-alias
-            android:name=".SplitPdfAlias"
-            android:targetActivity=".PdfIntentTrampolineActivity"
-            android:exported="true"
-            android:label="Split with PDF Helper">
-            <meta-data
-                android:name="com.yourmateapps.pdfhelper.PDF_ACTION"
-                android:value="split"/>
-            <intent-filter android:priority="90">
-                <action android:name="android.intent.action.VIEW"/>
-                <category android:name="android.intent.category.DEFAULT"/>
-                <category android:name="android.intent.category.BROWSABLE"/>
-                <data android:mimeType="application/pdf"/>
-            </intent-filter>
-            <intent-filter android:priority="90">
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
                 <data android:scheme="file"/>

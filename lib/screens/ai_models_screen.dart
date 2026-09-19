@@ -1,6 +1,5 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 
 import '../ai/ai_model.dart';
 import '../ai/model_store.dart';
@@ -29,8 +28,9 @@ class _AiModelsScreenState extends State<AiModelsScreen> {
   bool _isLoading = true;
   bool _isImporting = false;
 
-  bool get _isDarkMode => context.watch<ThemeProvider>().isDarkMode;
-  AppColors get _colors => AppColors(_isDarkMode);
+  /// Theme colours, assigned at the top of [build] rather than read
+  /// through a `context.watch()` getter — see [AppColors.of].
+  AppColors _colors = AppColors(false);
 
   @override
   void initState() {
@@ -121,6 +121,7 @@ class _AiModelsScreenState extends State<AiModelsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    _colors = AppColors.of(context);
     return Scaffold(
       backgroundColor: _colors.background,
       appBar: AppBar(

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../providers/theme_provider.dart';
@@ -35,8 +34,9 @@ class _ExtractTextScreenState extends State<ExtractTextScreen> {
   int _selectedPage = 0;
   bool _showAllPages = true;
 
-  bool get _isDarkMode => context.watch<ThemeProvider>().isDarkMode;
-  AppColors get _colors => AppColors(_isDarkMode);
+  /// Theme colours, assigned at the top of [build] rather than read
+  /// through a `context.watch()` getter — see [AppColors.of].
+  AppColors _colors = AppColors(false);
 
   String get _visibleText => _showAllPages
       ? _pages
@@ -117,6 +117,7 @@ class _ExtractTextScreenState extends State<ExtractTextScreen> {
 
   @override
   Widget build(BuildContext context) {
+    _colors = AppColors.of(context);
     final hasText = _visibleText.trim().isNotEmpty;
     return Scaffold(
       backgroundColor: _colors.background,

@@ -15,14 +15,21 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  ThemeProvider get _themeProvider => context.watch<ThemeProvider>();
-  bool get _isDarkMode => _themeProvider.isDarkMode;
-  bool get _autoSave => _themeProvider.autoSave;
-  bool get _notifications => _themeProvider.notifications;
-  String get _saveLocation => _themeProvider.saveLocation;
-  String get _outputQuality => _themeProvider.outputQuality;
-  bool get _skipPreview => _themeProvider.skipPreview;
-  AppColors get _colors => AppColors(_isDarkMode);
+  /// The settings on display, captured at the top of [build].
+  ///
+  /// A field rather than a `context.watch()` getter — see [AppColors.of].
+  /// `late` states the rule the screen already follows: everything below is
+  /// read while building. Writes never come through here; each toggle calls
+  /// `context.read<ThemeProvider>()` at the moment it is tapped.
+  late ThemeProvider _settings;
+  AppColors _colors = AppColors(false);
+
+  bool get _isDarkMode => _settings.isDarkMode;
+  bool get _autoSave => _settings.autoSave;
+  bool get _notifications => _settings.notifications;
+  String get _saveLocation => _settings.saveLocation;
+  String get _outputQuality => _settings.outputQuality;
+  bool get _skipPreview => _settings.skipPreview;
 
   String _appVersion = '';
 
@@ -100,6 +107,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    _settings = context.watch<ThemeProvider>();
+    _colors = AppColors(_settings.isDarkMode);
     return Scaffold(
       backgroundColor: _colors.background,
       appBar: AppBar(

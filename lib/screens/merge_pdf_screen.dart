@@ -7,7 +7,9 @@ import '../models/selected_pdf_file.dart';
 import '../services/ads_service.dart';
 import '../services/pdf_service.dart';
 import '../providers/theme_provider.dart';
+import '../utils/file_naming.dart';
 import '../utils/format_utils.dart';
+import '../widgets/pdf_name_dialog.dart';
 import 'pdf_preview_screen.dart';
 import 'pdf_viewer_screen.dart';
 
@@ -30,8 +32,9 @@ class _MergePdfScreenState extends State<MergePdfScreen>
   double _mergeProgress = 0.0;
   String _mergeStatus = '';
 
-  bool get _isDarkMode => context.watch<ThemeProvider>().isDarkMode;
-  AppColors get _colors => AppColors(_isDarkMode);
+  /// Theme colours, assigned at the top of [build] rather than read
+  /// through a `context.watch()` getter — see [AppColors.of].
+  AppColors _colors = AppColors(false);
 
   @override
   void initState() {
@@ -168,6 +171,19 @@ class _MergePdfScreenState extends State<MergePdfScreen>
       return;
     }
 
+    // Asked up front so the name reaches the output file itself rather than
+    // only the auto-saved copy (auto-save can be off).
+    final fileName = await askPdfName(
+      context: context,
+      initialName: defaultPdfName('Merged'),
+      confirmLabel: 'Merge',
+      accent: const Color(0xFFE94560),
+      hint: _mergeableBatchCount > 1
+          ? '$_mergeableBatchCount files, numbered 1-$_mergeableBatchCount'
+          : null,
+    );
+    if (fileName == null || !mounted) return;
+
     setState(() {
       _isProcessing = true;
       _mergeProgress = 0.05;
@@ -192,6 +208,9 @@ class _MergePdfScreenState extends State<MergePdfScreen>
         final batch = mergeable[i];
         final path = await PdfService.mergeFiles(
           batch.map((f) => f.path).toList(),
+          // One title, several batches: number them so the outputs stay
+          // distinguishable.
+          fileName: mergeable.length > 1 ? '$fileName ${i + 1}' : fileName,
         );
         if (path != null) outputPaths.add(path);
         if (!mounted) return;
@@ -216,6 +235,7 @@ class _MergePdfScreenState extends State<MergePdfScreen>
             filePaths: outputPaths,
             sourceType: PdfPreviewSourceType.merge,
             pageCount: _totalBatchesPages,
+            fileName: fileName,
           );
           if (!mounted) return;
           _showSnackBar(
@@ -231,6 +251,7 @@ class _MergePdfScreenState extends State<MergePdfScreen>
                 filePaths: outputPaths,
                 sourceType: PdfPreviewSourceType.merge,
                 pageCount: _totalBatchesPages,
+                fileName: fileName,
                 onSaved: () {
                   setState(() => _batches = [[]]);
                 },
@@ -356,7 +377,7 @@ class _MergePdfScreenState extends State<MergePdfScreen>
                   width: w,
                   height: h,
                   decoration: BoxDecoration(
-                    color: _isDarkMode
+                    color: _colors.isDark
                         ? Colors.white.withValues(alpha: 0.1)
                         : Colors.grey.shade200,
                     borderRadius: BorderRadius.circular(8),
@@ -518,6 +539,7 @@ class _MergePdfScreenState extends State<MergePdfScreen>
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    _colors = AppColors.of(context);
     return Scaffold(
       backgroundColor: _colors.background,
       appBar: AppBar(

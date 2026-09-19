@@ -70,6 +70,14 @@ ask for one when tapped.
 - **Scan to PDF** — camera or gallery → crop → 6 filters → multi-page PDF.
   JPEGs are embedded as `DCTDecode` streams without being decoded, so at
   Maximum quality the camera's own bytes land in the PDF untouched.
+- **Crop & straighten** — four corner handles plus a handle per edge, so the
+  crop follows a page that is not square to the camera, and a homography
+  flattens it back to a rectangle. The page edges are found automatically on
+  open (gradient-steered Hough transform, pure Dart, no OpenCV); a rectangle
+  mode with paper-size ratios is one tap away for photos that are already flat.
+- Every tool **names its output** before it runs — the title reaches the file
+  itself, not just the auto-saved copy, and collisions are numbered rather
+  than overwritten.
 
 **Edit** (the Tools tab)
 - **Organize pages** — rotate, reorder and delete in one staged pass
@@ -87,7 +95,9 @@ ask for one when tapped.
 
 **Also**
 - Continuous-scroll viewer with pinch-zoom that re-renders sharper as you zoom
-- Android "Open with" integration: **View / Merge / Split with PDF Helper**
+- Android "Open with" integration: **one** entry, because opening a PDF from
+  another app means one thing — read it. Every tool is then a tap away in the
+  viewer's own menu, chosen once the document is actually on screen
 - Auto-save, output quality, dark/light theme, completion notifications
 - Just-in-time permission requests with rationale dialogs
 
@@ -227,7 +237,7 @@ inline. On iOS the same banner offers Import instead.
 
 | Platform | Status |
 |----------|--------|
-| Android  | supported (API 24+); scoped storage; Merge/View/Split intent aliases |
+| Android  | supported (API 24+); scoped storage; one VIEW intent alias |
 | iOS      | supported; required `NS*UsageDescription` keys are in `Info.plist` |
 | macOS    | the core builds, the app is not wired up |
 | Windows / Linux / web | not supported — the app uses `dart:io` throughout |

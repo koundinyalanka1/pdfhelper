@@ -5,7 +5,6 @@ import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -87,13 +86,8 @@ class _LibraryScreenState extends State<LibraryScreen>
 
   final TextEditingController _searchController = TextEditingController();
 
-  /// Theme colours, captured during [build].
-  ///
-  /// Held as a field rather than read through `context.watch()` on demand:
-  /// several callers — a popup menu's `itemBuilder`, a gesture handler — run
-  /// outside the build phase, and `watch()` asserts there. Assigning in
-  /// [build] keeps the screen repainting on a theme change while making the
-  /// colours safe to read from anywhere.
+  /// Theme colours, assigned at the top of [build] rather than read
+  /// through a `context.watch()` getter — see [AppColors.of].
   AppColors _colors = AppColors(false);
 
   @override
@@ -672,7 +666,7 @@ class _LibraryScreenState extends State<LibraryScreen>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    _colors = AppColors(context.watch<ThemeProvider>().isDarkMode);
+    _colors = AppColors.of(context);
     final visible = _visible;
     return Scaffold(
       backgroundColor: _colors.background,

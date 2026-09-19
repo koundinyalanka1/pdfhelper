@@ -1,9 +1,11 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
 import '../services/notification_service.dart';
+import '../utils/file_naming.dart';
 
 class ThemeProvider extends ChangeNotifier {
   static const String _themeKey = 'isDarkMode';
@@ -170,7 +172,15 @@ class ThemeProvider extends ChangeNotifier {
   /// `getApplicationDocumentsDirectory()`) is deleted so we don't keep two
   /// copies on disk indefinitely. Callers should reference the returned path
   /// (the saved copy) for any subsequent share/open operations.
-  Future<String?> autoSaveFile(String sourcePath, String prefix) async {
+  ///
+  /// [fileName] is the title the user typed. Without one the file keeps the
+  /// old `<prefix>_<millis>.pdf` form, which is what every tool did before
+  /// naming existed.
+  Future<String?> autoSaveFile(
+    String sourcePath,
+    String prefix, {
+    String? fileName,
+  }) async {
     if (!_autoSave) return null;
 
     try {
@@ -183,10 +193,18 @@ class ThemeProvider extends ChangeNotifier {
         await saveDir.create(recursive: true);
       }
 
-      // Generate unique filename
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final fileName = '${prefix}_$timestamp.pdf';
-      final destPath = '$savePath/$fileName';
+      // A typed name wins over the timestamped one, de-duplicated against
+      // whatever is already in the save folder.
+      final String destPath;
+      if (fileName != null && fileName.trim().isNotEmpty) {
+        destPath = await uniqueFilePath(
+          savePath,
+          withPdfExtension(sanitizeFileName(fileName)),
+        );
+      } else {
+        final timestamp = DateTime.now().millisecondsSinceEpoch;
+        destPath = '$savePath/${prefix}_$timestamp.pdf';
+      }
 
       // Copy file to save location, then drop the source.
       final sourceFile = File(sourcePath);
@@ -273,11 +291,25 @@ class ThemeProvider extends ChangeNotifier {
   ThemeData get currentTheme => _isDarkMode ? darkTheme : lightTheme;
 }
 
-// App Colors helper class
+/// The palette a screen paints with, for one brightness.
 class AppColors {
   final bool isDark;
 
   AppColors(this.isDark);
+
+  /// The palette for the current theme. **Call only from `build`.**
+  ///
+  /// This watches the provider, and `context.watch()` asserts unless a build
+  /// is in progress. That is why screens hold their colours in a *field*
+  /// assigned at the top of `build`, rather than behind a getter that calls
+  /// this on demand: a getter looks harmless until some gesture handler,
+  /// popup `itemBuilder` or async callback reads it outside the build phase,
+  /// and then it throws — only on that one path, only once someone taps it.
+  ///
+  /// Assigning once per build keeps the screen repainting on a theme change
+  /// while making the colours safe to read from anywhere in the class.
+  static AppColors of(BuildContext context) =>
+      AppColors(context.watch<ThemeProvider>().isDarkMode);
 
   Color get background =>
       isDark ? const Color(0xFF1A1A2E) : const Color(0xFFF5F5F7);

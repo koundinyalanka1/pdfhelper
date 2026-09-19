@@ -7,6 +7,7 @@ import 'package:flutter_pdf_core/flutter_pdf_core.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../utils/error_logger.dart';
+import '../utils/file_naming.dart';
 
 export 'package:flutter_pdf_core/flutter_pdf_core.dart'
     show PdfException, PdfInfo, PdfMetadata;
@@ -99,8 +100,14 @@ class PdfCoreService {
   // -------------------------------------------------------- transformations
 
   /// Merge [inputPaths] in order. Returns the output path.
-  static Future<String> merge(List<String> inputPaths) async {
-    final out = await _outputPath('merged_pdf');
+  ///
+  /// [fileName] is the user-chosen title; without one the output keeps the
+  /// old `merged_pdf_<millis>.pdf` form.
+  static Future<String> merge(
+    List<String> inputPaths, {
+    String? fileName,
+  }) async {
+    final out = await _outputPath('merged_pdf', fileName: fileName);
     await PdfCore.mergeAsync(inputPaths, out);
     return out;
   }
@@ -111,8 +118,9 @@ class PdfCoreService {
     String pages, {
     String prefix = 'extracted_pages',
     String password = '',
+    String? fileName,
   }) async {
-    final out = await _outputPath(prefix);
+    final out = await _outputPath(prefix, fileName: fileName);
     await PdfCore.extractPagesAsync(path, pages, out, password: password);
     return out;
   }
@@ -201,11 +209,15 @@ class PdfCoreService {
     String path, {
     String password = '',
     int? pageCount,
+    String? fileName,
   }) async {
     final total = pageCount ?? await PdfCore.pageCountAsync(path, password: password);
     final outputs = <String>[];
     for (int i = 1; i <= total; i++) {
-      final out = await _outputPath('page_$i');
+      final out = await _outputPath(
+        'page_$i',
+        fileName: fileName == null ? null : '$fileName $i',
+      );
       await PdfCore.extractPagesAsync(path, '$i', out, password: password);
       outputs.add(out);
     }
@@ -281,8 +293,19 @@ class PdfCoreService {
     }
   }
 
-  static Future<String> _outputPath(String prefix) async {
+  /// Where an operation's output goes.
+  ///
+  /// A [fileName] the user typed wins over [prefix]; it is sanitised and
+  /// de-duplicated, because two PDFs called "Invoice" is an ordinary thing to
+  /// ask for and the second must not overwrite the first.
+  static Future<String> _outputPath(String prefix, {String? fileName}) async {
     final dir = await getApplicationDocumentsDirectory();
+    if (fileName != null && fileName.trim().isNotEmpty) {
+      return uniqueFilePath(
+        dir.path,
+        withPdfExtension(sanitizeFileName(fileName)),
+      );
+    }
     final ts = DateTime.now().millisecondsSinceEpoch;
     return '${dir.path}/${prefix}_$ts.pdf';
   }

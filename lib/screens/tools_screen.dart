@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 
 import '../models/home_tabs.dart';
 import '../providers/theme_provider.dart';
@@ -63,8 +62,9 @@ class _ToolsScreenState extends State<ToolsScreen>
   /// Password the user supplied for an encrypted document; kept in memory only.
   String _password = '';
 
-  bool get _isDarkMode => context.watch<ThemeProvider>().isDarkMode;
-  AppColors get _colors => AppColors(_isDarkMode);
+  /// Theme colours, assigned at the top of [build] rather than read
+  /// through a `context.watch()` getter — see [AppColors.of].
+  AppColors _colors = AppColors(false);
   static const Color _accent = Color(0xFF7C4DFF);
 
   @override
@@ -245,6 +245,7 @@ class _ToolsScreenState extends State<ToolsScreen>
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    _colors = AppColors.of(context);
     return Scaffold(
       backgroundColor: _colors.background,
       appBar: AppBar(

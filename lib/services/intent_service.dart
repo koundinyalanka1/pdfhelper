@@ -3,95 +3,74 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:receive_intent/receive_intent.dart';
 
-/// Action chosen from the "Open with" menu (View PDF, Merge PDF, Split PDF).
-enum PdfIntentAction { view, merge, split }
-
-/// Result of opening app via PDF intent: path + which option user selected.
-class PdfIntentResult {
-  const PdfIntentResult(this.path, this.action);
-  final String path;
-  final PdfIntentAction action;
-}
-
-/// Handles Android intents (e.g. opening PDF from file manager).
-/// Returns resolved file path or null.
+/// Handles Android intents (e.g. opening a PDF from a file manager).
+///
+/// The app offers exactly one "Open with" entry, because opening a PDF from
+/// somewhere else means one thing: read it. Every other operation is reached
+/// from the viewer once the document is on screen, so there is no action to
+/// carry through here — only a path.
 class IntentService {
   static const _channel = MethodChannel('com.yourmateapps.pdfhelper/pdf');
 
-  /// Gets the PDF path and action if app was launched via one of the PDF aliases.
-  /// Returns null if not launched via PDF intent or on non-Android.
-  static Future<PdfIntentResult?> getOpenedPdfIntent() async {
+  /// The PDF this app was launched to open, or null when it was not launched
+  /// from an intent (or is not on Android).
+  static Future<String?> getOpenedPdfPath() async {
     if (!Platform.isAndroid) {
-      debugPrint('[IntentService] getOpenedPdfIntent: not Android, returning null');
+      debugPrint(
+        '[IntentService] getOpenedPdfPath: not Android, returning null',
+      );
       return null;
     }
 
     try {
       // Prefer native getPdfIntentData - reads directly from Activity intent.
       // This works reliably when MainActivity is started by the trampoline.
-      final nativeData = await _channel.invokeMethod<Map<Object?, Object?>>('getPdfIntentData');
-      debugPrint('[IntentService] getOpenedPdfIntent: nativeData=$nativeData');
-      if (nativeData != null &&
-          nativeData['path'] != null &&
-          nativeData['action'] != null) {
+      final nativeData = await _channel.invokeMethod<Map<Object?, Object?>>(
+        'getPdfIntentData',
+      );
+      debugPrint('[IntentService] getOpenedPdfPath: nativeData=$nativeData');
+      if (nativeData != null && nativeData['path'] != null) {
         final path = nativeData['path']! as String;
-        final actionStr = nativeData['action']! as String;
-        final action = _parseAction(actionStr);
-        debugPrint('[IntentService] getOpenedPdfIntent: from native path=$path actionStr=$actionStr action=$action');
-        return PdfIntentResult(path, action ?? PdfIntentAction.view);
+        debugPrint('[IntentService] getOpenedPdfPath: from native path=$path');
+        return path;
       }
 
       // Fallback: receive_intent (e.g. if opened directly without trampoline)
-      debugPrint('[IntentService] getOpenedPdfIntent: nativeData null/incomplete, trying receive_intent');
+      debugPrint(
+        '[IntentService] getOpenedPdfPath: nativeData null/incomplete, trying receive_intent',
+      );
       final intent = await ReceiveIntent.getInitialIntent();
-      debugPrint('[IntentService] getOpenedPdfIntent: ReceiveIntent.getInitialIntent=$intent');
+      debugPrint(
+        '[IntentService] getOpenedPdfPath: ReceiveIntent.getInitialIntent=$intent',
+      );
       if (intent == null || intent.data == null || intent.data!.isEmpty) {
-        debugPrint('[IntentService] getOpenedPdfIntent: no intent data, returning null');
+        debugPrint(
+          '[IntentService] getOpenedPdfPath: no intent data, returning null',
+        );
         return null;
       }
       if (intent.action != 'android.intent.action.VIEW') {
-        debugPrint('[IntentService] getOpenedPdfIntent: action=${intent.action} not VIEW, returning null');
+        debugPrint(
+          '[IntentService] getOpenedPdfPath: action=${intent.action} not VIEW, returning null',
+        );
         return null;
       }
 
       final uri = intent.data!;
       if (!_isPdfUri(uri)) {
-        debugPrint('[IntentService] getOpenedPdfIntent: uri=$uri not PDF, returning null');
+        debugPrint(
+          '[IntentService] getOpenedPdfPath: uri=$uri not PDF, returning null',
+        );
         return null;
       }
 
       final path = await _resolveUriToPath(uri);
-      debugPrint('[IntentService] getOpenedPdfIntent: resolved path=$path');
-      if (path == null) return null;
-
-      final actionStr = await _channel.invokeMethod<String>('getPdfIntentAction');
-      final action = _parseAction(actionStr) ?? PdfIntentAction.view;
-      debugPrint('[IntentService] getOpenedPdfIntent: from receive_intent path=$path action=$action');
-
-      return PdfIntentResult(path, action);
+      debugPrint('[IntentService] getOpenedPdfPath: resolved path=$path');
+      return path;
     } on PlatformException catch (e) {
-      debugPrint('[IntentService] getOpenedPdfIntent: PlatformException $e');
+      debugPrint('[IntentService] getOpenedPdfPath: PlatformException $e');
       return null;
     }
-  }
-
-  static PdfIntentAction? _parseAction(String? s) {
-    switch (s) {
-      case 'view':
-        return PdfIntentAction.view;
-      case 'merge':
-        return PdfIntentAction.merge;
-      case 'split':
-        return PdfIntentAction.split;
-      default:
-        return null;
-    }
-  }
-
-  /// Legacy: gets only the PDF path. Prefer [getOpenedPdfIntent].
-  static Future<String?> getOpenedPdfPath() async {
-    final result = await getOpenedPdfIntent();
-    return result?.path;
   }
 
   static bool _isPdfUri(String uri) {

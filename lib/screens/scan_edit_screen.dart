@@ -3,13 +3,11 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 import 'package:image/image.dart' as img;
-import 'package:crop_your_image/crop_your_image.dart';
 
-import '../utils/error_logger.dart';
 import 'package:path_provider/path_provider.dart';
 import '../providers/theme_provider.dart';
+import 'crop_screen.dart';
 
 enum ScanFilter {
   original,
@@ -403,8 +401,9 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
     });
   }
 
-  bool get _isDarkMode => context.watch<ThemeProvider>().isDarkMode;
-  AppColors get _colors => AppColors(_isDarkMode);
+  /// Theme colours, assigned at the top of [build] rather than read
+  /// through a `context.watch()` getter — see [AppColors.of].
+  AppColors _colors = AppColors(false);
 
   @override
   void initState() {
@@ -427,7 +426,10 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
     final result = await Navigator.push<Uint8List>(
       context,
       MaterialPageRoute(
-        builder: (context) => _CropScreen(imageBytes: _originalImageBytes!),
+        builder: (context) => CropScreen(
+          imageBytes: _originalImageBytes!,
+          jpegQuality: widget.imageQuality,
+        ),
       ),
     );
 
@@ -563,6 +565,7 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
 
   @override
   Widget build(BuildContext context) {
+    _colors = AppColors.of(context);
     return Scaffold(
       backgroundColor: _colors.background,
       appBar: AppBar(
@@ -665,7 +668,7 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
                       ),
                     if (_isProcessing)
                       Container(
-                        color: _isDarkMode ? Colors.black54 : Colors.white54,
+                        color: _colors.isDark ? Colors.black54 : Colors.white54,
                         child: Center(
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
@@ -728,7 +731,7 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
                         color: Color(0xFF00D9FF),
                       ),
                       label: const Text(
-                        'Crop Image',
+                        'Crop & Straighten',
                         style: TextStyle(
                           color: Color(0xFF00D9FF),
                           fontSize: 16,
@@ -821,7 +824,7 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
               decoration: BoxDecoration(
                 color: isSelected
                     ? const Color(0xFF00D9FF)
-                    : _isDarkMode
+                    : _colors.isDark
                     ? Colors.white.withValues(alpha: 0.1)
                     : Colors.black.withValues(alpha: 0.05),
                 borderRadius: BorderRadius.circular(16),
@@ -848,230 +851,6 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
               ),
             ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Pure Flutter crop screen that respects all phone boundaries
-class _CropScreen extends StatefulWidget {
-  final Uint8List imageBytes;
-
-  const _CropScreen({required this.imageBytes});
-
-  @override
-  State<_CropScreen> createState() => _CropScreenState();
-}
-
-class _CropScreenState extends State<_CropScreen> {
-  final CropController _cropController = CropController();
-  bool _isCropping = false;
-  double? _aspectRatio;
-
-  bool get _isDarkMode => context.watch<ThemeProvider>().isDarkMode;
-  AppColors get _colors => AppColors(_isDarkMode);
-
-  void _onCrop() {
-    setState(() => _isCropping = true);
-    _cropController.crop();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: _colors.background,
-      appBar: AppBar(
-        backgroundColor: _colors.cardBackground,
-        leading: IconButton(
-          icon: Icon(Icons.close, color: _colors.textPrimary),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: Text(
-          'Crop Document',
-          style: TextStyle(
-            color: _colors.textPrimary,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        centerTitle: true,
-        actions: [
-          TextButton(
-            onPressed: _isCropping ? null : _onCrop,
-            child: _isCropping
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                      color: Color(0xFF00D9FF),
-                      strokeWidth: 2,
-                    ),
-                  )
-                : const Text(
-                    'Done',
-                    style: TextStyle(
-                      color: Color(0xFF00D9FF),
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-          ),
-        ],
-      ),
-      body: SafeArea(
-        child: Column(
-          children: [
-            // Crop area
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Crop(
-                  image: widget.imageBytes,
-                  controller: _cropController,
-                  aspectRatio: _aspectRatio,
-                  baseColor: _colors.background,
-                  maskColor: _isDarkMode
-                      ? Colors.black.withValues(alpha: 0.7)
-                      : Colors.white.withValues(alpha: 0.7),
-                  // crop_your_image 2 folded initialArea/initialSize into
-                  // initialRectBuilder.
-                  initialRectBuilder: InitialRectBuilder.withSizeAndRatio(
-                    size: 0.9,
-                    aspectRatio: _aspectRatio,
-                  ),
-                  onStatusChanged: (status) {
-                    if (status == CropStatus.cropping) {
-                      setState(() => _isCropping = true);
-                    }
-                  },
-                  cornerDotBuilder: (size, edgeAlignment) => Container(
-                    width: size,
-                    height: size,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF00D9FF),
-                      borderRadius: BorderRadius.circular(size / 2),
-                      border: Border.all(color: Colors.white, width: 2),
-                    ),
-                  ),
-                  // crop_your_image 2 reports a CropResult rather than raw
-                  // bytes, so a failed crop is now visible instead of being
-                  // popped back as an unusable value.
-                  onCropped: (result) {
-                    setState(() => _isCropping = false);
-                    switch (result) {
-                      case CropSuccess(:final croppedImage):
-                        Navigator.pop(context, croppedImage);
-                      case CropFailure(:final cause):
-                        logError('CropScreen', cause);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Could not crop that image.'),
-                          ),
-                        );
-                    }
-                  },
-                ),
-              ),
-            ),
-
-            // Aspect ratio controls
-            Container(
-              padding: const EdgeInsets.only(
-                top: 16,
-                bottom: 16,
-                left: 16,
-                right: 16,
-              ),
-              decoration: BoxDecoration(
-                color: _colors.cardBackground,
-                borderRadius: const BorderRadius.vertical(
-                  top: Radius.circular(25),
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: _colors.shadowColor,
-                    blurRadius: 10,
-                    offset: const Offset(0, -2),
-                  ),
-                ],
-              ),
-              child: Column(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: Text(
-                      'Aspect Ratio',
-                      style: TextStyle(
-                        color: _colors.textSecondary,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ),
-                  SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        // Free first
-                        _buildAspectButton('Free', null),
-                        // Paper sizes
-                        _buildAspectButton('A4', 210 / 297),
-                        _buildAspectButton('Letter', 8.5 / 11),
-                        _buildAspectButton('Legal', 8.5 / 14),
-                        _buildAspectButton('A5', 148 / 210),
-                        // Common ratios
-                        _buildAspectButton('1:1', 1.0),
-                        _buildAspectButton('4:3', 4 / 3),
-                        _buildAspectButton('3:2', 3 / 2),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildAspectButton(String label, double? ratio) {
-    final isSelected = _aspectRatio == ratio;
-
-    return GestureDetector(
-      onTap: () {
-        setState(() {
-          _aspectRatio = ratio;
-        });
-        if (ratio != null) {
-          _cropController.aspectRatio = ratio;
-        } else {
-          _cropController.aspectRatio = null;
-        }
-      },
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 6),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        decoration: BoxDecoration(
-          color: isSelected
-              ? const Color(0xFF00D9FF)
-              : _isDarkMode
-              ? Colors.white.withValues(alpha: 0.1)
-              : Colors.black.withValues(alpha: 0.05),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: isSelected ? const Color(0xFF00D9FF) : _colors.divider,
-            width: 1.5,
-          ),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: isSelected ? Colors.white : _colors.textSecondary,
-            fontSize: 13,
-            fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
-          ),
         ),
       ),
     );

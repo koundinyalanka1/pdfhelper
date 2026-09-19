@@ -70,60 +70,46 @@ class _SplashScreenState extends State<SplashScreen>
 
   void _navigateToHome() async {
     if (!mounted) return;
-    PdfIntentResult? intentResult;
+    String? pdfPath;
     try {
-      intentResult = await IntentService.getOpenedPdfIntent();
+      pdfPath = await IntentService.getOpenedPdfPath();
     } catch (e) {
-      debugPrint('[SplashScreen] getOpenedPdfIntent error: $e');
+      debugPrint('[SplashScreen] getOpenedPdfPath error: $e');
     }
     if (!mounted) return;
 
-    debugPrint(
-      '[SplashScreen] _navigateToHome: intentResult=$intentResult action=${intentResult?.action}',
-    );
+    debugPrint('[SplashScreen] _navigateToHome: pdfPath=$pdfPath');
 
-    if (intentResult != null) {
-      final path = intentResult.path;
-      final title = getPdfDisplayTitle(path);
-
-      switch (intentResult.action) {
-        case PdfIntentAction.view:
-          debugPrint('[SplashScreen] Navigating to PdfViewerScreen path=$path');
-          Navigator.pushReplacement(
-            context,
-            PageRouteBuilder(
-              pageBuilder: (context, animation, secondaryAnimation) =>
-                  PdfViewerScreen(pdfPath: path, title: title),
-              transitionsBuilder:
-                  (context, animation, secondaryAnimation, child) {
-                    return FadeTransition(opacity: animation, child: child);
-                  },
-              transitionDuration: const Duration(milliseconds: 500),
-            ),
-          );
-          break;
-        case PdfIntentAction.split:
-          debugPrint('[SplashScreen] Navigating to Home, opening Split');
-          _goToHome(path, action: DocHandoff.split);
-          break;
-        case PdfIntentAction.merge:
-          debugPrint('[SplashScreen] Navigating to Home, opening Merge');
-          _goToHome(path, action: DocHandoff.merge);
-          break;
-      }
-    } else {
+    if (pdfPath == null) {
       debugPrint('[SplashScreen] No intent, navigating to HomeScreen default');
-      _goToHome(null);
+      _goToHome();
+      return;
     }
+
+    // Launched on a document: go straight to reading it. Every other tool is
+    // one tap away from the viewer's own menu.
+    debugPrint('[SplashScreen] Navigating to PdfViewerScreen path=$pdfPath');
+    final path = pdfPath;
+    Navigator.pushReplacement(
+      context,
+      PageRouteBuilder(
+        pageBuilder: (context, animation, secondaryAnimation) =>
+            PdfViewerScreen(pdfPath: path, title: getPdfDisplayTitle(path)),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          return FadeTransition(opacity: animation, child: child);
+        },
+        transitionDuration: const Duration(milliseconds: 500),
+      ),
+    );
   }
 
-  void _goToHome(String? pdfPath, {DocHandoff? action}) {
+  void _goToHome() {
     if (!mounted) return;
     Navigator.pushReplacement(
       context,
       PageRouteBuilder(
         pageBuilder: (context, animation, secondaryAnimation) =>
-            HomeScreen(initialPdfPath: pdfPath, initialAction: action),
+            const HomeScreen(),
         transitionsBuilder: (context, animation, secondaryAnimation, child) {
           return FadeTransition(opacity: animation, child: child);
         },

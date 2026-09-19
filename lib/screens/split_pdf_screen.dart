@@ -8,6 +8,8 @@ import '../services/pdf_raster.dart';
 import '../services/pdf_service.dart';
 import '../services/notification_service.dart';
 import '../providers/theme_provider.dart';
+import '../utils/file_naming.dart';
+import '../widgets/pdf_name_dialog.dart';
 import 'pdf_viewer_screen.dart';
 
 class SplitPdfScreen extends StatefulWidget {
@@ -42,15 +44,17 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
   double _firstPageAspectRatio = 0.7;
   int _previewsRendered = 0;
 
-  bool get _isDarkMode => context.watch<ThemeProvider>().isDarkMode;
-  AppColors get _colors => AppColors(_isDarkMode);
+  /// Theme colours, assigned at the top of [build] rather than read
+  /// through a `context.watch()` getter — see [AppColors.of].
+  AppColors _colors = AppColors(false);
 
   /// Page-thumbnail picking is only offered for smaller documents (rendering
   /// 100+ previews is slow and memory-hungry), and only while the user has
   /// actually chosen that mode — previously it silently overrode the
   /// "Page Range" and "Extract All" modes for every PDF under 30 pages,
   /// making them unreachable.
-  bool get _canUsePreviewMode => _totalPages > 0 && _totalPages < _previewModeMaxPages;
+  bool get _canUsePreviewMode =>
+      _totalPages > 0 && _totalPages < _previewModeMaxPages;
   bool get _usePreviewMode => _canUsePreviewMode && _splitMode == 'pages';
 
   static const int _previewModeMaxPages = 30;
@@ -213,6 +217,16 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
   Future<void> _splitPdf() async {
     if (_selectedFilePath == null) return;
 
+    // Named before the work starts, like every other tool. Outputs that come
+    // in sets get the page number or range appended to this title.
+    final fileName = await askPdfName(
+      context: context,
+      initialName: defaultPdfName(_usePreviewMode ? 'Extracted' : 'Split'),
+      confirmLabel: _usePreviewMode ? 'Extract' : 'Split',
+      accent: const Color(0xFFE94560),
+    );
+    if (fileName == null || !mounted) return;
+
     setState(() {
       _isProcessing = true;
       _splitProgress = 0.0;
@@ -241,6 +255,7 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
         final String? outputPath = await PdfService.extractPagesFromFile(
           _selectedFilePath!,
           sortedPages, // Already 0-based
+          fileName: fileName,
         );
 
         setState(() => _splitProgress = 0.9);
@@ -252,6 +267,7 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
             autoSavedPath = await themeProvider.autoSaveFile(
               outputPath,
               'extracted',
+              fileName: fileName,
             );
           }
           // Show notification if enabled
@@ -290,6 +306,7 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
         final outputPaths = await PdfService.splitRangesFromFile(
           _selectedFilePath!,
           rangesToUse,
+          fileName: fileName,
         );
 
         setState(() => _splitProgress = 0.9);
@@ -302,6 +319,8 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
               final saved = await themeProvider.autoSaveFile(
                 outputPaths[i],
                 'split_${i + 1}',
+                fileName:
+                    '$fileName ${rangesToUse[i].start}-${rangesToUse[i].end}',
               );
               if (saved != null) autoSavedPaths.add(saved);
             }
@@ -325,6 +344,7 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
         final List<String> outputPaths = await PdfService.splitAllPagesFromFile(
           _selectedFilePath!,
           pageCount: _totalPages,
+          fileName: fileName,
         );
 
         setState(() => _splitProgress = 0.9);
@@ -338,6 +358,7 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
               final saved = await themeProvider.autoSaveFile(
                 outputPaths[i],
                 'page_${i + 1}',
+                fileName: '$fileName ${i + 1}',
               );
               if (saved != null) autoSavedPaths.add(saved);
             }
@@ -499,6 +520,7 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    _colors = AppColors.of(context);
     return Scaffold(
       backgroundColor: _colors.background,
       appBar: AppBar(

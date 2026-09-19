@@ -8,6 +8,7 @@ import 'package:open_file/open_file.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../utils/error_logger.dart';
+import '../utils/file_naming.dart';
 import 'pdf_core_service.dart';
 import 'pdf_raster.dart';
 
@@ -28,10 +29,16 @@ class PdfService {
   // -------------------------------------------------------------- assembly
 
   /// Merge [paths] in order. Returns the output path, or null on failure.
-  static Future<String?> mergeFiles(List<String> paths) async {
+  ///
+  /// [fileName] is the title the user typed; without one the output falls
+  /// back to the timestamped name.
+  static Future<String?> mergeFiles(
+    List<String> paths, {
+    String? fileName,
+  }) async {
     if (paths.length < 2) return null;
     try {
-      return await PdfCoreService.merge(paths);
+      return await PdfCoreService.merge(paths, fileName: fileName);
     } catch (e) {
       logError('PdfService.mergeFiles', e);
       return null;
@@ -43,6 +50,7 @@ class PdfService {
     String path,
     List<int> pageIndices, {
     String password = '',
+    String? fileName,
   }) async {
     if (pageIndices.isEmpty) return null;
     try {
@@ -50,6 +58,7 @@ class PdfService {
         path,
         PdfCoreService.toPageSelection(pageIndices),
         password: password,
+        fileName: fileName,
       );
     } catch (e) {
       logError('PdfService.extractPagesFromFile', e);
@@ -58,10 +67,14 @@ class PdfService {
   }
 
   /// One output PDF per 1-based inclusive range.
+  ///
+  /// [fileName] names the *set*: each output gets the page range appended, so
+  /// one title still yields distinguishable files.
   static Future<List<String>> splitRangesFromFile(
     String path,
     List<({int start, int end})> ranges, {
     String password = '',
+    String? fileName,
   }) async {
     final outputs = <String>[];
     for (final range in ranges) {
@@ -72,6 +85,9 @@ class PdfService {
             '${range.start}-${range.end}',
             prefix: 'split_${range.start}_to_${range.end}',
             password: password,
+            fileName: fileName == null
+                ? null
+                : '$fileName ${range.start}-${range.end}',
           ),
         );
       } catch (e) {
@@ -82,16 +98,20 @@ class PdfService {
   }
 
   /// One output PDF per page.
+  ///
+  /// [fileName] names the set; each output gets its page number appended.
   static Future<List<String>> splitAllPagesFromFile(
     String path, {
     String password = '',
     int? pageCount,
+    String? fileName,
   }) async {
     try {
       return await PdfCoreService.splitAllPages(
         path,
         password: password,
         pageCount: pageCount,
+        fileName: fileName,
       );
     } catch (e) {
       logError('PdfService.splitAllPagesFromFile', e);
@@ -111,6 +131,7 @@ class PdfService {
     List<String> imagePaths, {
     String outputQuality = 'High',
     bool fitToPage = false,
+    String? fileName,
   }) async {
     if (imagePaths.isEmpty) return null;
     try {
@@ -119,8 +140,15 @@ class PdfService {
       if (jpegPaths.isEmpty) return null;
 
       final dir = await getApplicationDocumentsDirectory();
-      final outputPath =
-          '${dir.path}/images_to_pdf_${DateTime.now().millisecondsSinceEpoch}.pdf';
+      // The user's own title, if they gave one — it travels with the file all
+      // the way to the share sheet, so it is set here rather than only at
+      // auto-save time (auto-save can be off).
+      final outputPath = fileName != null && fileName.trim().isNotEmpty
+          ? await uniqueFilePath(
+              dir.path,
+              withPdfExtension(sanitizeFileName(fileName)),
+            )
+          : '${dir.path}/images_to_pdf_${DateTime.now().millisecondsSinceEpoch}.pdf';
 
       await PdfCore.imagesToPdfAsync(
         jpegPaths,

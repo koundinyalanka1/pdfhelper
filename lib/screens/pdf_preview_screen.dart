@@ -8,6 +8,8 @@ import '../services/ads_service.dart';
 import '../services/pdf_service.dart';
 import '../services/notification_service.dart';
 import '../providers/theme_provider.dart';
+import '../utils/file_naming.dart';
+import '../widgets/pdf_name_dialog.dart';
 import 'pdf_viewer_screen.dart';
 
 /// Preview screen for merged or converted PDFs before saving.
@@ -19,12 +21,17 @@ class PdfPreviewScreen extends StatefulWidget {
     required this.sourceType,
     this.onSaved,
     this.pageCount,
+    this.fileName,
   });
 
   final List<String> filePaths;
   final PdfPreviewSourceType sourceType;
   final VoidCallback? onSaved;
   final int? pageCount;
+
+  /// Title the user chose when starting the operation, without the extension.
+  /// Shown here so it can still be changed before the file is filed away.
+  final String? fileName;
 
   @override
   State<PdfPreviewScreen> createState() => _PdfPreviewScreenState();
@@ -40,6 +47,7 @@ Future<List<String>> autoSavePdfs({
   required List<String> filePaths,
   required PdfPreviewSourceType sourceType,
   required int pageCount,
+  String? fileName,
 }) async {
   final List<String> autoSavedPaths = [];
   if (themeProvider.autoSave) {
@@ -47,7 +55,18 @@ Future<List<String>> autoSavePdfs({
       final prefix = sourceType == PdfPreviewSourceType.merge
           ? 'merged_${i + 1}'
           : 'scanned';
-      final saved = await themeProvider.autoSaveFile(filePaths[i], prefix);
+      // One title, several outputs: number them rather than letting the
+      // de-duplicator pick "(2)", which reads like an accident.
+      final name = fileName == null
+          ? null
+          : filePaths.length > 1
+          ? '$fileName ${i + 1}'
+          : fileName;
+      final saved = await themeProvider.autoSaveFile(
+        filePaths[i],
+        prefix,
+        fileName: name,
+      );
       if (saved != null) autoSavedPaths.add(saved);
     }
   }
@@ -68,13 +87,36 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
   bool _isSaving = false;
   int _currentFileIndex = 0;
 
-  bool get _isDarkMode => context.watch<ThemeProvider>().isDarkMode;
-  AppColors get _colors => AppColors(_isDarkMode);
+  /// Title used when the file is saved. Seeded from the name the user gave
+  /// when they started the operation, and editable right up to Save.
+  String? _fileName;
+
+  /// Theme colours, assigned at the top of [build] rather than read
+  /// through a `context.watch()` getter — see [AppColors.of].
+  AppColors _colors = AppColors(false);
 
   @override
   void initState() {
     super.initState();
+    _fileName =
+        widget.fileName ??
+        stripPdfExtension(
+          widget.filePaths.isEmpty
+              ? ''
+              : widget.filePaths.first.split(RegExp(r'[/\\]')).last,
+        );
     _loadPreviews();
+  }
+
+  Future<void> _renameOutput() async {
+    final name = await askPdfName(
+      context: context,
+      initialName: _fileName ?? '',
+      title: 'Rename PDF',
+      confirmLabel: 'Rename',
+      accent: const Color(0xFFE94560),
+    );
+    if (name != null && mounted) setState(() => _fileName = name);
   }
 
   Future<void> _loadPreviews([int? fileIndex]) async {
@@ -122,6 +164,7 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
         filePaths: widget.filePaths,
         sourceType: widget.sourceType,
         pageCount: widget.pageCount ?? _previews.length,
+        fileName: _fileName,
       );
 
       widget.onSaved?.call();
@@ -270,6 +313,7 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
 
   @override
   Widget build(BuildContext context) {
+    _colors = AppColors.of(context);
     return Scaffold(
       backgroundColor: _colors.background,
       appBar: AppBar(
@@ -416,40 +460,88 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
         ],
       ),
       child: SafeArea(
-        child: Row(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: _isSaving ? null : _onBack,
-                icon: const Icon(Icons.arrow_back, size: 20),
-                label: const Text('Back'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: _colors.textSecondary,
-                  side: BorderSide(color: _colors.divider),
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              flex: 2,
-              child: ElevatedButton.icon(
-                onPressed: _isSaving ? null : _onSave,
-                icon: _isSaving
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
+            if (_fileName != null) ...[
+              InkWell(
+                onTap: _isSaving ? null : _renameOutput,
+                borderRadius: BorderRadius.circular(12),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 10,
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.picture_as_pdf_rounded,
+                        size: 18,
+                        color: _colors.textTertiary,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          widget.filePaths.length > 1
+                              ? '$_fileName 1…${widget.filePaths.length}.pdf'
+                              : '$_fileName.pdf',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: _colors.textPrimary,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                          ),
                         ),
-                      )
-                    : const Icon(Icons.save, size: 20),
-                label: Text(_isSaving ? 'Saving...' : 'Save'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFE94560),
-                  foregroundColor: Colors.white,
+                      ),
+                      const SizedBox(width: 8),
+                      const Icon(
+                        Icons.edit_rounded,
+                        size: 18,
+                        color: Color(0xFFE94560),
+                      ),
+                    ],
+                  ),
                 ),
               ),
+              const SizedBox(height: 4),
+            ],
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _isSaving ? null : _onBack,
+                    icon: const Icon(Icons.arrow_back, size: 20),
+                    label: const Text('Back'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: _colors.textSecondary,
+                      side: BorderSide(color: _colors.divider),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  flex: 2,
+                  child: ElevatedButton.icon(
+                    onPressed: _isSaving ? null : _onSave,
+                    icon: _isSaving
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Icon(Icons.save, size: 20),
+                    label: Text(_isSaving ? 'Saving...' : 'Save'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFE94560),
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ],
         ),

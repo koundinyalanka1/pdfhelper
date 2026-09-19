@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 
 import '../models/home_tabs.dart';
 import '../providers/theme_provider.dart';
@@ -20,22 +19,9 @@ export '../models/home_tabs.dart';
 /// is a route pushed over them, which is why merge and split no longer sit in
 /// the bar — see [DocHandoff].
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({
-    super.key,
-    this.initialPdfPath,
-    this.initialTab = HomeTabs.files,
-    this.initialAction,
-  });
-
-  /// A document the app was launched with — a share intent, or a file tapped
-  /// in another app.
-  final String? initialPdfPath;
+  const HomeScreen({super.key, this.initialTab = HomeTabs.files});
 
   final int initialTab;
-
-  /// What to do with [initialPdfPath] on arrival. Null means "hand it to the
-  /// Tools tab and let the user choose".
-  final DocHandoff? initialAction;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -44,8 +30,8 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   late int _currentIndex;
 
-  /// The document Tools is working on, when one arrived from outside it — a
-  /// share intent, or "Open in Tools" from Files.
+  /// The document Tools is working on, when one arrived from outside it —
+  /// "Open in Tools" from Files.
   ///
   /// [_toolsEpoch] keys the tab so that handing it a *second* document
   /// rebuilds it instead of leaving it showing the first: it reads
@@ -60,19 +46,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    final action = widget.initialAction;
-    if (action != null) {
-      // Merge and split arrive as routes, so the tab underneath them is the
-      // one their back button should reveal.
-      _currentIndex = HomeTabs.tools;
-      _toolsPath = widget.initialPdfPath;
-      WidgetsBinding.instance.addPostFrameCallback(
-        (_) => _openHandoff(action, widget.initialPdfPath),
-      );
-    } else {
-      _currentIndex = widget.initialTab;
-      _toolsPath = widget.initialPdfPath;
-    }
+    _currentIndex = widget.initialTab;
   }
 
   void _goToTab(int index) {
@@ -130,11 +104,13 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  bool get _isDarkMode => context.watch<ThemeProvider>().isDarkMode;
-  AppColors get _colors => AppColors(_isDarkMode);
+  /// Theme colours, assigned at the top of [build] rather than read
+  /// through a `context.watch()` getter — see [AppColors.of].
+  AppColors _colors = AppColors(false);
 
   @override
   Widget build(BuildContext context) {
+    _colors = AppColors.of(context);
     // Back from any other tab returns to Files rather than leaving the app —
     // the Android convention, and the reason a stray back press no longer
     // closes a session mid-task.
@@ -226,7 +202,9 @@ class _HomeScreenState extends State<HomeScreen> {
   ) {
     final isSelected = _currentIndex == index;
     final Color activeColor = _tabColor(index);
-    final Color inactiveColor = _isDarkMode ? Colors.white54 : Colors.black45;
+    final Color inactiveColor = _colors.isDark
+        ? Colors.white54
+        : Colors.black45;
 
     // Expanded rather than spaceAround: with four destinations the tap target
     // should be the whole quarter of the bar, not just the glyph.

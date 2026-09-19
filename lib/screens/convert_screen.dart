@@ -10,6 +10,8 @@ import '../services/ads_service.dart';
 import '../services/pdf_service.dart';
 import '../services/permission_service.dart';
 import '../providers/theme_provider.dart';
+import '../utils/file_naming.dart';
+import '../widgets/pdf_name_dialog.dart';
 import 'pdf_preview_screen.dart';
 import 'scan_edit_screen.dart';
 
@@ -353,6 +355,16 @@ class _ConvertScreenState extends State<ConvertScreen>
   Future<void> _convertToPdf() async {
     if (_capturedImages.isEmpty) return;
 
+    // Asked before any work starts: the name travels into the output file
+    // itself, so there is nothing to rewrite afterwards, and backing out here
+    // costs the user nothing.
+    final fileName = await askPdfName(
+      context: context,
+      initialName: defaultPdfName('Scan'),
+      hint: '${_capturedImages.length} page(s)',
+    );
+    if (fileName == null || !mounted) return;
+
     setState(() => _isProcessing = true);
 
     try {
@@ -361,6 +373,7 @@ class _ConvertScreenState extends State<ConvertScreen>
       final String? outputPath = await PdfService.imagesToPdf(
         _capturedImages,
         outputQuality: outputQuality,
+        fileName: fileName,
       );
 
       if (outputPath != null) {
@@ -372,9 +385,12 @@ class _ConvertScreenState extends State<ConvertScreen>
             filePaths: [outputPath],
             sourceType: PdfPreviewSourceType.convert,
             pageCount: _capturedImages.length,
+            fileName: fileName,
           );
           if (!mounted) return;
-          _showSnackBar('PDF saved (${_capturedImages.length} page(s))');
+          _showSnackBar(
+            'Saved $fileName.pdf (${_capturedImages.length} page(s))',
+          );
           setState(() => _capturedImages.clear());
           AdsService.instance.maybeShowInterstitial(trigger: 'convert');
         } else {
@@ -385,6 +401,7 @@ class _ConvertScreenState extends State<ConvertScreen>
                 filePaths: [outputPath],
                 sourceType: PdfPreviewSourceType.convert,
                 pageCount: _capturedImages.length,
+                fileName: fileName,
                 onSaved: () {
                   setState(() => _capturedImages.clear());
                 },

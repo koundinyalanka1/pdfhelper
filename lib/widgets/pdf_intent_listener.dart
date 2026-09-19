@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:receive_intent/receive_intent.dart';
 import '../services/intent_service.dart';
-import '../screens/home_screen.dart';
 import '../screens/pdf_viewer_screen.dart';
 import '../utils/format_utils.dart';
 
@@ -68,48 +67,22 @@ class _PdfIntentListenerState extends State<PdfIntentListener> {
     }
 
     try {
-      final result = await IntentService.getOpenedPdfIntent();
-      debugPrint('[PdfIntentListener] _onNewIntent: result=$result action=${result?.action}');
-      if (result == null || !(widget.navigatorKey.currentState?.mounted ?? false)) {
-        debugPrint('[PdfIntentListener] _onNewIntent: result null or navigator not mounted');
+      final path = await IntentService.getOpenedPdfPath();
+      debugPrint('[PdfIntentListener] _onNewIntent: path=$path');
+      if (path == null || !(widget.navigatorKey.currentState?.mounted ?? false)) {
+        debugPrint('[PdfIntentListener] _onNewIntent: no path or navigator not mounted');
         return;
       }
 
-      final path = result.path;
-      final title = getPdfDisplayTitle(path);
-
-      switch (result.action) {
-        case PdfIntentAction.view:
-          widget.navigatorKey.currentState!.pushAndRemoveUntil(
-            MaterialPageRoute(
-              builder: (_) => PdfViewerScreen(pdfPath: path, title: title),
-            ),
-            (route) => false,
-          );
-          break;
-        case PdfIntentAction.merge:
-          widget.navigatorKey.currentState!.pushAndRemoveUntil(
-            MaterialPageRoute(
-              builder: (_) => HomeScreen(
-                initialPdfPath: path,
-                initialAction: DocHandoff.merge,
-              ),
-            ),
-            (route) => false,
-          );
-          break;
-        case PdfIntentAction.split:
-          widget.navigatorKey.currentState!.pushAndRemoveUntil(
-            MaterialPageRoute(
-              builder: (_) => HomeScreen(
-                initialPdfPath: path,
-                initialAction: DocHandoff.split,
-              ),
-            ),
-            (route) => false,
-          );
-          break;
-      }
+      // Straight to the document. The viewer's own menu is where merge,
+      // split and the rest are reached from here.
+      widget.navigatorKey.currentState!.pushAndRemoveUntil(
+        MaterialPageRoute(
+          builder: (_) =>
+              PdfViewerScreen(pdfPath: path, title: getPdfDisplayTitle(path)),
+        ),
+        (route) => false,
+      );
     } on PlatformException {
       // Ignore
     }
