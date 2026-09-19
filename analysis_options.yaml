@@ -16,6 +16,12 @@ analyzer:
     - windows/**
     - macos/**
     - linux/**
+    # The vendored `flutter_pdf_core` submodule is a separate repository with
+    # its own analysis_options and its own CI. `flutter analyze` here should
+    # report on this app; the plugin — and in particular its example app,
+    # whose `pubspec.yaml` is never resolved from this tree — is not ours to
+    # lint. See README for how it is built.
+    - packages/**
 include: package:flutter_lints/flutter.yaml
 
 linter:

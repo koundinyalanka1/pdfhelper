@@ -72,8 +72,8 @@ class _MergePdfScreenState extends State<MergePdfScreen>
 
   Future<void> _pickPdfFiles() async {
     try {
-      // file_picker 12: pickFiles is static and returns the selected files
-      // directly — an empty list on cancel, never null.
+      // pickFiles is static and returns the selected files directly — an
+      // empty list on cancel, never null.
       final List<PlatformFile> result = await FilePicker.pickFiles(
         type: FileType.custom,
         allowedExtensions: ['pdf'],
@@ -87,11 +87,10 @@ class _MergePdfScreenState extends State<MergePdfScreen>
             final newFile = SelectedPdfFile(
               path: file.path!,
               name: file.name,
-              // file_picker 12 replaced `size` with lengthSync(), which
-              // returns null when the platform picker didn't report a size
-              // rather than doing I/O for it. SelectedPdfFile.fileSize is
-              // already nullable and the card renders "0 B" for null, so the
-              // list still appears instantly.
+              // `lengthSync()` (which replaced `size`) returns null when the
+              // platform picker didn't report a size, rather than doing I/O
+              // for it. SelectedPdfFile.fileSize is already nullable and the
+              // card renders "0 B" for null, so the list appears instantly.
               fileSize: file.lengthSync(),
               isLoading: true,
             );
