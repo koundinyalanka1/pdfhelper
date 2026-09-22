@@ -3,7 +3,6 @@ package com.yourmateapps.pdfhelper
 import android.content.Intent
 import android.Manifest
 import android.content.pm.PackageManager
-import android.util.Log
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -15,20 +14,18 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
 import java.io.FileOutputStream
-import java.io.InputStream
+import java.util.concurrent.Executors
 
 class MainActivity : FlutterActivity() {
 
-    companion object {
-        private const val TAG = "MainActivity"
-    }
+    private val pdfIo = Executors.newSingleThreadExecutor()
 
     private val CHANNEL = "com.yourmateapps.pdfhelper/pdf"
 
     override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        // Update activity intent so getIntent() returns the latest (with URI + permission)
+        // Plugins can notify Dart synchronously from super.onNewIntent.
         setIntent(intent)
+        super.onNewIntent(intent)
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -56,52 +53,21 @@ class MainActivity : FlutterActivity() {
                         result.error("INVALID", "URI is null or empty", null)
                         return@setMethodCallHandler
                     }
-                    try {
-                        val path = resolveUriToPath(uriString)
-                        result.success(path)
-                    } catch (e: Exception) {
-                        result.error("RESOLVE_ERROR", e.message, null)
-                    }
+                    resolvePdfAsync(uriString, result, false)
                 }
                 "getPdfIntentData" -> {
-                    Log.d(TAG, "getPdfIntentData called, intent.data=${intent?.data} component=${intent?.component?.className}")
-                    // Prefer in-memory (trampoline sets before starting MainActivity)
                     val pending = PendingPdfIntent.take()
-                    if (pending != null) {
-                        val (uriString, action) = pending
-                        Log.d(TAG, "getPdfIntentData: from PendingPdfIntent uri=$uriString action=$action")
-                        if (isPdfUri(uriString)) {
-                            val path = try { resolveUriToPath(uriString) } catch (e: Exception) { null }
-                            Log.d(TAG, "getPdfIntentData: resolved path=$path")
-                            if (path != null) {
-                                result.success(mapOf("path" to path, "action" to action))
-                                return@setMethodCallHandler
-                            }
-                        }
-                    }
-                    // Fallback: read from Activity intent
-                    Log.d(TAG, "getPdfIntentData: PendingPdfIntent null, trying Activity intent")
-                    val data = intent ?: run {
-                        Log.w(TAG, "getPdfIntentData: intent is null")
-                        return@setMethodCallHandler result.success(null)
-                    }
-                    val uriString = data.data?.toString() ?: run {
-                        Log.w(TAG, "getPdfIntentData: intent.data is null")
-                        return@setMethodCallHandler result.success(null)
-                    }
-                    if (!isPdfUri(uriString)) {
-                        Log.w(TAG, "getPdfIntentData: not a PDF uri=$uriString")
-                        return@setMethodCallHandler result.success(null)
-                    }
-                    val path = try { resolveUriToPath(uriString) } catch (e: Exception) { null }
-                        ?: run {
-                            Log.w(TAG, "getPdfIntentData: failed to resolve uri")
-                            return@setMethodCallHandler result.success(null)
-                        }
-                    val action = data.getStringExtra(PdfIntentTrampolineActivity.EXTRA_PDF_ACTION)
-                        ?: "view"
-                    Log.d(TAG, "getPdfIntentData: from intent path=$path action=$action")
-                    result.success(mapOf("path" to path, "action" to action))
+                    val incoming = intent
+                    val uriString = pending?.first ?: incoming?.takeIf {
+                        it.action == Intent.ACTION_VIEW ||
+                            it.hasExtra(PdfIntentTrampolineActivity.EXTRA_PDF_ACTION)
+                    }?.data?.toString()
+                    // Consume this delivery before starting I/O: startup and the
+                    // resumed-intent listener may both ask for it.
+                    incoming?.data = null
+                    incoming?.removeExtra(PdfIntentTrampolineActivity.EXTRA_PDF_ACTION)
+                    if (uriString == null) result.success(null)
+                    else resolvePdfAsync(uriString, result, true)
                 }
                 "getPdfIntentAction" -> {
                     val fromExtra = intent?.getStringExtra(PdfIntentTrampolineActivity.EXTRA_PDF_ACTION)
@@ -164,52 +130,101 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun isPdfUri(uri: String): Boolean {
-        val lower = uri.lowercase()
-        return lower.contains(".pdf") || lower.startsWith("content://") || lower.startsWith("file://")
+    private fun resolvePdfAsync(uriString: String, result: MethodChannel.Result, asIntent: Boolean) {
+        pdfIo.execute {
+            try {
+                val path = resolveUriToPath(uriString)
+                    ?: throw IllegalArgumentException("Only local PDF files can be opened")
+                runOnUiThread {
+                    result.success(if (asIntent) mapOf("path" to path, "action" to "view") else path)
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    result.error("RESOLVE_ERROR", "This PDF could not be opened. Choose the file again from its source app.", null)
+                }
+            }
+        }
     }
 
     private fun resolveUriToPath(uriString: String): String? {
         val uri = Uri.parse(uriString)
         return when (uri.scheme) {
-            "file" -> uri.path
+            "file" -> {
+                val file = File(uri.path ?: return null).canonicalFile
+                // An exported intent must never grant access to private app data.
+                val privateRoot = File(applicationInfo.dataDir).canonicalPath
+                require(!file.path.startsWith("$privateRoot/"))
+                require(file.isFile && file.canRead())
+                file.inputStream().use { input -> requirePdfHeader(readHeader(input)) }
+                file.path
+            }
             "content" -> copyContentToTemp(uri)
             else -> null
         }
     }
 
-    private fun copyContentToTemp(uri: Uri): String? {
-        // Get filename from OpenableColumns if available (some providers don't support query)
+    private fun readHeader(input: java.io.InputStream): ByteArray {
+        val bytes = ByteArray(1024)
+        var count = 0
+        while (count < bytes.size) {
+            val read = input.read(bytes, count, bytes.size - count)
+            if (read < 0) break
+            count += read
+        }
+        return bytes.copyOf(count)
+    }
+
+    private fun requirePdfHeader(header: ByteArray) {
+        require(String(header, Charsets.ISO_8859_1).contains("%PDF-")) {
+            "The selected document is not a PDF"
+        }
+    }
+
+    private fun copyContentToTemp(uri: Uri): String {
         var fileName = "opened.pdf"
         try {
-            contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                if (nameIndex >= 0) {
-                    cursor.getString(nameIndex)?.let { name ->
-                        fileName = if (name.endsWith(".pdf", ignoreCase = true)) name else "$name.pdf"
+            contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (nameIndex >= 0) cursor.getString(nameIndex)?.let { fileName = it }
+                }
+            }
+        } catch (_: Exception) {
+            // Providers are allowed to omit display names.
+        }
+        // Display names are untrusted provider input, never path components.
+        fileName = fileName.replace(Regex("[\\\\/\\p{Cntrl}]"), "_").take(60)
+        if (!fileName.endsWith(".pdf", ignoreCase = true)) fileName += ".pdf"
+        val directory = File(cacheDir, "opened_pdfs").apply { mkdirs() }
+        val tempFile = File.createTempFile("intent_", "_$fileName", directory)
+        try {
+            val input = contentResolver.openInputStream(uri)
+                ?: throw IllegalArgumentException("The document provider returned no data")
+            input.use {
+                val header = readHeader(it)
+                requirePdfHeader(header)
+                FileOutputStream(tempFile).use { output ->
+                    output.write(header)
+                    val buffer = ByteArray(64 * 1024)
+                    var total = header.size.toLong()
+                    while (true) {
+                        val count = it.read(buffer)
+                        if (count < 0) break
+                        total += count
+                        require(total <= 512L * 1024 * 1024) { "PDF exceeds the 512 MB import limit" }
+                        output.write(buffer, 0, count)
                     }
                 }
             }
+            return tempFile.absolutePath
         } catch (e: Exception) {
-            Log.w(TAG, "copyContentToTemp: query failed, using default filename: $e")
+            tempFile.delete()
+            throw e
         }
+    }
 
-        // Copy content - try with FLAG_GRANT_READ_URI_PERMISSION in case permission wasn't granted
-        val tempFile = File(cacheDir, "intent_${System.currentTimeMillis()}_$fileName")
-        return try {
-            contentResolver.openInputStream(uri)?.use { input ->
-                FileOutputStream(tempFile).use { output ->
-                    input.copyTo(output)
-                }
-                Log.d(TAG, "copyContentToTemp: copied to ${tempFile.absolutePath}")
-                tempFile.absolutePath
-            } ?: run {
-                Log.w(TAG, "copyContentToTemp: openInputStream returned null for $uri")
-                null
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "copyContentToTemp: failed for $uri: $e")
-            null
-        }
+    override fun onDestroy() {
+        pdfIo.shutdown()
+        super.onDestroy()
     }
 }

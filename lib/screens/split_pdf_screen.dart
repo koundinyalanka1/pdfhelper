@@ -10,6 +10,7 @@ import '../services/notification_service.dart';
 import '../providers/theme_provider.dart';
 import '../utils/file_naming.dart';
 import '../widgets/pdf_name_dialog.dart';
+import '../widgets/recent_pdfs_strip.dart';
 import 'pdf_viewer_screen.dart';
 
 class SplitPdfScreen extends StatefulWidget {
@@ -705,6 +706,14 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
                 ),
               ),
             ),
+            // Splitting nearly always means the document just being read, so
+            // offer it directly. Hidden once a file is chosen: the screen's
+            // job from then on is the split itself.
+            if (_selectedFilePath == null)
+              RecentPdfsStrip(
+                onSelected: _loadPdfFromPath,
+                accent: const Color(0xFFFFC107),
+              ),
 
             // Content area
             Expanded(

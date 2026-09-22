@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -56,7 +55,7 @@ class PdfService {
     try {
       return await PdfCoreService.extractPages(
         path,
-        PdfCoreService.toPageSelection(pageIndices),
+        pageIndices.map((page) => page + 1).join(','),
         password: password,
         fileName: fileName,
       );
@@ -77,8 +76,11 @@ class PdfService {
     String? fileName,
   }) async {
     final outputs = <String>[];
-    for (final range in ranges) {
-      try {
+    try {
+      for (final range in ranges) {
+        if (range.start < 1 || range.end < range.start) {
+          throw ArgumentError('Invalid page range.');
+        }
         outputs.add(
           await PdfCoreService.extractPages(
             path,
@@ -90,9 +92,16 @@ class PdfService {
                 : '$fileName ${range.start}-${range.end}',
           ),
         );
-      } catch (e) {
-        logError('PdfService.splitRangesFromFile', e);
       }
+    } catch (e) {
+      // A partial set must never be reported as a successful split.
+      for (final output in outputs) {
+        try {
+          await File(output).delete();
+        } catch (_) {}
+      }
+      logError('PdfService.splitRangesFromFile', e);
+      return [];
     }
     return outputs;
   }
@@ -134,40 +143,41 @@ class PdfService {
     String? fileName,
   }) async {
     if (imagePaths.isEmpty) return null;
+    Directory? workDir;
+    String? outputPath;
     try {
       final quality = qualityStringToJpegQuality(outputQuality);
-      final jpegPaths = await _prepareJpegs(imagePaths, quality);
-      if (jpegPaths.isEmpty) return null;
+      final tempDir = await getTemporaryDirectory();
+      workDir = await tempDir.createTemp('pdf_images_');
+      final jpegPaths = await _prepareJpegs(imagePaths, quality, workDir);
 
       final dir = await getApplicationDocumentsDirectory();
-      // The user's own title, if they gave one — it travels with the file all
-      // the way to the share sheet, so it is set here rather than only at
-      // auto-save time (auto-save can be off).
-      final outputPath = fileName != null && fileName.trim().isNotEmpty
-          ? await uniqueFilePath(
-              dir.path,
-              withPdfExtension(sanitizeFileName(fileName)),
-            )
-          : '${dir.path}/images_to_pdf_${DateTime.now().millisecondsSinceEpoch}.pdf';
-
+      outputPath = await uniqueFilePath(
+        dir.path,
+        fileName != null && fileName.trim().isNotEmpty
+            ? withPdfExtension(sanitizeFileName(fileName))
+            : 'images_to_pdf_${DateTime.now().microsecondsSinceEpoch}.pdf',
+      );
       await PdfCore.imagesToPdfAsync(
         jpegPaths,
         outputPath,
-        // Pages take the photo's own aspect ratio by default — letterboxing a
-        // phone photo onto A4 leaves white bars down a scanned page.
         fit: fitToPage ? PdfImageFit.contain : PdfImageFit.imageAspect,
       );
-
-      // Clean up anything that was transcoded along the way.
-      for (final path in jpegPaths) {
-        if (!imagePaths.contains(path)) {
-          unawaited(File(path).delete().catchError((_) => File(path)));
-        }
-      }
       return outputPath;
     } catch (e) {
+      if (outputPath != null) {
+        try {
+          await File(outputPath).delete();
+        } catch (_) {}
+      }
       logError('PdfService.imagesToPdf', e);
       return null;
+    } finally {
+      if (workDir != null) {
+        try {
+          await workDir.delete(recursive: true);
+        } catch (_) {}
+      }
     }
   }
 
@@ -191,18 +201,19 @@ class PdfService {
   static Future<List<String>> _prepareJpegs(
     List<String> imagePaths,
     int quality,
+    Directory workDir,
   ) async {
-    final tempDir = await getTemporaryDirectory();
     final results = <String>[];
 
     for (int i = 0; i < imagePaths.length; i++) {
       final path = imagePaths[i];
       final file = File(path);
-      if (!await file.exists()) continue;
 
       final bytes = await file.readAsBytes();
       // Lossless pass-through: already JPEG and no quality reduction asked for.
-      if (quality >= 100 && _isJpeg(bytes)) {
+      if (quality >= 100 &&
+          _isJpeg(bytes) &&
+          (img.decodeJpgExif(bytes)?.imageIfd.orientation ?? 1) == 1) {
         results.add(path);
         continue;
       }
@@ -212,13 +223,9 @@ class PdfService {
         _TranscodeRequest(bytes, quality),
       );
       if (jpeg == null) {
-        // Undecodable but already JPEG-shaped — better to embed than to drop.
-        if (_isJpeg(bytes)) results.add(path);
-        continue;
+        throw FormatException('Image ${i + 1} could not be decoded.');
       }
-      final out = File(
-        '${tempDir.path}/scan_${DateTime.now().millisecondsSinceEpoch}_$i.jpg',
-      );
+      final out = File('${workDir.path}/page_$i.jpg');
       await out.writeAsBytes(jpeg);
       results.add(out.path);
     }
@@ -286,5 +293,7 @@ class _TranscodeRequest {
 Uint8List? _transcodeToJpeg(_TranscodeRequest request) {
   final decoded = img.decodeImage(request.bytes);
   if (decoded == null) return null;
-  return Uint8List.fromList(img.encodeJpg(decoded, quality: request.quality));
+  return Uint8List.fromList(
+    img.encodeJpg(img.bakeOrientation(decoded), quality: request.quality),
+  );
 }

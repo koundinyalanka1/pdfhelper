@@ -17,6 +17,7 @@ import 'pdf_viewer_screen.dart';
 import 'protect_screen.dart';
 import 'split_pdf_screen.dart';
 
+import '../config/features.dart';
 import '../widgets/password_prompt.dart';
 
 /// Every operation in the app, on one screen, grouped by what you are trying
@@ -336,27 +337,29 @@ class _ToolsScreenState extends State<ToolsScreen>
           ),
           needsDocument: true,
         ),
-        _Tool(
-          'Ask AI',
-          'Summarize, or ask questions about the text',
-          Icons.auto_awesome_rounded,
-          _accent,
-          () => _runOnDocument((p, pw) => AiScreen(pdfPath: p, password: pw)),
-          needsDocument: true,
-        ),
-      ]),
-      _Section('On-device AI', [
-        _Tool(
-          'AI models',
-          'Download, switch or remove local models',
-          Icons.memory_rounded,
-          _accent,
-          () => Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const AiModelsScreen()),
+        if (Features.ai)
+          _Tool(
+            'Ask AI',
+            'Summarize, or ask questions about the text',
+            Icons.auto_awesome_rounded,
+            _accent,
+            () => _runOnDocument((p, pw) => AiScreen(pdfPath: p, password: pw)),
+            needsDocument: true,
           ),
-        ),
       ]),
+      if (Features.ai)
+        _Section('On-device AI', [
+          _Tool(
+            'AI models',
+            'Download, switch or remove local models',
+            Icons.memory_rounded,
+            _accent,
+            () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const AiModelsScreen()),
+            ),
+          ),
+        ]),
     ];
 
     return [

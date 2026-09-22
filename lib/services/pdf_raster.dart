@@ -23,7 +23,11 @@ class PdfRaster {
 
   /// Roughly 24 MB of decoded PNGs at typical page sizes.
   static const int _maxCacheEntries = 40;
-  static final LinkedHashMap<String, Uint8List> _cache = LinkedHashMap();
+  static final LinkedHashMap<
+    ({String path, int page, int size, String password}),
+    Uint8List
+  >
+  _cache = LinkedHashMap();
 
   /// Thumbnail long edge, in pixels. Sized for grid cells, which are never
   /// shown above ~180 logical px.
@@ -43,8 +47,11 @@ class PdfRaster {
   /// Covers are larger now that they are rendered at device resolution, so
   /// fewer are held.
   static const int _maxLibraryCacheEntries = 70;
-  static final LinkedHashMap<String, Uint8List?> _libraryCache =
-      LinkedHashMap();
+  static final LinkedHashMap<
+    ({String path, int modifiedMs, int size, String password}),
+    Uint8List?
+  >
+  _libraryCache = LinkedHashMap();
 
   /// Renders are serialized to [_maxConcurrentRenders] at a time.
   ///
@@ -71,7 +78,12 @@ class PdfRaster {
     bool useCache = true,
     bool throwOnError = false,
   }) async {
-    final key = '$path|$pageIndex|$longEdge|${password.isEmpty ? 0 : 1}';
+    final key = (
+      path: path,
+      page: pageIndex,
+      size: longEdge,
+      password: password,
+    );
     if (useCache) {
       final hit = _cache.remove(key);
       if (hit != null) {
@@ -120,7 +132,11 @@ class PdfRaster {
   /// substituted font, an image in a codec this build cannot read. The viewer
   /// uses this to tell the reader so, instead of passing off an approximation
   /// as the real thing.
-  static final Map<String, List<String>> _warnings = {};
+  static final Map<
+    ({String path, int page, int size, String password}),
+    List<String>
+  >
+  _warnings = {};
 
   /// Warnings recorded for a page already rendered, empty when there are none.
   static List<String> warningsFor(
@@ -129,7 +145,12 @@ class PdfRaster {
     int longEdge = thumbnailSize,
     String password = '',
   }) =>
-      _warnings['$path|$pageIndex|$longEdge|${password.isEmpty ? 0 : 1}'] ??
+      _warnings[(
+        path: path,
+        page: pageIndex,
+        size: longEdge,
+        password: password,
+      )] ??
       const [];
 
   /// First-page thumbnail — the one every file card shows.
@@ -196,12 +217,13 @@ class PdfRaster {
     int modifiedMs = 0,
     int longEdge = libraryThumbnailSize,
     String password = '',
-  }) => _libraryCache[_coverKey(
-    path,
-    modifiedMs,
-    coverSizeFor(longEdge),
-    password: password,
-  )];
+  }) =>
+      _libraryCache[_coverKey(
+        path,
+        modifiedMs,
+        coverSizeFor(longEdge),
+        password: password,
+      )];
 
   /// Round a requested cover size up to the shared step, clamped to something
   /// a phone can afford.
@@ -210,12 +232,13 @@ class PdfRaster {
     return ((clamped + _coverSizeStep - 1) ~/ _coverSizeStep) * _coverSizeStep;
   }
 
-  static String _coverKey(
+  static ({String path, int modifiedMs, int size, String password}) _coverKey(
     String path,
     int modifiedMs,
     int longEdge, {
     String password = '',
-  }) => '$path|$modifiedMs|$longEdge|${password.isEmpty ? 0 : 1}';
+  }) =>
+      (path: path, modifiedMs: modifiedMs, size: longEdge, password: password);
 
   /// Render every page, reporting progress as it goes.
   ///
@@ -230,8 +253,7 @@ class PdfRaster {
     void Function(int done, int total)? onProgress,
     bool Function()? isCancelled,
   }) async {
-    final total =
-        pageCount ?? await pageCountOrZero(path, password: password);
+    final total = pageCount ?? await pageCountOrZero(path, password: password);
     final pages = <Uint8List?>[];
     for (int i = 0; i < total; i++) {
       if (isCancelled?.call() ?? false) break;
@@ -253,7 +275,10 @@ class PdfRaster {
       PdfCore.pageCountAsync(path, password: password);
 
   /// [pageCountOf] for callers with no way to act on a failure.
-  static Future<int> pageCountOrZero(String path, {String password = ''}) async {
+  static Future<int> pageCountOrZero(
+    String path, {
+    String password = '',
+  }) async {
     try {
       return await pageCountOf(path, password: password);
     } catch (e) {
@@ -295,12 +320,15 @@ class PdfRaster {
       _warnings.clear();
       return;
     }
-    _cache.removeWhere((key, _) => key.startsWith('$path|'));
-    _libraryCache.removeWhere((key, _) => key.startsWith('$path|'));
-    _warnings.removeWhere((key, _) => key.startsWith('$path|'));
+    _cache.removeWhere((key, _) => key.path == path);
+    _libraryCache.removeWhere((key, _) => key.path == path);
+    _warnings.removeWhere((key, _) => key.path == path);
   }
 
-  static void _store(String key, Uint8List bytes) {
+  static void _store(
+    ({String path, int page, int size, String password}) key,
+    Uint8List bytes,
+  ) {
     _cache[key] = bytes;
     while (_cache.length > _maxCacheEntries) {
       final oldest = _cache.keys.first;

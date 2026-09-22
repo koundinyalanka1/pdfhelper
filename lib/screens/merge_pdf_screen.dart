@@ -10,6 +10,7 @@ import '../providers/theme_provider.dart';
 import '../utils/file_naming.dart';
 import '../utils/format_utils.dart';
 import '../widgets/pdf_name_dialog.dart';
+import '../widgets/recent_pdfs_strip.dart';
 import 'pdf_preview_screen.dart';
 import 'pdf_viewer_screen.dart';
 
@@ -80,38 +81,63 @@ class _MergePdfScreenState extends State<MergePdfScreen>
       );
 
       if (result.isNotEmpty) {
-        // Add all files immediately with loading state
-        final List<SelectedPdfFile> newFiles = [];
-        for (var file in result) {
-          if (file.path != null) {
-            final newFile = SelectedPdfFile(
-              path: file.path!,
-              name: file.name,
-              // `lengthSync()` (which replaced `size`) returns null when the
-              // platform picker didn't report a size, rather than doing I/O
-              // for it. SelectedPdfFile.fileSize is already nullable and the
-              // card renders "0 B" for null, so the list appears instantly.
-              fileSize: file.lengthSync(),
-              isLoading: true,
-            );
-            newFiles.add(newFile);
-          }
-        }
-
-        setState(() {
-          if (_batches.isEmpty) _batches.add([]);
-          _batches.last.addAll(newFiles);
-        });
-
-        // Load all files in PARALLEL (not sequential)
-        for (final file in newFiles) {
-          _loadPdfDetails(file);
-        }
+        _addFiles([
+          for (final file in result)
+            if (file.path != null)
+              SelectedPdfFile(
+                path: file.path!,
+                name: file.name,
+                // `lengthSync()` (which replaced `size`) returns null when the
+                // platform picker didn't report a size, rather than doing I/O
+                // for it. SelectedPdfFile.fileSize is already nullable and the
+                // card renders "0 B" for null, so the list appears instantly.
+                fileSize: file.lengthSync(),
+                isLoading: true,
+              ),
+        ]);
       }
     } catch (e) {
       _showSnackBar('Error selecting files: $e', isError: true);
     }
   }
+
+  /// Add one already-known file — the Recent strip's path in, where the file
+  /// browser was never involved and the size can be read directly.
+  void _addRecent(String path) {
+    if (_selectedPaths.contains(path)) return;
+    final file = File(path);
+    if (!file.existsSync()) {
+      _showSnackBar('That file is no longer there.', isError: true);
+      return;
+    }
+    _addFiles([
+      SelectedPdfFile(
+        path: path,
+        name: path.split(Platform.pathSeparator).last,
+        fileSize: file.lengthSync(),
+        isLoading: true,
+      ),
+    ]);
+  }
+
+  /// Append to the batch being built and start reading each file's details.
+  void _addFiles(List<SelectedPdfFile> newFiles) {
+    if (newFiles.isEmpty) return;
+    setState(() {
+      if (_batches.isEmpty) _batches.add([]);
+      _batches.last.addAll(newFiles);
+    });
+    // Load all files in PARALLEL (not sequential)
+    for (final file in newFiles) {
+      _loadPdfDetails(file);
+    }
+  }
+
+  /// Every path already in any batch, so the Recent strip can leave them out.
+  Set<String> get _selectedPaths => {
+    for (final batch in _batches)
+      for (final file in batch) file.path,
+  };
 
   Future<void> _loadPdfDetails(SelectedPdfFile file) async {
     try {
@@ -674,6 +700,13 @@ class _MergePdfScreenState extends State<MergePdfScreen>
                   ),
                 ),
               ),
+            ),
+            // Anything just opened in the viewer is very likely what is
+            // being merged, so offer it before the file browser is needed.
+            // It stays put as files are added — merging wants more than one.
+            RecentPdfsStrip(
+              onSelected: _addRecent,
+              excludePaths: _selectedPaths,
             ),
 
             // Stats bar

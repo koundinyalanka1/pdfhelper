@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pdfhelper/config/features.dart';
 import 'package:pdfhelper/providers/theme_provider.dart';
 import 'package:pdfhelper/screens/pdf_viewer_screen.dart';
 import 'package:provider/provider.dart';
@@ -88,7 +89,6 @@ void main() {
       'Merge with…',
       'Split',
       'Organize pages',
-      'Ask AI',
       'Extract text',
       'Protect',
       'Document details',
@@ -96,6 +96,12 @@ void main() {
     ]) {
       expect(find.text(label), findsOneWidget, reason: '$label is missing');
     }
+
+    // Hidden until the on-device AI work ships — see Features.ai.
+    expect(
+      find.text('Ask AI'),
+      Features.ai ? findsOneWidget : findsNothing,
+    );
   });
 
   testWidgets('a viewer opened from another app offers a way into the app', (

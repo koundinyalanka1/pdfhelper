@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -5,8 +6,7 @@ import 'package:google_mobile_ads/google_mobile_ads.dart';
 
 /// Centralized AdMob coordinator.
 ///
-/// Uses Google's published test ad-unit IDs everywhere — replace with your
-/// real unit IDs before publishing.
+/// Uses test units in development and requests ads only when UMP permits it.
 ///
 /// **Interstitial UX policy:**
 /// We deliberately do NOT show an interstitial after every operation, because
@@ -30,7 +30,11 @@ class AdsService {
 
   // ---------- State ----------
   bool _initialized = false;
-  bool get isInitialized => _initialized;
+  bool get isInitialized => _initialized && adsAllowed.value;
+  final ValueNotifier<bool> adsAllowed = ValueNotifier(false);
+  final ValueNotifier<bool> privacyOptionsRequired = ValueNotifier(false);
+  Future<void>? _initializing;
+  int _adGeneration = 0;
 
   InterstitialAd? _interstitial;
   bool _isLoadingInterstitial = false;
@@ -40,40 +44,92 @@ class AdsService {
 
   // ---------- Test ad-unit IDs (Google's official, safe to ship in dev) ----------
   static String get bannerAdUnitId {
-    if (Platform.isAndroid) return 'ca-app-pub-2596031675923197/8869279306';
+    if (Platform.isAndroid) {
+      return kReleaseMode
+          ? 'ca-app-pub-2596031675923197/8869279306'
+          : 'ca-app-pub-3940256099942544/6300978111';
+    }
     if (Platform.isIOS) return 'ca-app-pub-3940256099942544/2934735716';
     return '';
   }
 
   static String get interstitialAdUnitId {
-    if (Platform.isAndroid) return 'ca-app-pub-2596031675923197/1158310245';
+    if (Platform.isAndroid) {
+      return kReleaseMode
+          ? 'ca-app-pub-2596031675923197/1158310245'
+          : 'ca-app-pub-3940256099942544/1033173712';
+    }
     if (Platform.isIOS) return 'ca-app-pub-3940256099942544/4411468910';
     return '';
   }
 
   /// Initialize the Mobile Ads SDK and start preloading an interstitial.
   /// Safe to call multiple times.
-  Future<void> initialize() async {
-    if (_initialized) return;
+  Future<void> initialize() => _initializing ??= _gatherConsent();
+
+  Future<void> _gatherConsent() async {
+    if (!Platform.isAndroid && !Platform.isIOS) return;
     try {
+      final updated = Completer<bool>();
+      ConsentInformation.instance.requestConsentInfoUpdate(
+        ConsentRequestParameters(),
+        () => updated.complete(true),
+        (_) => updated.complete(false),
+      );
+      if (await updated.future) {
+        final form = Completer<void>();
+        ConsentForm.loadAndShowConsentFormIfRequired((_) => form.complete());
+        await form.future;
+      }
+      await _refreshConsent();
+    } catch (e) {
+      debugPrint('[AdsService] consent unavailable: $e');
+    }
+  }
+
+  Future<void> _refreshConsent() async {
+    privacyOptionsRequired.value =
+        await ConsentInformation.instance
+            .getPrivacyOptionsRequirementStatus() ==
+        PrivacyOptionsRequirementStatus.required;
+    final allowed = await ConsentInformation.instance.canRequestAds();
+    if (allowed && !_initialized) {
       await MobileAds.instance.initialize();
       _initialized = true;
-      _loadInterstitial();
-      debugPrint('[AdsService] initialized');
-    } catch (e) {
-      debugPrint('[AdsService] initialization failed: $e');
+    }
+    adsAllowed.value = allowed;
+    if (allowed) _loadInterstitial();
+  }
+
+  Future<void> showPrivacyOptions() async {
+    adsAllowed.value = false;
+    dispose();
+    try {
+      final dismissed = Completer<FormError?>();
+      ConsentForm.showPrivacyOptionsForm(dismissed.complete);
+      final error = await dismissed.future;
+      await _refreshConsent();
+      if (error != null) throw StateError(error.message);
+    } catch (_) {
+      // Keep ads disabled when the new consent status cannot be established.
+      rethrow;
     }
   }
 
   void _loadInterstitial() {
-    if (!_initialized) return;
+    if (!isInitialized) return;
     if (_interstitial != null || _isLoadingInterstitial) return;
     _isLoadingInterstitial = true;
+    final generation = _adGeneration;
     InterstitialAd.load(
       adUnitId: interstitialAdUnitId,
       request: const AdRequest(),
       adLoadCallback: InterstitialAdLoadCallback(
         onAdLoaded: (ad) {
+          if (generation != _adGeneration || !isInitialized) {
+            ad.dispose();
+            return;
+          }
           _isLoadingInterstitial = false;
           _interstitial = ad;
           ad.fullScreenContentCallback = FullScreenContentCallback(
@@ -90,6 +146,7 @@ class AdsService {
           );
         },
         onAdFailedToLoad: (err) {
+          if (generation != _adGeneration) return;
           _isLoadingInterstitial = false;
           _interstitial = null;
           debugPrint('[AdsService] interstitial load failed: $err');
@@ -104,6 +161,7 @@ class AdsService {
   ///
   /// [trigger] is purely for logging.
   Future<void> maybeShowInterstitial({String trigger = 'unknown'}) async {
+    if (!isInitialized) return;
     _completionCount++;
 
     // Rule 1: first completion of the session is ad-free.
@@ -141,10 +199,17 @@ class AdsService {
     _interstitial = null; // consumed
     _lastInterstitialShownAt = DateTime.now();
     debugPrint('[AdsService] showing interstitial ($trigger)');
-    await ad.show();
+    try {
+      await ad.show();
+    } catch (e) {
+      ad.dispose();
+      debugPrint('[AdsService] could not show ad: $e');
+    }
   }
 
   void dispose() {
+    _adGeneration++;
+    _isLoadingInterstitial = false;
     _interstitial?.dispose();
     _interstitial = null;
   }

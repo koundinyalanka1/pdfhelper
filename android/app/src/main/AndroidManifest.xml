@@ -5,9 +5,15 @@
     <uses-permission android:name="android.permission.CAMERA"/>
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" tools:replace="android:required"/>
+    <!-- Scanning uses still images with audio disabled. CameraX otherwise
+         merges recording/storage permissions intended for video capture. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" tools:node="remove"/>
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" tools:node="remove"/>
     
-    <!-- Gallery picker on Android 13+. -->
-    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
+    <!-- Photos are selected through the system picker; no broad media access. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" tools:node="remove"/>
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" tools:node="remove"/>
 
     <!-- The Files tab lists every PDF on the device, which is what a document
          reader is for. Android 11+ gates that behind All files access; older
@@ -32,6 +38,8 @@
         android:label="PDF Helper"
         android:name="${applicationName}"
         android:requestLegacyExternalStorage="true"
+        android:allowBackup="false"
+        android:usesCleartextTraffic="false"
         android:icon="@mipmap/ic_launcher">
         <activity
             android:name=".MainActivity"
@@ -90,22 +98,15 @@
             android:name="flutterEmbedding"
             android:value="2" />
 
-        <!-- AdMob: Google sample app ID (test only). Replace with your real
-             ca-app-pub-XXXXXXXXXXXXXXXX~YYYYYYYYYY before publishing. -->
+        <!-- Production AdMob application; debug uses Google test ad units. -->
         <meta-data
             android:name="com.google.android.gms.ads.APPLICATION_ID"
             android:value="ca-app-pub-2596031675923197~6127791234"/>
             
-        <!-- File Provider for sharing files -->
-        <provider
-            android:name="androidx.core.content.FileProvider"
-            android:authorities="${applicationId}.fileprovider"
-            android:exported="false"
-            android:grantUriPermissions="true">
-            <meta-data
-                android:name="android.support.FILE_PROVIDER_PATHS"
-                android:resource="@xml/file_paths" />
-        </provider>
+        <!-- Do not collect crash reports until Flutter enables release reporting. -->
+        <meta-data android:name="firebase_crashlytics_collection_enabled" android:value="false"/>
+
+        <!-- Sharing/opening use share_plus and open_file's own providers. -->
     </application>
     
     <queries>

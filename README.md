@@ -59,8 +59,7 @@ ask for one when tapped.
 - **All / Recent / Starred / Created**, search, sort by date, name or size,
   and a grid or list view that is remembered
 - Covers are rendered by the native core and cached; long-press any file for
-  Open, Share, Star, Rename, Delete, Ask AI, Merge with…, Split, or Open in
-  Tools
+  Open, Share, Star, Rename, Delete, Merge with…, Split, or Open in Tools
 - Results are cached to disk, so reopening the tab is instant while a fresh
   sweep runs behind it
 
@@ -85,13 +84,15 @@ ask for one when tapped.
 - **Protect** — AES-256 (PDF 2.0) passwords; opens and removes RC4 / AES-128 / AES-256
 - **Extract text** — real content-stream extraction (encodings, ToUnicode CMaps, CID fonts), copy or save as `.txt`
 
-**Ask** (on-device AI)
+**Ask** (on-device AI) — *built, not yet shipped; planned for a future update*
 - Summarize a document or ask questions about it, with **page citations**
 - Retrieval-augmented: the native core chunks the document, BM25 retrieval picks
   the passages that matter, and only those reach the model — which is what
   makes a small on-device model viable
 - Ships with a zero-weights extractive fallback so the whole pipeline works
   before any model is installed. See [On-device AI](#on-device-ai).
+- The entry points are hidden behind `Features.ai` (`lib/config/features.dart`)
+  until the model line-up and first-run experience are settled.
 
 **Also**
 - Continuous-scroll viewer with pinch-zoom that re-renders sharper as you zoom
@@ -151,15 +152,30 @@ Run the native test suite with `./scripts/build_pdf_core.sh test`.
 **Renderer coverage.** The graphics state stack, path construction and painting
 (fill/stroke, non-zero and even-odd), arbitrary clipping paths,
 DeviceGray/RGB/CMYK plus ICCBased/Indexed/Separation colour, constant alpha
-from `/ExtGState`, image XObjects (JPEG, Flate, stencil masks, soft masks),
-form XObjects, and TrueType glyph outlines including composite glyphs.
+from `/ExtGState`, image XObjects (JPEG, CCITT G3/G4, Flate, LZW, stencil
+masks, soft masks), form XObjects, and glyph outlines from both TrueType
+(including composite glyphs) and CFF/Type1C.
+
+Text whose font the document never embedded — the standard 14, or a program in
+a format the renderer cannot parse — is drawn in a substitute face (Roboto,
+bundled) rather than skipped, because a page of invisible text is
+indistinguishable from a broken file. Advances still come from the document's
+own `/Widths` wherever it supplies them.
 
 Deliberately skipped rather than failed — pages using these still render, minus
 that element: shading and tiling patterns, inline images (`BI…EI`), blend
-modes, and CFF/Type1 glyph outlines (`/FontFile3`). A PDF whose text is set in
-a non-embedded or CFF font will show its graphics but not its glyphs.
+modes, and the JPXDecode / JBIG2Decode image codecs. A render that had to leave
+something out reports it, so the viewer can say the page is approximate instead
+of presenting it as exact.
 
 ## On-device AI
+
+> **Not shipped yet.** `Features.ai` in `lib/config/features.dart` is `false`,
+> so the "Ask AI" entries and the model manager are hidden from the UI. The
+> layer below them is complete and still builds and tests — what is unsettled
+> is which models to offer, how large a download to ask for, and how first run
+> should read. Setting the flag to `true` is the whole of what it takes to put
+> it back in front of users.
 
 The AI layer is built so that adding a model is one class and one line, not a
 rewrite. Everything routes through `LocalAiModel` (`lib/ai/ai_model.dart`):
@@ -261,18 +277,43 @@ and a mounted SD/USB drive. The list must refresh without restarting the app.
 
 ## Before publishing
 
-- [ ] `android/key.properties` — without it, release builds fall back to the
-      debug key and log a warning
-- [ ] `GoogleService-Info.plist` — missing, so Crashlytics is Android-only today
-- [ ] AdMob unit IDs — Android uses real IDs, iOS still uses Google's test IDs,
-      and the iOS `GADApplicationIdentifier` is Google's sample app ID
-- [ ] Rate / Privacy URLs in `lib/screens/settings_screen.dart` — `_rateAppUrl`
-      is still `https://example.com/...`
-- [ ] `android/app/src/main/res/xml/file_paths.xml` shares the whole external
-      storage root; narrow it to the directories actually shared
-- [ ] Play Console **Permissions Declaration** for `MANAGE_EXTERNAL_STORAGE`
-      (the Files tab). The applicable use case is file/document management.
-      Removing the permission is a supported alternative — the tab falls back
-      to app-owned files on its own
+The Android app and native library have been audited and repaired. See
+[Play Store readiness](docs/PLAY_STORE_READINESS.md) for changes, validation,
+remaining compatibility limits, and the device test checklist. AI features and
+signing configuration were excluded from this audit.
+
+- [x] Android debug/profile builds use test ad units; release uses the configured
+      production units. UMP consent gates ad requests and Settings exposes ad
+      privacy choices when required.
+- [x] Rate App points to the application’s Play listing. Firebase/Crashlytics
+      Gradle integration is connected for production; debug skips production
+      Firebase. Crashlytics upload tasks require `-PuploadCrashlytics=true`.
+- [x] Removed unused broad photo/video, microphone, and legacy write permissions.
+      Gallery import uses the system picker. PDF sharing uses the sharing plugin;
+      the unused app FileProvider with broad storage exposure was removed.
+- [x] Flutter analysis and 222 Flutter tests passed; the Rust workspace passed.
+      Android/macOS native libraries were rebuilt. A release app bundle built,
+      and native artifact checks verified all three PDF ABIs and all 14 packaged
+      ELF64 libraries for 16 KB LOAD alignment and RELRO/writable-data overlap.
+- [ ] Verify the public privacy policy URL loads and accurately describes local
+      document handling, AdMob and Crashlytics. Its availability was not verified
+      during this audit.
+- [ ] Configure and publish the required privacy messages in AdMob, then test
+      consent acceptance, refusal and changes on a registered test device.
+- [ ] Complete Play Console **Permissions Declaration** and obtain approval for
+      `MANAGE_EXTERNAL_STORAGE`, with a document-management justification for
+      full-device discovery. Access remains optional in the app; approval is a
+      separate Play review requirement.
+- [ ] Complete Data safety, ads/content-rating declarations and store listing.
+      Confirm the production ad units and Firebase project belong to the release.
+- [ ] Complete physical-device and 16 KB runtime checks in the readiness document,
+      including camera, gallery, external intents, share and permission changes.
+- [ ] Commit the native library changes in `packages/flutter_pdf_core` separately,
+      then update this repository’s submodule reference so clean builds include
+      the repaired engine.
+
+For an iOS release, separately supply production AdMob identifiers and Firebase
+configuration (`GoogleService-Info.plist`) and validate that platform; this audit
+focused on Android/Google Play.
 
 See `IMPROVEMENTS.md` for the enhancement backlog.

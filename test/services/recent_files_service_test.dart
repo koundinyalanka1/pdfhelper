@@ -10,6 +10,29 @@ void main() {
     RecentFilesService.resetCacheForTesting();
   });
 
+  test(
+    'concurrent cold-start opens preserve every document after restart',
+    () async {
+      await Future.wait(
+        List.generate(20, (i) => RecentFilesService.markOpened('/$i.pdf')),
+      );
+      RecentFilesService.resetCacheForTesting();
+      expect((await RecentFilesService.recents()).toSet(), {
+        for (var i = 0; i < 20; i++) '/$i.pdf',
+      });
+    },
+  );
+
+  test('concurrent cold-start stars preserve every selection', () async {
+    await Future.wait(
+      List.generate(20, (i) => RecentFilesService.toggleStar('/$i.pdf')),
+    );
+    RecentFilesService.resetCacheForTesting();
+    expect(await RecentFilesService.starred(), {
+      for (var i = 0; i < 20; i++) '/$i.pdf',
+    });
+  });
+
   group('recents', () {
     test('start empty', () async {
       expect(await RecentFilesService.recents(), isEmpty);
@@ -27,13 +50,16 @@ void main() {
       ]);
     });
 
-    test('reopening moves a file to the front without duplicating it', () async {
-      await RecentFilesService.markOpened('/a.pdf');
-      await RecentFilesService.markOpened('/b.pdf');
-      await RecentFilesService.markOpened('/a.pdf');
+    test(
+      'reopening moves a file to the front without duplicating it',
+      () async {
+        await RecentFilesService.markOpened('/a.pdf');
+        await RecentFilesService.markOpened('/b.pdf');
+        await RecentFilesService.markOpened('/a.pdf');
 
-      expect(await RecentFilesService.recents(), ['/a.pdf', '/b.pdf']);
-    });
+        expect(await RecentFilesService.recents(), ['/a.pdf', '/b.pdf']);
+      },
+    );
 
     test('ignores an empty path', () async {
       await RecentFilesService.markOpened('');

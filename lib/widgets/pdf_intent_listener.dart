@@ -30,7 +30,9 @@ class _PdfIntentListenerState extends State<PdfIntentListener> {
   void initState() {
     super.initState();
     if (Platform.isAndroid) {
-      _intentSubscription = ReceiveIntent.receivedIntentStream.listen(_onNewIntent);
+      _intentSubscription = ReceiveIntent.receivedIntentStream.listen(
+        _onNewIntent,
+      );
     }
   }
 
@@ -41,17 +43,18 @@ class _PdfIntentListenerState extends State<PdfIntentListener> {
   }
 
   Future<void> _onNewIntent(dynamic intent) async {
-    debugPrint('[PdfIntentListener] _onNewIntent: intent=$intent');
     if (intent == null) return;
 
     // ReceiveIntent may have data: null even when trampoline sent a PDF - the native
     // PendingPdfIntent holds the URI. So if we have PDF_ACTION extra or VIEW action,
     // always call getOpenedPdfIntent to read from native.
-    final hasPdfIntent = intent.action == 'android.intent.action.VIEW' ||
+    final hasPdfIntent =
+        intent.action == 'android.intent.action.VIEW' ||
         (intent.extra != null &&
-            intent.extra.toString().contains('com.yourmateapps.pdfhelper.PDF_ACTION'));
+            intent.extra.toString().contains(
+              'com.yourmateapps.pdfhelper.PDF_ACTION',
+            ));
     if (!hasPdfIntent) {
-      debugPrint('[PdfIntentListener] _onNewIntent: not a PDF intent, ignoring');
       return;
     }
 
@@ -61,16 +64,15 @@ class _PdfIntentListenerState extends State<PdfIntentListener> {
       if (!uri.toLowerCase().contains('.pdf') &&
           !uri.toLowerCase().startsWith('content://') &&
           !uri.toLowerCase().startsWith('file://')) {
-        debugPrint('[PdfIntentListener] _onNewIntent: data not a PDF uri');
         return;
       }
     }
 
     try {
       final path = await IntentService.getOpenedPdfPath();
-      debugPrint('[PdfIntentListener] _onNewIntent: path=$path');
-      if (path == null || !(widget.navigatorKey.currentState?.mounted ?? false)) {
-        debugPrint('[PdfIntentListener] _onNewIntent: no path or navigator not mounted');
+      if (!mounted ||
+          path == null ||
+          !(widget.navigatorKey.currentState?.mounted ?? false)) {
         return;
       }
 
@@ -81,7 +83,7 @@ class _PdfIntentListenerState extends State<PdfIntentListener> {
           builder: (_) =>
               PdfViewerScreen(pdfPath: path, title: getPdfDisplayTitle(path)),
         ),
-        (route) => false,
+        (route) => route.isFirst,
       );
     } on PlatformException {
       // Ignore

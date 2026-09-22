@@ -85,6 +85,7 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
   double _previewAspectRatio = 0.7;
   bool _isLoading = true;
   bool _isSaving = false;
+  int _previewRequest = 0;
   int _currentFileIndex = 0;
 
   /// Title used when the file is saved. Seeded from the name the user gave
@@ -124,6 +125,7 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
       setState(() => _isLoading = false);
       return;
     }
+    final request = ++_previewRequest;
     final idx = fileIndex ?? _currentFileIndex;
     setState(() {
       _isLoading = true;
@@ -133,7 +135,7 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
       final path = widget.filePaths[idx];
       final aspectRatio = await PdfService.getFirstPageAspectRatio(path);
       final previews = await PdfService.loadPagePreviews(path);
-      if (mounted) {
+      if (mounted && request == _previewRequest) {
         setState(() {
           _previews = previews;
           _previewAspectRatio = aspectRatio?.clamp(0.5, 1.5) ?? 0.7;
@@ -142,7 +144,7 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
       }
     } catch (e) {
       debugPrint('Error loading previews: $e');
-      if (mounted) {
+      if (mounted && request == _previewRequest) {
         setState(() => _isLoading = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -155,6 +157,7 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
   }
 
   Future<void> _onSave() async {
+    if (_isSaving) return;
     final themeProvider = context.read<ThemeProvider>();
     setState(() => _isSaving = true);
 

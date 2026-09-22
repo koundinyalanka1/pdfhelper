@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../config/features.dart';
 import '../models/home_tabs.dart';
 import '../models/library_query.dart';
 import '../providers/theme_provider.dart';
@@ -16,6 +17,8 @@ import '../services/pdf_raster.dart';
 import '../services/recent_files_service.dart';
 import '../utils/error_logger.dart';
 import '../utils/format_utils.dart';
+import '../utils/file_naming.dart';
+import '../widgets/storage_access_dialog.dart';
 import 'ai_screen.dart';
 import 'extract_text_screen.dart';
 import 'metadata_screen.dart';
@@ -65,13 +68,22 @@ class _LibraryScreenState extends State<LibraryScreen>
   static const String _viewModeKey = 'library.grid';
   static const String _sortKey = 'library.sort';
 
+  /// Set once the access explanation has been offered on its own, so the
+  /// library asks at the moment it is first obviously empty and never nags
+  /// again. The banner stays as the always-available way back to it.
+  static const String _accessPromptKey = 'library.accessPromptShown';
+
   List<PdfFileEntry> _entries = const [];
   List<String> _recentOrder = const [];
   Set<String> _starred = {};
 
   LibraryFilter _filter = LibraryFilter.all;
   LibrarySort _sort = LibrarySort.newest;
-  bool _isGrid = true;
+  /// List is the default: a filename, folder, size and date say more about a
+  /// document than a thumbnail of its first page, and most first pages of
+  /// text documents look alike. A saved preference still wins — see
+  /// [_restorePreferences].
+  bool _isGrid = false;
   bool _isSearching = false;
   String _query = '';
 
@@ -80,6 +92,7 @@ class _LibraryScreenState extends State<LibraryScreen>
   bool _refreshPending = false;
   bool _isRequestingAccess = false;
   bool _hasScanned = false;
+  bool _accessPromptShown = false;
 
   final TextEditingController _searchController = TextEditingController();
 
@@ -130,6 +143,35 @@ class _LibraryScreenState extends State<LibraryScreen>
     }
     await _loadUserLists();
     await _refresh(prune: cached.isNotEmpty);
+    await _offerAccessOnce();
+  }
+
+  /// Ask for storage access once, the first time the library is opened
+  /// without it.
+  ///
+  /// This is the moment the request makes sense: the user is looking at a
+  /// library that is empty or nearly so, and the explanation answers the
+  /// question they already have. Asking from a small banner button meant most
+  /// people met Android's warning-toned settings screen with no context, or
+  /// never found the button at all.
+  Future<void> _offerAccessOnce() async {
+    if (!mounted || !Platform.isAndroid) return;
+    if (_accessPromptShown || _access == StorageAccess.full) return;
+    // Do not talk over a sweep that might still turn the banner off.
+    if (_isScanning) return;
+    // A PDF opened from another app pushes the viewer over this tab while it
+    // still bootstraps underneath. Say nothing then — the prompt is not spent,
+    // so the next launch that actually lands here will offer it.
+    if (!(ModalRoute.of(context)?.isCurrent ?? false)) return;
+    setState(() => _accessPromptShown = true);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_accessPromptKey, true);
+    } catch (_) {
+      // A preference that will not save is not worth blocking the prompt.
+    }
+    if (!mounted) return;
+    await _requestAccess();
   }
 
   Future<void> _restorePreferences() async {
@@ -137,8 +179,10 @@ class _LibraryScreenState extends State<LibraryScreen>
       final prefs = await SharedPreferences.getInstance();
       final grid = prefs.getBool(_viewModeKey);
       final sortIndex = prefs.getInt(_sortKey);
+      final prompted = prefs.getBool(_accessPromptKey) ?? false;
       if (!mounted) return;
       setState(() {
+        _accessPromptShown = prompted;
         if (grid != null) _isGrid = grid;
         if (sortIndex != null &&
             sortIndex >= 0 &&
@@ -171,6 +215,7 @@ class _LibraryScreenState extends State<LibraryScreen>
     }
     setState(() => _isScanning = true);
     try {
+      await _loadUserLists();
       final access = await PdfLibraryService.access();
       if (!mounted) return;
       setState(() => _access = access);
@@ -250,6 +295,9 @@ class _LibraryScreenState extends State<LibraryScreen>
 
   Future<void> _requestAccess() async {
     if (_isRequestingAccess) return;
+    // Explain before Android's settings screen appears, not after.
+    if (!await showStorageAccessDialog(context)) return;
+    if (!mounted) return;
     setState(() => _isRequestingAccess = true);
     final granted = await PdfLibraryService.requestAccess();
     if (!mounted) return;
@@ -321,7 +369,7 @@ class _LibraryScreenState extends State<LibraryScreen>
     if (Platform.isIOS) return true;
     try {
       final temp = await getTemporaryDirectory();
-      if (path.startsWith(temp.path)) return true;
+      if (path == temp.path || path.startsWith('${temp.path}/')) return true;
     } catch (_) {
       // Fall through to the path check.
     }
@@ -392,7 +440,7 @@ class _LibraryScreenState extends State<LibraryScreen>
     if (trimmed == null || trimmed.isEmpty || trimmed == entry.title) return;
     // Path separators in a file name would silently move the file somewhere
     // else, so they are stripped rather than rejected.
-    final safe = trimmed.replaceAll(RegExp(r'[/\\]'), '_');
+    final safe = sanitizeFileName(stripPdfExtension(trimmed));
     final directory = entry.path.substring(0, entry.path.lastIndexOf('/'));
     final target = '$directory/$safe.pdf';
     if (target == entry.path) return;
@@ -590,14 +638,15 @@ class _LibraryScreenState extends State<LibraryScreen>
                 SharePlus.instance.share(ShareParams(files: [XFile(entry.path)]));
               }),
               Divider(color: _colors.divider, height: 20),
-              _action(ctx, Icons.auto_awesome_rounded, 'Ask AI', () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => AiScreen(pdfPath: entry.path),
-                  ),
-                );
-              }),
+              if (Features.ai)
+                _action(ctx, Icons.auto_awesome_rounded, 'Ask AI', () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => AiScreen(pdfPath: entry.path),
+                    ),
+                  );
+                }),
               _action(ctx, Icons.dashboard_customize_rounded, 'Organize pages', () {
                 Navigator.push(
                   context,
@@ -1100,14 +1149,20 @@ class _CoverState extends State<_Cover> {
     // queues one render per tile the list passes over, and the renderer spends
     // the next several seconds drawing covers for rows nobody is looking at.
     await Future<void>.delayed(const Duration(milliseconds: 80));
-    if (!mounted || widget.entry.path != path) return;
+    if (!mounted || widget.entry.path != path ||
+        widget.entry.modifiedMs != modified || _requested != longEdge) {
+      return;
+    }
 
     final bytes = await PdfRaster.libraryCover(
       path,
       modifiedMs: modified,
       longEdge: longEdge,
     );
-    if (!mounted || widget.entry.path != path) return;
+    if (!mounted || widget.entry.path != path ||
+        widget.entry.modifiedMs != modified || _requested != longEdge) {
+      return;
+    }
     setState(() {
       _bytes = bytes;
       _done = true;

@@ -165,7 +165,7 @@ class PdfLibraryService {
 
     found.sort((a, b) => b.modifiedMs.compareTo(a.modifiedMs));
     _memory = found;
-    _cacheWrite = _writeCache(found);
+    _cacheWrite = _cacheWrite.then((_) => _writeCache(found));
     unawaited(_cacheWrite);
     return found;
   }
@@ -230,7 +230,8 @@ class PdfLibraryService {
     final memory = _memory;
     if (memory == null) return;
     _memory = memory.where((e) => e.path != path).toList();
-    _cacheWrite = _writeCache(_memory!);
+    final snapshot = List<PdfFileEntry>.of(_memory!);
+    _cacheWrite = _cacheWrite.then((_) => _writeCache(snapshot));
     unawaited(_cacheWrite);
   }
 
@@ -302,12 +303,15 @@ class PdfLibraryService {
   static Future<void> _writeCache(List<PdfFileEntry> entries) async {
     try {
       final file = File(await _cachePath());
-      await file.writeAsString(
+      final staging = File('${file.path}.tmp');
+      await staging.writeAsString(
         jsonEncode({
           'scannedAt': DateTime.now().millisecondsSinceEpoch,
           'files': entries.map((e) => e.toJson()).toList(),
         }),
+        flush: true,
       );
+      await staging.rename(file.path);
     } catch (e) {
       logError('PdfLibraryService._writeCache', e);
     }

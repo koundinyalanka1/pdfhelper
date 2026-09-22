@@ -211,15 +211,25 @@ class PdfCoreService {
     int? pageCount,
     String? fileName,
   }) async {
-    final total = pageCount ?? await PdfCore.pageCountAsync(path, password: password);
+    final total =
+        pageCount ?? await PdfCore.pageCountAsync(path, password: password);
     final outputs = <String>[];
-    for (int i = 1; i <= total; i++) {
-      final out = await _outputPath(
-        'page_$i',
-        fileName: fileName == null ? null : '$fileName $i',
-      );
-      await PdfCore.extractPagesAsync(path, '$i', out, password: password);
-      outputs.add(out);
+    try {
+      for (int i = 1; i <= total; i++) {
+        final out = await _outputPath(
+          'page_$i',
+          fileName: fileName == null ? null : '$fileName $i',
+        );
+        await PdfCore.extractPagesAsync(path, '$i', out, password: password);
+        outputs.add(out);
+      }
+    } catch (_) {
+      for (final output in outputs) {
+        try {
+          await File(output).delete();
+        } catch (_) {}
+      }
+      rethrow;
     }
     return outputs;
   }
@@ -306,7 +316,7 @@ class PdfCoreService {
         withPdfExtension(sanitizeFileName(fileName)),
       );
     }
-    final ts = DateTime.now().millisecondsSinceEpoch;
+    final ts = DateTime.now().microsecondsSinceEpoch;
     return '${dir.path}/${prefix}_$ts.pdf';
   }
 }
@@ -358,14 +368,17 @@ class AiExport {
   });
 
   factory AiExport.fromJson(Map<String, dynamic> json) {
-    final metadata = (json['metadata'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final metadata =
+        (json['metadata'] as Map?)?.cast<String, dynamic>() ?? const {};
     return AiExport(
       schema: json['schema'] as String? ?? '',
       pageCount: json['page_count'] as int? ?? 0,
       title: metadata['title'] as String?,
       author: metadata['author'] as String?,
       pages: ((json['pages'] as List?) ?? const [])
-          .map((p) => (p as Map).cast<String, dynamic>()['text'] as String? ?? '')
+          .map(
+            (p) => (p as Map).cast<String, dynamic>()['text'] as String? ?? '',
+          )
           .toList(),
       chunks: ((json['chunks'] as List?) ?? const [])
           .map((c) => AiChunk.fromJson((c as Map).cast<String, dynamic>()))
@@ -392,8 +405,8 @@ class AiExport {
 /// Convenience: write extracted text next to the PDF for sharing.
 Future<String> writeTextFile(String baseName, String text) async {
   final dir = await getApplicationDocumentsDirectory();
-  final safe = baseName.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
-  final file = File('${dir.path}/$safe.txt');
+  final safe = sanitizeFileName(baseName);
+  final file = File(await uniqueFilePath(dir.path, '$safe.txt'));
   await file.writeAsString(text);
   return file.path;
 }

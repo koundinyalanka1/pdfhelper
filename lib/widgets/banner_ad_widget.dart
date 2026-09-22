@@ -19,8 +19,20 @@ class _BannerAdWidgetState extends State<BannerAdWidget> {
   @override
   void initState() {
     super.initState();
+    AdsService.instance.adsAllowed.addListener(_consentChanged);
+    _consentChanged();
+  }
+
+  void _consentChanged() {
+    if (!mounted) return;
     if (AdsService.instance.isInitialized) {
-      _load();
+      if (_ad == null) _load();
+    } else {
+      _ad?.dispose();
+      setState(() {
+        _ad = null;
+        _loaded = false;
+      });
     }
   }
 
@@ -30,12 +42,13 @@ class _BannerAdWidgetState extends State<BannerAdWidget> {
       size: AdSize.banner,
       request: const AdRequest(),
       listener: BannerAdListener(
-        onAdLoaded: (_) {
-          if (!mounted) return;
+        onAdLoaded: (ad) {
+          if (!mounted || _ad != ad) return;
           setState(() => _loaded = true);
         },
         onAdFailedToLoad: (ad, err) {
           ad.dispose();
+          if (_ad == ad) _ad = null;
           debugPrint('[BannerAd] failed: $err');
         },
       ),
@@ -46,6 +59,7 @@ class _BannerAdWidgetState extends State<BannerAdWidget> {
 
   @override
   void dispose() {
+    AdsService.instance.adsAllowed.removeListener(_consentChanged);
     _ad?.dispose();
     super.dispose();
   }

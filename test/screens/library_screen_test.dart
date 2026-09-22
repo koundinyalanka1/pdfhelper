@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
+import 'package:pdfhelper/config/features.dart';
 import 'package:pdfhelper/providers/theme_provider.dart';
 import 'package:pdfhelper/screens/library_screen.dart';
 import 'package:pdfhelper/services/pdf_library_service.dart';
@@ -192,9 +193,22 @@ void main() {
     expect(find.textContaining('No PDFs match'), findsOneWidget);
   });
 
-  testWidgets('toggles between grid and list', (tester) async {
+  testWidgets('opens as a list, not a grid', (tester) async {
     seed('Invoice.pdf');
     await settle(tester);
+
+    // A filename, folder, size and date identify a document; a thumbnail of
+    // its first page mostly does not.
+    expect(find.byType(GridView), findsNothing);
+    expect(find.byType(ListView), findsWidgets);
+  });
+
+  testWidgets('toggles between list and grid', (tester) async {
+    seed('Invoice.pdf');
+    await settle(tester);
+
+    await tester.tap(find.byIcon(Icons.grid_view_rounded));
+    await tester.pump();
 
     expect(find.byType(GridView), findsOneWidget);
 
@@ -212,7 +226,8 @@ void main() {
   testWidgets('the view mode is remembered', (tester) async {
     seed('Invoice.pdf');
     await settle(tester);
-    await tester.tap(find.byIcon(Icons.view_list_rounded));
+    // Choose the non-default, which is the case worth persisting.
+    await tester.tap(find.byIcon(Icons.grid_view_rounded));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
 
@@ -220,7 +235,8 @@ void main() {
     PdfLibraryService.resetForTesting();
     await settle(tester);
 
-    expect(find.byType(GridView), findsNothing);
+    expect(find.byType(GridView), findsOneWidget);
+    await flush(tester);
   });
 
   testWidgets('Recent is empty until something is opened', (tester) async {
@@ -304,8 +320,6 @@ void main() {
     seed('Apple.pdf');
     await settle(tester);
 
-    await tester.tap(find.byIcon(Icons.view_list_rounded));
-    await tester.pump();
     await tester.tap(find.byIcon(Icons.sort_rounded));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Name'));
@@ -326,7 +340,8 @@ void main() {
     expect(find.text('Open'), findsOneWidget);
     expect(find.text('Star'), findsOneWidget);
     expect(find.text('Share'), findsOneWidget);
-    expect(find.text('Ask AI'), findsOneWidget);
+    // Hidden until the on-device AI work ships — see Features.ai.
+    expect(find.text('Ask AI'), Features.ai ? findsOneWidget : findsNothing);
     expect(find.text('Rename'), findsOneWidget);
     expect(find.text('Delete'), findsOneWidget);
   });
@@ -355,6 +370,7 @@ void main() {
     await tester.longPress(find.text('Invoice'));
     await tester.pumpAndSettle();
     await tapSheetItem(tester, 'Star');
+    await flush(tester);
 
     await tester.tap(find.text('Starred'));
     await tester.pump();
@@ -490,7 +506,7 @@ void main() {
       reason: 'the new name must stay inside the original directory',
     );
     expect(
-      File('${paths.documents.path}/.._escaped.pdf').existsSync(),
+      File('${paths.documents.path}/escaped.pdf').existsSync(),
       isTrue,
     );
   });

@@ -73,32 +73,26 @@ class _SplashScreenState extends State<SplashScreen>
     String? pdfPath;
     try {
       pdfPath = await IntentService.getOpenedPdfPath();
-    } catch (e) {
-      debugPrint('[SplashScreen] getOpenedPdfPath error: $e');
+    } catch (_) {
+      // A failed external intent must still leave the library usable.
     }
     if (!mounted) return;
 
-    debugPrint('[SplashScreen] _navigateToHome: pdfPath=$pdfPath');
-
     if (pdfPath == null) {
-      debugPrint('[SplashScreen] No intent, navigating to HomeScreen default');
       _goToHome();
       return;
     }
 
-    // Launched on a document: go straight to reading it. Every other tool is
-    // one tap away from the viewer's own menu.
-    debugPrint('[SplashScreen] Navigating to PdfViewerScreen path=$pdfPath');
-    final path = pdfPath;
-    Navigator.pushReplacement(
-      context,
-      PageRouteBuilder(
-        pageBuilder: (context, animation, secondaryAnimation) =>
-            PdfViewerScreen(pdfPath: path, title: getPdfDisplayTitle(path)),
-        transitionsBuilder: (context, animation, secondaryAnimation, child) {
-          return FadeTransition(opacity: animation, child: child);
-        },
-        transitionDuration: const Duration(milliseconds: 500),
+    // Keep the library under an external document so Back always returns
+    // to a useful screen, including a cold start from a file manager.
+    final navigator = Navigator.of(context);
+    _goToHome();
+    navigator.push(
+      MaterialPageRoute(
+        builder: (_) => PdfViewerScreen(
+          pdfPath: pdfPath!,
+          title: getPdfDisplayTitle(pdfPath),
+        ),
       ),
     );
   }

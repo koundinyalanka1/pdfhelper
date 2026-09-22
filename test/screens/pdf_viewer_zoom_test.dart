@@ -15,6 +15,36 @@ Offset project(Matrix4 matrix, Offset point) {
 }
 
 void main() {
+  group('shouldLockScroll', () {
+    test('a single finger scrolls the document', () {
+      expect(
+        shouldLockScroll(isZoomed: false, activePointers: 1),
+        isFalse,
+      );
+    });
+
+    test('no fingers leaves the list scrollable', () {
+      expect(shouldLockScroll(isZoomed: false, activePointers: 0), isFalse);
+    });
+
+    test('a second finger stands the list down so the pinch can win', () {
+      // The regression this guards: with the list still holding a drag
+      // recognizer, two fingers drifting downwards before they spread handed
+      // the arena to the scroll and the zoom never fired — the "works
+      // sometimes" bug.
+      expect(shouldLockScroll(isZoomed: false, activePointers: 2), isTrue);
+    });
+
+    test('a third finger changes nothing', () {
+      expect(shouldLockScroll(isZoomed: false, activePointers: 3), isTrue);
+    });
+
+    test('while zoomed, dragging pans rather than scrolls', () {
+      expect(shouldLockScroll(isZoomed: true, activePointers: 1), isTrue);
+      expect(shouldLockScroll(isZoomed: true, activePointers: 0), isTrue);
+    });
+  });
+
   group('doubleTapZoomTarget', () {
     test('zooming out returns to the identity', () {
       final m = doubleTapZoomTarget(

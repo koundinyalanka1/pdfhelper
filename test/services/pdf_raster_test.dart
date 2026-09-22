@@ -21,33 +21,58 @@ void main() {
     expect(PdfRaster.cachedCover(path, modifiedMs: 1), isNull);
   });
 
-  test('a cover cached without a password does not answer for one with', () async {
-    const path = '/nonexistent/locked.pdf';
-    await PdfRaster.libraryCover(path, modifiedMs: 1);
+  test(
+    'a cover cached without a password does not answer for one with',
+    () async {
+      const path = '/nonexistent/locked.pdf';
+      await PdfRaster.libraryCover(path, modifiedMs: 1);
 
-    expect(PdfRaster.isCoverCached(path, modifiedMs: 1), isTrue);
-    // The whole point: once a password is known, the earlier failure must not
-    // stand in for it.
+      expect(PdfRaster.isCoverCached(path, modifiedMs: 1), isTrue);
+      // The whole point: once a password is known, the earlier failure must not
+      // stand in for it.
+      expect(
+        PdfRaster.isCoverCached(path, modifiedMs: 1, password: 'secret'),
+        isFalse,
+      );
+    },
+  );
+
+  test('a wrong password miss does not poison another password', () async {
+    const path = '/nonexistent/locked.pdf';
+    await PdfRaster.libraryCover(path, modifiedMs: 1, password: 'wrong');
     expect(
-      PdfRaster.isCoverCached(path, modifiedMs: 1, password: 'secret'),
+      PdfRaster.isCoverCached(path, modifiedMs: 1, password: 'wrong'),
+      isTrue,
+    );
+    expect(
+      PdfRaster.isCoverCached(path, modifiedMs: 1, password: 'correct'),
       isFalse,
     );
   });
 
-  test('a modified file re-renders rather than reusing its old cover', () async {
-    const path = '/nonexistent/edited.pdf';
-    await PdfRaster.libraryCover(path, modifiedMs: 1);
-    expect(PdfRaster.isCoverCached(path, modifiedMs: 1), isTrue);
-    expect(PdfRaster.isCoverCached(path, modifiedMs: 2), isFalse);
-  });
+  test(
+    'a modified file re-renders rather than reusing its old cover',
+    () async {
+      const path = '/nonexistent/edited.pdf';
+      await PdfRaster.libraryCover(path, modifiedMs: 1);
+      expect(PdfRaster.isCoverCached(path, modifiedMs: 1), isTrue);
+      expect(PdfRaster.isCoverCached(path, modifiedMs: 2), isFalse);
+    },
+  );
 
   test('invalidate drops one document without clearing the rest', () async {
     await PdfRaster.libraryCover('/nonexistent/a.pdf', modifiedMs: 1);
     await PdfRaster.libraryCover('/nonexistent/b.pdf', modifiedMs: 1);
 
     PdfRaster.invalidate('/nonexistent/a.pdf');
-    expect(PdfRaster.isCoverCached('/nonexistent/a.pdf', modifiedMs: 1), isFalse);
-    expect(PdfRaster.isCoverCached('/nonexistent/b.pdf', modifiedMs: 1), isTrue);
+    expect(
+      PdfRaster.isCoverCached('/nonexistent/a.pdf', modifiedMs: 1),
+      isFalse,
+    );
+    expect(
+      PdfRaster.isCoverCached('/nonexistent/b.pdf', modifiedMs: 1),
+      isTrue,
+    );
   });
 
   test('uncached renders do not accumulate warning entries', () async {
@@ -57,23 +82,23 @@ void main() {
     for (var i = 0; i < 50; i++) {
       await PdfRaster.libraryCover('/nonexistent/file$i.pdf', modifiedMs: 1);
     }
-    expect(
-      PdfRaster.warningsFor('/nonexistent/file0.pdf', 0),
-      isEmpty,
-    );
+    expect(PdfRaster.warningsFor('/nonexistent/file0.pdf', 0), isEmpty);
   });
 
   test('pageCountOrZero absorbs a failure the caller cannot act on', () async {
     expect(await PdfRaster.pageCountOrZero('/nonexistent/missing.pdf'), 0);
   });
 
-  test('pageCountOf surfaces the failure instead of reporting no pages', () async {
-    // The regression this guards: returning 0 here made an encrypted document
-    // indistinguishable from an empty one, so nothing ever asked for a
-    // password.
-    await expectLater(
-      PdfRaster.pageCountOf('/nonexistent/missing.pdf'),
-      throwsA(isA<Object>()),
-    );
-  });
+  test(
+    'pageCountOf surfaces the failure instead of reporting no pages',
+    () async {
+      // The regression this guards: returning 0 here made an encrypted document
+      // indistinguishable from an empty one, so nothing ever asked for a
+      // password.
+      await expectLater(
+        PdfRaster.pageCountOf('/nonexistent/missing.pdf'),
+        throwsA(isA<Object>()),
+      );
+    },
+  );
 }

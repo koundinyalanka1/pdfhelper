@@ -28,14 +28,17 @@ class PdfIntentTrampolineActivity : Activity() {
             finish()
             return
         }
+        if (incoming.action != Intent.ACTION_VIEW ||
+            incoming.data?.scheme !in setOf("content", "file")) {
+            finish()
+            return
+        }
         val action = resolveActionFromAlias(incoming.component) ?: "view"
-        Log.d(TAG, "onCreate: uri=$uriString action=$action component=${incoming.component?.className}")
         // Store in memory (survives CLEAR_TASK; more reliable than SharedPreferences)
         PendingPdfIntent.set(uriString, action)
-        Log.d(TAG, "onCreate: starting MainActivity with EXTRA_PDF_ACTION=$action")
         val forward = Intent(this, MainActivity::class.java).apply {
-            data = incoming.data
-            type = incoming.type
+            setDataAndType(incoming.data, incoming.type)
+            this.action = Intent.ACTION_VIEW
             addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK or
                 Intent.FLAG_ACTIVITY_CLEAR_TOP or

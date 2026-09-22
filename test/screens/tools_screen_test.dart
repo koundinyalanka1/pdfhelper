@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pdfhelper/models/home_tabs.dart';
+import 'package:pdfhelper/config/features.dart';
 import 'package:pdfhelper/providers/theme_provider.dart';
 import 'package:pdfhelper/screens/tools_screen.dart';
 import 'package:provider/provider.dart';
@@ -70,10 +71,19 @@ void main() {
       'Protect with a password',
       'Open in viewer',
       'Extract text',
-      'Ask AI',
-      'AI models',
     ]) {
       expect(find.text(tool), findsOneWidget, reason: '$tool is missing');
+    }
+
+    // The AI tools are built but not shipped yet; they are hidden behind
+    // Features.ai. Asserted against the flag rather than simply dropped, so
+    // turning it on is a deliberate change that shows up here.
+    for (final tool in ['Ask AI', 'AI models']) {
+      expect(
+        find.text(tool),
+        Features.ai ? findsOneWidget : findsNothing,
+        reason: '$tool should follow Features.ai',
+      );
     }
   });
 
@@ -85,10 +95,14 @@ void main() {
       'Combine & split',
       'Edit document',
       'Read & extract',
-      'On-device AI',
     ]) {
       expect(find.text(section), findsOneWidget);
     }
+
+    expect(
+      find.text('On-device AI'),
+      Features.ai ? findsOneWidget : findsNothing,
+    );
   });
 
   testWidgets('invites the user to choose a working document', (tester) async {

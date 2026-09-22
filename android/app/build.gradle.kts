@@ -3,6 +3,8 @@ import java.io.FileInputStream
 
 plugins {
     id("com.android.application")
+    id("com.google.gms.google-services")
+    id("com.google.firebase.crashlytics")
     // Kotlin is built in (see android.builtInKotlin in gradle.properties), so
     // `kotlin-android` is no longer applied here.
     // The Flutter Gradle Plugin must be applied after the Android plugin.
@@ -115,4 +117,29 @@ flutter {
 dependencies {
     // Core library desugaring for flutter_local_notifications
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+}
+
+// The bundled Firebase client is the production application ID. A debug build
+// has a separate ID and deliberately runs without production crash reporting.
+// Register that ID in Firebase and add src/debug/google-services.json to opt in.
+tasks.matching { it.name == "processDebugGoogleServices" }.configureEach {
+    enabled = file("src/debug/google-services.json").exists()
+}
+
+val verifyPdfCore by tasks.registering {
+    doLast {
+        val root = rootProject.file("../packages/flutter_pdf_core/android/src/main/jniLibs")
+        for (abi in listOf("arm64-v8a", "armeabi-v7a", "x86_64")) {
+            check(root.resolve("$abi/libpdf_ffi.so").isFile) {
+                "PDF engine missing for $abi. Run bash scripts/build_pdf_core.sh android before building."
+            }
+        }
+    }
+}
+tasks.named("preBuild").configure { dependsOn(verifyPdfCore) }
+
+// Local validation builds do not contact Crashlytics to publish symbols.
+// Opt in from the release pipeline with -PuploadCrashlytics=true.
+tasks.matching { it.name.startsWith("uploadCrashlytics") }.configureEach {
+    onlyIf { providers.gradleProperty("uploadCrashlytics").orNull == "true" }
 }

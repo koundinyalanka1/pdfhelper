@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../providers/theme_provider.dart';
 import '../services/permission_service.dart';
+import '../services/ads_service.dart';
 import '../widgets/settings_widgets.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -75,9 +76,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  // TODO: Replace these placeholder URLs with the real store listing /
-  // privacy policy URLs before publishing.
-  static const String _rateAppUrl = 'https://example.com/pdfhelper/rate';
+  static const String _rateAppUrl =
+      'https://play.google.com/store/apps/details?id=com.yourmateapps.pdfhelper';
   static const String _privacyPolicyUrl =
       'https://yourmateapps.github.io/pdfhelper/privacy-policy.html';
 
@@ -282,6 +282,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     () => _launchExternalUrl(_rateAppUrl, 'Rate App'),
                   ),
                   SettingsDivider(colors: _colors),
+                  ValueListenableBuilder<bool>(
+                    valueListenable: AdsService.instance.privacyOptionsRequired,
+                    builder: (context, required, _) => !required
+                        ? const SizedBox.shrink()
+                        : Column(
+                            children: [
+                              _buildActionTile(
+                                'Ad privacy choices',
+                                'Review your advertising consent',
+                                Icons.tune_rounded,
+                                () async {
+                                  try {
+                                    await AdsService.instance
+                                        .showPrivacyOptions();
+                                  } catch (_) {
+                                    if (mounted) {
+                                      _showSnackBar(
+                                        'Could not open privacy choices. Try again.',
+                                      );
+                                    }
+                                  }
+                                },
+                              ),
+                              SettingsDivider(colors: _colors),
+                            ],
+                          ),
+                  ),
                   _buildActionTile(
                     'Privacy Policy',
                     'Read our privacy policy',

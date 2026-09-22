@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 /// Naming for the files this app writes.
@@ -34,9 +35,15 @@ String sanitizeFileName(String input, {String fallback = 'Document'}) {
   while (name.startsWith('.')) {
     name = name.substring(1).trim();
   }
-  if (name.length > maxBaseNameLength) {
-    name = name.substring(0, maxBaseNameLength).replaceAll(_trailingJunk, '');
+  final runes = <int>[];
+  var byteCount = 0;
+  for (final rune in name.runes) {
+    final bytes = utf8.encode(String.fromCharCode(rune)).length;
+    if (runes.length >= maxBaseNameLength || byteCount + bytes > 220) break;
+    runes.add(rune);
+    byteCount += bytes;
   }
+  name = String.fromCharCodes(runes).replaceAll(_trailingJunk, '');
   return name.isEmpty ? fallback : name;
 }
 
@@ -63,7 +70,10 @@ Future<String> uniqueFilePath(String directory, String fileName) async {
 
   var candidate = '$directory/$fileName';
   for (var counter = 2; counter <= 999; counter++) {
-    if (!await File(candidate).exists()) return candidate;
+    if (await FileSystemEntity.type(candidate, followLinks: false) ==
+        FileSystemEntityType.notFound) {
+      return candidate;
+    }
     candidate = '$directory/$base ($counter)$ext';
   }
   // A thousand files of the same name is not a real case; fall back to the

@@ -18,11 +18,11 @@ class FirebaseService {
   /// Call once during app startup. Safe to call multiple times — it's a no-op
   /// after the first success.
   static Future<void> initialize() async {
-    if (_initialized) return;
+    if (_initialized || !kReleaseMode) return;
     try {
       await Firebase.initializeApp();
+      await _wireCrashlytics();
       _initialized = true;
-      _wireCrashlytics();
       debugPrint('[FirebaseService] initialized');
     } catch (e, st) {
       // Most likely cause: missing google-services.json / GoogleService-Info.plist.
@@ -32,22 +32,30 @@ class FirebaseService {
     }
   }
 
-  static void _wireCrashlytics() {
+  static Future<void> _wireCrashlytics() async {
     // In debug builds we don't want noisy Crashlytics reports while iterating.
     final collectionEnabled = !kDebugMode;
-    FirebaseCrashlytics.instance.setCrashlyticsCollectionEnabled(
+    await FirebaseCrashlytics.instance.setCrashlyticsCollectionEnabled(
       collectionEnabled,
     );
 
     // Capture all uncaught Flutter framework errors.
     FlutterError.onError = (details) {
       FlutterError.presentError(details);
-      FirebaseCrashlytics.instance.recordFlutterFatalError(details);
+      unawaited(
+        FirebaseCrashlytics.instance
+            .recordFlutterFatalError(details)
+            .catchError((Object _) {}),
+      );
     };
 
     // Capture errors that escape the Flutter framework (async / isolate).
     PlatformDispatcher.instance.onError = (error, stack) {
-      FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
+      unawaited(
+        FirebaseCrashlytics.instance
+            .recordError(error, stack, fatal: true)
+            .catchError((Object _) {}),
+      );
       return true;
     };
   }

@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -58,29 +60,26 @@ class _OrganizePagesScreenState extends State<OrganizePagesScreen> {
         widget.pdfPath,
         password: widget.password,
       );
-      final pages = <_PageEdit>[];
-      for (int i = 0; i < count; i++) {
+      if (!mounted) return;
+      // Publish every page before enabling edits. A partial list allowed Apply
+      // to silently drop pages whose thumbnails had not finished rendering.
+      final pages = List.generate(count, (i) => _PageEdit(sourceIndex: i));
+      setState(() {
+        _pages = List.of(pages);
+        _isLoading = false;
+        if (pages.isEmpty) _status = 'This PDF has no pages.';
+      });
+      for (final page in pages) {
+        if (!mounted) return;
         final thumbnail = await PdfRaster.renderPage(
           widget.pdfPath,
-          i,
+          page.sourceIndex,
           longEdge: 320,
           password: widget.password,
         );
-        pages.add(_PageEdit(sourceIndex: i, thumbnail: thumbnail));
-        // Show pages as they arrive rather than after the whole document.
-        if (mounted && (i == 0 || i % 8 == 7)) {
-          setState(() {
-            _pages = List.of(pages);
-            _isLoading = false;
-          });
-        }
-      }
-      if (mounted) {
-        setState(() {
-          _pages = pages;
-          _isLoading = false;
-          if (pages.isEmpty) _status = 'This PDF has no pages.';
-        });
+        if (!mounted) return;
+        // Preserve the user's ordering, deletion and rotation while loading.
+        setState(() => page.thumbnail = thumbnail);
       }
     } catch (e) {
       if (mounted) {
@@ -107,6 +106,7 @@ class _OrganizePagesScreenState extends State<OrganizePagesScreen> {
   }
 
   Future<void> _apply() async {
+    if (_isApplying || _isLoading) return;
     if (_keptCount == 0) {
       _snack('Keep at least one page.');
       return;
@@ -121,6 +121,8 @@ class _OrganizePagesScreenState extends State<OrganizePagesScreen> {
       _status = 'Rewriting document…';
     });
 
+    final generated = <String>[];
+    String? result;
     try {
       final kept = _pages.where((p) => !p.deleted).toList();
 
@@ -134,6 +136,8 @@ class _OrganizePagesScreenState extends State<OrganizePagesScreen> {
         password: widget.password,
       );
 
+      generated.add(current);
+
       // Then one rotate call per distinct non-zero angle, addressing the
       // pages by their *new* positions.
       final byAngle = <int, List<int>>{};
@@ -142,15 +146,18 @@ class _OrganizePagesScreenState extends State<OrganizePagesScreen> {
         if (rotation != 0) (byAngle[rotation] ??= []).add(i);
       }
       for (final entry in byAngle.entries) {
-        if (!mounted) return;
-        setState(() => _status = 'Rotating ${entry.value.length} page(s)…');
+        if (mounted) {
+          setState(() => _status = 'Rotating ${entry.value.length} page(s)…');
+        }
         current = await PdfCoreService.rotatePages(
           current,
           entry.key,
           pages: PdfCoreService.toPageSelection(entry.value),
         );
+        generated.add(current);
       }
 
+      result = current;
       if (!mounted) return;
       setState(() => _isApplying = false);
       final removed = _pages.length - kept.length;
@@ -170,6 +177,12 @@ class _OrganizePagesScreenState extends State<OrganizePagesScreen> {
       if (mounted) {
         setState(() => _isApplying = false);
         _snack(PdfCoreService.describeError(e));
+      }
+    } finally {
+      for (final path in generated.where((path) => path != result)) {
+        try {
+          await File(path).delete();
+        } catch (_) {}
       }
     }
   }
@@ -243,6 +256,7 @@ class _OrganizePagesScreenState extends State<OrganizePagesScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 16),
       itemCount: _pages.length,
       onReorderItem: (oldIndex, newIndex) {
+        if (_isApplying) return;
         setState(() => _pages.insert(newIndex, _pages.removeAt(oldIndex)));
       },
       itemBuilder: (context, index) {
@@ -264,6 +278,7 @@ class _OrganizePagesScreenState extends State<OrganizePagesScreen> {
             children: [
               ReorderableDragStartListener(
                 index: index,
+                enabled: !_isApplying,
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 4),
                   child: Icon(
@@ -322,7 +337,7 @@ class _OrganizePagesScreenState extends State<OrganizePagesScreen> {
               ),
               IconButton(
                 tooltip: 'Rotate left',
-                onPressed: () => _rotate(index, -90),
+                onPressed: _isApplying ? null : () => _rotate(index, -90),
                 icon: Icon(
                   Icons.rotate_left_rounded,
                   color: _colors.textSecondary,
@@ -331,7 +346,7 @@ class _OrganizePagesScreenState extends State<OrganizePagesScreen> {
               ),
               IconButton(
                 tooltip: 'Rotate right',
-                onPressed: () => _rotate(index, 90),
+                onPressed: _isApplying ? null : () => _rotate(index, 90),
                 icon: Icon(
                   Icons.rotate_right_rounded,
                   color: _colors.textSecondary,
@@ -340,7 +355,7 @@ class _OrganizePagesScreenState extends State<OrganizePagesScreen> {
               ),
               IconButton(
                 tooltip: page.deleted ? 'Restore page' : 'Delete page',
-                onPressed: () => _toggleDelete(index),
+                onPressed: _isApplying ? null : () => _toggleDelete(index),
                 icon: Icon(
                   page.deleted
                       ? Icons.restore_from_trash_rounded
@@ -411,10 +426,10 @@ class _OrganizePagesScreenState extends State<OrganizePagesScreen> {
 /// Staged edit for one page. [sourceIndex] is its 0-based position in the
 /// *original* document — list position is where it will end up.
 class _PageEdit {
-  _PageEdit({required this.sourceIndex, this.thumbnail});
+  _PageEdit({required this.sourceIndex});
 
   final int sourceIndex;
-  final Uint8List? thumbnail;
+  Uint8List? thumbnail;
   int rotation = 0;
   bool deleted = false;
 }

@@ -28,7 +28,9 @@ class _ConvertScreenState extends State<ConvertScreen>
   bool get wantKeepAlive => true;
 
   CameraController? _cameraController;
-  List<CameraDescription>? _cameras;
+  Future<void>? _cameraInitialization;
+  bool _cameraActive = true;
+  int _cameraGeneration = 0;
   bool _isCameraInitialized = false;
   bool _cameraPermissionDenied = false;
   bool _cameraPermissionPermanentlyDenied = false;
@@ -52,6 +54,8 @@ class _ConvertScreenState extends State<ConvertScreen>
 
   @override
   void dispose() {
+    _cameraActive = false;
+    _cameraGeneration++;
     WidgetsBinding.instance.removeObserver(this);
     _cameraController?.dispose();
     _focusTimer?.cancel();
@@ -60,19 +64,22 @@ class _ConvertScreenState extends State<ConvertScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (_cameraController == null || !_cameraController!.value.isInitialized) {
-      return;
-    }
-
-    if (state == AppLifecycleState.inactive) {
-      _cameraController?.dispose();
-      _isCameraInitialized = false;
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused) {
+      _cameraActive = false;
+      _cameraGeneration++;
+      final controller = _cameraController;
+      _cameraController = null;
+      if (mounted) {
+        setState(() {
+          _isCameraInitialized = false;
+          _isFlashOn = false;
+        });
+      }
+      if (controller != null) unawaited(controller.dispose());
     } else if (state == AppLifecycleState.resumed) {
-      PermissionService.isGranted(Permission.camera).then((granted) {
-        if (granted && mounted) {
-          _initializeCamera();
-        }
-      });
+      _cameraActive = true;
+      unawaited(_checkCameraAndInit());
     }
   }
 
@@ -84,6 +91,7 @@ class _ConvertScreenState extends State<ConvertScreen>
     }
     if (!mounted) return;
     final permanentlyDenied = await Permission.camera.isPermanentlyDenied;
+    if (!mounted) return;
     setState(() {
       _cameraPermissionDenied = true;
       _cameraPermissionPermanentlyDenied = permanentlyDenied;
@@ -113,6 +121,7 @@ class _ConvertScreenState extends State<ConvertScreen>
       await _initializeCamera();
     } else {
       final permanentlyDenied = await Permission.camera.isPermanentlyDenied;
+      if (!mounted) return;
       setState(() {
         _cameraPermissionDenied = true;
         _cameraPermissionPermanentlyDenied = permanentlyDenied;
@@ -135,32 +144,57 @@ class _ConvertScreenState extends State<ConvertScreen>
   }
 
   Future<void> _initializeCamera() async {
+    await _cameraInitialization;
+    if (!mounted || !_cameraActive || _isCameraInitialized) return;
+    final pending = _initializeCameraOnce();
+    _cameraInitialization = pending;
     try {
-      _cameras = await availableCameras();
-      if (_cameras != null && _cameras!.isNotEmpty) {
-        _cameraController = CameraController(
-          _cameras![0],
-          ResolutionPreset.high,
-          enableAudio: false,
-          imageFormatGroup: ImageFormatGroup.jpeg,
-        );
-
-        await _cameraController!.initialize();
-
-        try {
-          await _cameraController!.setFocusMode(FocusMode.auto);
-        } catch (e) {
-          debugPrint('Auto focus not supported: $e');
-        }
-
-        if (mounted) {
-          setState(() {
-            _isCameraInitialized = true;
-          });
-        }
+      await pending;
+    } finally {
+      if (identical(_cameraInitialization, pending)) {
+        _cameraInitialization = null;
       }
+    }
+  }
+
+  Future<void> _initializeCameraOnce() async {
+    final generation = _cameraGeneration;
+    CameraController? controller;
+    try {
+      final cameras = await availableCameras();
+      if (!mounted ||
+          !_cameraActive ||
+          generation != _cameraGeneration ||
+          cameras.isEmpty) {
+        return;
+      }
+      controller = CameraController(
+        cameras.first,
+        ResolutionPreset.high,
+        enableAudio: false,
+        imageFormatGroup: ImageFormatGroup.jpeg,
+      );
+      await controller.initialize();
+      try {
+        await controller.setFocusMode(FocusMode.auto);
+      } catch (_) {}
+      if (!mounted || !_cameraActive || generation != _cameraGeneration) return;
+      _cameraController = controller;
+      controller = null; // Ownership passes to the screen.
+      setState(() {
+        _isCameraInitialized = true;
+        _cameraPermissionDenied = false;
+      });
     } catch (e) {
       debugPrint('Error initializing camera: $e');
+      if (mounted && _cameraActive) {
+        _showSnackBar(
+          'Camera unavailable. You can still add images from the gallery.',
+          isError: true,
+        );
+      }
+    } finally {
+      await controller?.dispose();
     }
   }
 
@@ -254,7 +288,7 @@ class _ConvertScreenState extends State<ConvertScreen>
         await _cameraController!.setFlashMode(FlashMode.torch);
       }
 
-      setState(() => _isCapturing = false);
+      if (mounted) setState(() => _isCapturing = false);
 
       // Navigate to edit screen
       if (mounted) {
@@ -266,6 +300,7 @@ class _ConvertScreenState extends State<ConvertScreen>
               imagePath: savedPath,
               imageQuality: themeProvider.outputQualityAsImageQuality,
               onSave: (processedPath) {
+                if (!mounted) return;
                 setState(() {
                   _capturedImages.add(processedPath);
                 });
@@ -277,33 +312,21 @@ class _ConvertScreenState extends State<ConvertScreen>
       }
     } catch (e) {
       _showSnackBar('Error capturing image: $e', isError: true);
-      setState(() => _isCapturing = false);
+      if (mounted) setState(() => _isCapturing = false);
     }
   }
 
   Future<void> _pickFromGallery() async {
     try {
-      final granted = await PermissionService.requestWithRationale(
-        context: context,
-        permission: Permission.photos,
-        rationaleTitle: 'Photo Library Access',
-        rationaleMessage:
-            'PDF Helper needs access to your photos to add images to your PDF document.',
-        deniedTitle: 'Photo Access Required',
-        deniedMessage:
-            'Photo access was denied. Please enable it in Settings to add images from your gallery.',
-        settingsButtonText: 'Open Settings',
-        cancelButtonText: 'Not Now',
-      );
-      if (!granted || !mounted) return;
-
+      // The system picker grants access only to selected photos.
+      if (!mounted) return;
       final themeProvider = context.read<ThemeProvider>();
       final imageQuality = themeProvider.outputQualityAsImageQuality;
       final List<XFile> images = await _imagePicker.pickMultiImage(
         imageQuality: imageQuality.clamp(1, 100),
       );
 
-      if (images.isNotEmpty) {
+      if (images.isNotEmpty && mounted) {
         final Directory appDir = await getApplicationDocumentsDirectory();
 
         // Process first image through the edit screen
@@ -312,6 +335,13 @@ class _ConvertScreenState extends State<ConvertScreen>
             'picked_${DateTime.now().millisecondsSinceEpoch}_0.jpg';
         final String savedPath = '${appDir.path}/$fileName';
         await File(image.path).copy(savedPath);
+        final remaining = <String>[];
+        for (var i = 1; i < images.length; i++) {
+          final copied = await File(images[i].path).copy(
+            '${appDir.path}/picked_${DateTime.now().microsecondsSinceEpoch}_$i.jpg',
+          );
+          remaining.add(copied.path);
+        }
 
         if (mounted) {
           final themeProvider = context.read<ThemeProvider>();
@@ -321,26 +351,12 @@ class _ConvertScreenState extends State<ConvertScreen>
               builder: (context) => ScanEditScreen(
                 imagePath: savedPath,
                 imageQuality: themeProvider.outputQualityAsImageQuality,
-                onSave: (processedPath) async {
-                  setState(() {
-                    _capturedImages.add(processedPath);
-                  });
-
-                  // Add remaining images directly
-                  for (int i = 1; i < images.length; i++) {
-                    final img = images[i];
-                    final String fName =
-                        'picked_${DateTime.now().millisecondsSinceEpoch}_$i.jpg';
-                    final String sPath = '${appDir.path}/$fName';
-                    await File(img.path).copy(sPath);
-                    setState(() {
-                      _capturedImages.add(sPath);
-                    });
-                  }
-
-                  if (images.length > 1) {
-                    _showSnackBar('${images.length} image(s) added!');
-                  }
+                onSave: (processedPath) {
+                  if (!mounted) return;
+                  setState(
+                    () => _capturedImages.addAll([processedPath, ...remaining]),
+                  );
+                  _showSnackBar('${images.length} image(s) added!');
                 },
               ),
             ),
@@ -353,7 +369,7 @@ class _ConvertScreenState extends State<ConvertScreen>
   }
 
   Future<void> _convertToPdf() async {
-    if (_capturedImages.isEmpty) return;
+    if (_isProcessing || _capturedImages.isEmpty) return;
 
     // Asked before any work starts: the name travels into the output file
     // itself, so there is nothing to rewrite afterwards, and backing out here
@@ -415,11 +431,12 @@ class _ConvertScreenState extends State<ConvertScreen>
     } catch (e) {
       _showSnackBar('Error: $e', isError: true);
     } finally {
-      setState(() => _isProcessing = false);
+      if (mounted) setState(() => _isProcessing = false);
     }
   }
 
   void _showSnackBar(String message, {bool isError = false}) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),

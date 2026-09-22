@@ -1,4 +1,5 @@
 import 'dart:io';
+import '../utils/error_logger.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -8,25 +9,36 @@ class NotificationService {
   factory NotificationService() => _instance;
   NotificationService._internal();
 
-  final FlutterLocalNotificationsPlugin _notifications = FlutterLocalNotificationsPlugin();
+  final FlutterLocalNotificationsPlugin _notifications =
+      FlutterLocalNotificationsPlugin();
   bool _isInitialized = false;
   bool _hasPermission = false;
 
   Future<void> initialize() async {
+    try {
+      await _initialize();
+    } catch (e) {
+      logError('NotificationService.initialize', e);
+    }
+  }
+
+  Future<void> _initialize() async {
     if (_isInitialized) return;
 
-    const AndroidInitializationSettings androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
-    
+    const AndroidInitializationSettings androidSettings =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+
     // Deliberately does NOT request permission here. main() awaits
     // initialize(), and asking at this point put a system alert in front of a
     // blank launch screen before the user had seen the app at all — and on
     // iOS startup blocked until they answered it. Permission is requested at
     // the moment a notification is actually needed, see [requestPermission].
-    const DarwinInitializationSettings iosSettings = DarwinInitializationSettings(
-      requestAlertPermission: false,
-      requestBadgePermission: false,
-      requestSoundPermission: false,
-    );
+    const DarwinInitializationSettings iosSettings =
+        DarwinInitializationSettings(
+          requestAlertPermission: false,
+          requestBadgePermission: false,
+          requestSoundPermission: false,
+        );
 
     const InitializationSettings settings = InitializationSettings(
       android: androidSettings,
@@ -35,7 +47,7 @@ class NotificationService {
 
     await _notifications.initialize(settings: settings);
     _isInitialized = true;
-    
+
     // Check if we already have permission
     await _checkPermission();
   }
@@ -87,25 +99,40 @@ class NotificationService {
     required String body,
     String? payload,
   }) async {
+    try {
+      await _showNotification(title: title, body: body, payload: payload);
+    } catch (e) {
+      logError('NotificationService.showNotification', e);
+    }
+  }
+
+  Future<void> _showNotification({
+    required String title,
+    required String body,
+    String? payload,
+  }) async {
     if (!_isInitialized) await initialize();
-    
+    if (!_isInitialized) return;
+    await _checkPermission();
+
     // Check/request permission before showing notification
     if (!_hasPermission) {
       await requestPermission();
       if (!_hasPermission) return; // User denied permission
     }
 
-    const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
-      'pdf_helper_channel',
-      'PDF Helper',
-      channelDescription: 'Notifications for PDF operations',
-      importance: Importance.high,
-      priority: Priority.high,
-      icon: '@mipmap/ic_launcher',
-      color: Color(0xFFE94560),
-      enableVibration: true,
-      playSound: true,
-    );
+    const AndroidNotificationDetails androidDetails =
+        AndroidNotificationDetails(
+          'pdf_helper_channel',
+          'PDF Helper',
+          channelDescription: 'Notifications for PDF operations',
+          importance: Importance.high,
+          priority: Priority.high,
+          icon: '@mipmap/ic_launcher',
+          color: Color(0xFFE94560),
+          enableVibration: true,
+          playSound: true,
+        );
 
     const DarwinNotificationDetails iosDetails = DarwinNotificationDetails(
       presentAlert: true,
@@ -149,4 +176,3 @@ class NotificationService {
     );
   }
 }
-

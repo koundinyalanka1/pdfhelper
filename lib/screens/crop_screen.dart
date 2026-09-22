@@ -89,14 +89,17 @@ class _CropScreenState extends State<CropScreen> {
   }
 
   Future<void> _loadPreview() async {
+    ui.ImmutableBuffer? buffer;
+    ui.ImageDescriptor? descriptor;
+    ui.Codec? codec;
     try {
-      final buffer = await ui.ImmutableBuffer.fromUint8List(widget.imageBytes);
-      final descriptor = await ui.ImageDescriptor.encoded(buffer);
+      buffer = await ui.ImmutableBuffer.fromUint8List(widget.imageBytes);
+      descriptor = await ui.ImageDescriptor.encoded(buffer);
       final longest = descriptor.width > descriptor.height
           ? descriptor.width
           : descriptor.height;
       final scale = longest > _previewMaxSide ? _previewMaxSide / longest : 1.0;
-      final codec = await descriptor.instantiateCodec(
+      codec = await descriptor.instantiateCodec(
         targetWidth: (descriptor.width * scale).round(),
         targetHeight: (descriptor.height * scale).round(),
       );
@@ -114,6 +117,10 @@ class _CropScreenState extends State<CropScreen> {
           _previewFailed = true;
         });
       }
+    } finally {
+      codec?.dispose();
+      descriptor?.dispose();
+      buffer?.dispose();
     }
   }
 

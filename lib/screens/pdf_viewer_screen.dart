@@ -7,6 +7,7 @@ import 'package:flutter/rendering.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../config/features.dart';
 import '../providers/theme_provider.dart';
 import '../services/pdf_core_service.dart';
 import '../services/pdf_raster.dart';
@@ -67,6 +68,28 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
   /// While zoomed, dragging pans instead of scrolling the list.
   bool _isZoomed = false;
 
+  /// Fingers currently on the glass, counted by a [Listener].
+  ///
+  /// A `Listener` reports raw pointer events without entering the gesture
+  /// arena, so counting here costs nothing and steals nothing. See
+  /// [_isMultiTouch] for what the count is for.
+  int _activePointers = 0;
+
+  /// True from the moment a second finger lands until it lifts.
+  ///
+  /// This is the fix for zoom working only sometimes. `InteractiveViewer`'s
+  /// scale recognizer and the page list's vertical-drag recognizer both enter
+  /// the gesture arena when two fingers go down, and whichever passes its
+  /// threshold first wins outright. Two fingers that drift downwards before
+  /// they spread — which is most of them — hand the arena to the drag, and the
+  /// pinch is silently discarded; spread them cleanly and scale wins. Same
+  /// gesture, different outcome, which is exactly what it looked like.
+  ///
+  /// While this is true the list is given [NeverScrollableScrollPhysics] and
+  /// the double-tap recognizer is withdrawn, so nothing is left in the arena
+  /// to beat the pinch. See flutter/flutter#65006 and #58636.
+  bool _isMultiTouch = false;
+
   AnimationController? _zoomAnimation;
 
   /// The password actually in use. Starts as whatever the caller knew (Tools
@@ -115,6 +138,25 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     super.dispose();
+  }
+
+  void _onPointerDown(PointerDownEvent _) {
+    _activePointers++;
+    _syncMultiTouch();
+  }
+
+  void _onPointerFinished(PointerEvent _) {
+    if (_activePointers > 0) _activePointers--;
+    _syncMultiTouch();
+  }
+
+  /// Rebuild only when crossing the one-to-two finger boundary — a third
+  /// finger changes nothing, and rebuilding the page list per pointer event
+  /// would be far more expensive than the problem being solved.
+  void _syncMultiTouch() {
+    final isMultiTouch = _activePointers >= 2;
+    if (isMultiTouch == _isMultiTouch) return;
+    setState(() => _isMultiTouch = isMultiTouch);
   }
 
   void _onZoomChanged() {
@@ -375,15 +417,16 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
                 ),
               ),
               Divider(color: colors.divider, height: 20),
-              _action(
-                ctx,
-                colors,
-                Icons.auto_awesome_rounded,
-                'Ask AI',
-                () => _push(
-                  AiScreen(pdfPath: widget.pdfPath, password: _password),
+              if (Features.ai)
+                _action(
+                  ctx,
+                  colors,
+                  Icons.auto_awesome_rounded,
+                  'Ask AI',
+                  () => _push(
+                    AiScreen(pdfPath: widget.pdfPath, password: _password),
+                  ),
                 ),
-              ),
               _action(
                 ctx,
                 colors,
@@ -615,38 +658,54 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
       );
     }
 
-    return GestureDetector(
-      onDoubleTapDown: _onDoubleTap,
-      // The handler lives on onDoubleTapDown so the tap position is known;
-      // onDoubleTap still has to be present for the recognizer to fire.
-      onDoubleTap: () {},
-      child: InteractiveViewer(
-        transformationController: _zoomController,
-        minScale: 1.0,
-        maxScale: 6.0,
-        // Panning is handed to the list until the user actually zooms in;
-        // otherwise a plain drag would never scroll the document.
-        panEnabled: _isZoomed,
-        child: ListView.builder(
-          controller: _scrollController,
-          padding: const EdgeInsets.symmetric(vertical: 6),
-          // Keep a screenful either side rendered so scrolling rarely shows a
-          // blank page while the rasterizer catches up.
-          scrollCacheExtent: const ScrollCacheExtent.viewport(1),
-          physics: _isZoomed
-              ? const NeverScrollableScrollPhysics()
-              : const AlwaysScrollableScrollPhysics(),
-          itemCount: _totalPages,
-          itemBuilder: (context, index) => _PageView(
-            key: ValueKey('${widget.pdfPath}#$index'),
-            path: widget.pdfPath,
-            password: _password,
-            pageIndex: index,
-            fallbackAspectRatio: _aspectRatio,
-            isDark: _colors.isDark,
-            zoom: _zoom,
-            onMeasured: (height) => _pageHeights[index] = height,
-            onWarnings: _noteWarnings,
+    return Listener(
+      // Outside the arena, so this sees every finger without competing for
+      // any of them.
+      onPointerDown: _onPointerDown,
+      onPointerUp: _onPointerFinished,
+      onPointerCancel: _onPointerFinished,
+      child: GestureDetector(
+        // Withdrawn during a pinch: a tap recognizer wrapping an
+        // InteractiveViewer delays and sometimes swallows the zoom while the
+        // arena waits to see whether a second tap is coming
+        // (flutter/flutter#58636). With one finger down it is free to work.
+        onDoubleTapDown: _isMultiTouch ? null : _onDoubleTap,
+        // The handler lives on onDoubleTapDown so the tap position is known;
+        // onDoubleTap still has to be present for the recognizer to fire.
+        onDoubleTap: _isMultiTouch ? null : () {},
+        child: InteractiveViewer(
+          transformationController: _zoomController,
+          minScale: 1.0,
+          maxScale: 6.0,
+          // Panning is handed to the list until the user actually zooms in;
+          // otherwise a plain drag would never scroll the document.
+          panEnabled: _isZoomed,
+          child: ListView.builder(
+            controller: _scrollController,
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            // Keep a screenful either side rendered so scrolling rarely shows
+            // a blank page while the rasterizer catches up.
+            scrollCacheExtent: const ScrollCacheExtent.viewport(1),
+            // Locking the list removes its drag recognizer from the arena
+            // outright, which is what leaves the pinch uncontested.
+            physics: shouldLockScroll(
+              isZoomed: _isZoomed,
+              activePointers: _activePointers,
+            )
+                ? const NeverScrollableScrollPhysics()
+                : const AlwaysScrollableScrollPhysics(),
+            itemCount: _totalPages,
+            itemBuilder: (context, index) => _PageView(
+              key: ValueKey('${widget.pdfPath}#$index'),
+              path: widget.pdfPath,
+              password: _password,
+              pageIndex: index,
+              fallbackAspectRatio: _aspectRatio,
+              isDark: _colors.isDark,
+              zoom: _zoom,
+              onMeasured: (height) => _pageHeights[index] = height,
+              onWarnings: _noteWarnings,
+            ),
           ),
         ),
       ),
@@ -826,6 +885,19 @@ class _PageViewState extends State<_PageView> {
 /// Pulled out of the widget because this is the part that is easy to get
 /// subtly wrong — an off-by-one in the translation sends the page off screen
 /// and looks exactly like "zoom is broken".
+/// Whether the page list should refuse drags right now.
+///
+/// Two reasons, and they are different in kind. While zoomed, dragging means
+/// pan, not scroll. And from the moment a second finger lands, the list has to
+/// stand down so the pinch is not stolen: `InteractiveViewer`'s scale
+/// recognizer and the list's vertical-drag recognizer compete in the same
+/// gesture arena, and the drag frequently wins on the downward drift that
+/// precedes a spread. Refusing here removes the drag recognizer from the
+/// arena entirely, which is what makes zoom fire every time instead of most
+/// times (flutter/flutter#65006).
+bool shouldLockScroll({required bool isZoomed, required int activePointers}) =>
+    isZoomed || activePointers >= 2;
+
 Matrix4 doubleTapZoomTarget({
   required bool isZoomed,
   required Offset focalPoint,
