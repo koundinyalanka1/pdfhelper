@@ -5,10 +5,12 @@ import 'package:file_picker/file_picker.dart';
 import 'package:provider/provider.dart';
 import '../models/selected_pdf_file.dart';
 import '../services/ads_service.dart';
+import '../services/pdf_core_service.dart';
 import '../services/pdf_service.dart';
 import '../providers/theme_provider.dart';
 import '../utils/file_naming.dart';
 import '../utils/format_utils.dart';
+import '../widgets/password_prompt.dart';
 import '../widgets/pdf_name_dialog.dart';
 import '../widgets/recent_pdfs_strip.dart';
 import 'pdf_preview_screen.dart';
@@ -139,31 +141,83 @@ class _MergePdfScreenState extends State<MergePdfScreen>
       for (final file in batch) file.path,
   };
 
-  Future<void> _loadPdfDetails(SelectedPdfFile file) async {
-    try {
-      // The native core reads the file itself, so nothing is buffered here —
-      // this used to hold every selected PDF in memory at once.
-      final results = await Future.wait([
-        PdfService.getPageCount(file.path),
-        PdfService.generateThumbnail(file.path),
-        PdfService.getFirstPageAspectRatio(file.path),
-      ]);
-      final pageCount = results[0] as int;
-      final thumbnail = results[1] as Uint8List?;
-      final aspectRatio = results[2] as double?;
+  /// Password prompts, one at a time. Files load in parallel, so two locked
+  /// files added together would otherwise stack two dialogs.
+  Future<void> _promptQueue = Future.value();
 
-      if (mounted) {
-        setState(() {
-          file.pageCount = pageCount;
-          file.thumbnail = thumbnail;
-          file.aspectRatio = aspectRatio;
-          file.isLoading = false;
-        });
-      }
-    } catch (e) {
-      debugPrint('Error loading PDF: $e');
-      if (mounted) {
+  /// Null when the user declines, or removed [file] while its prompt queued.
+  Future<String?> _askPassword(SelectedPdfFile file, {required bool retry}) {
+    final answer = _promptQueue.then(
+      (_) => mounted && _batches.any((batch) => batch.contains(file))
+          ? showPdfPasswordPrompt(context, retry: retry, fileName: file.name)
+          : null,
+    );
+    _promptQueue = answer.then((_) {}, onError: (_) {});
+    return answer;
+  }
+
+  Future<void> _loadPdfDetails(SelectedPdfFile file) async {
+    bool isRetry = false;
+    while (true) {
+      try {
+        // The native core reads the file itself, so nothing is buffered
+        // here — this used to hold every selected PDF in memory at once.
+        final results = await Future.wait([
+          PdfService.getPageCount(file.path, password: file.password),
+          PdfService.generateThumbnail(file.path, password: file.password),
+          PdfService.getFirstPageAspectRatio(
+            file.path,
+            password: file.password,
+          ),
+        ]);
+        final pageCount = results[0] as int;
+        final thumbnail = results[1] as Uint8List?;
+        final aspectRatio = results[2] as double?;
+
+        if (mounted) {
+          setState(() {
+            file.pageCount = pageCount;
+            file.thumbnail = thumbnail;
+            file.aspectRatio = aspectRatio;
+            file.isLoading = false;
+          });
+        }
+        return;
+      } on PdfException catch (e) {
+        if (!mounted) return;
+        if (e.isEncrypted || e.isWrongPassword) {
+          final entered = await _askPassword(
+            file,
+            retry: isRetry || e.isWrongPassword,
+          );
+          if (!mounted) return;
+          if (entered != null) {
+            file.password = entered;
+            isRetry = true;
+            continue;
+          }
+          if (!_batches.any((batch) => batch.contains(file))) return;
+          // Without its password the file cannot be merged; leaving it in
+          // would only fail the whole batch later.
+          setState(() {
+            for (final batch in _batches) {
+              batch.remove(file);
+            }
+          });
+          _showSnackBar(
+            '"${file.name}" is password protected and was not added',
+          );
+          return;
+        }
+        debugPrint('Error loading PDF: $e');
         setState(() => file.isLoading = false);
+        return;
+      } catch (e) {
+        debugPrint('Error loading PDF: $e');
+        if (mounted) {
+          setState(() => file.isLoading = false);
+        }
+        return;
       }
     }
   }
@@ -220,8 +274,9 @@ class _MergePdfScreenState extends State<MergePdfScreen>
 
       // Group the mergeable batches by *path*: the native core streams files
       // from disk, so it never needs the bytes we cached for thumbnails.
-      final List<List<SelectedPdfFile>> mergeable =
-          _batches.where((b) => b.length >= 2).toList();
+      final List<List<SelectedPdfFile>> mergeable = _batches
+          .where((b) => b.length >= 2)
+          .toList();
 
       setState(() {
         _mergeProgress = 0.2;
@@ -233,6 +288,7 @@ class _MergePdfScreenState extends State<MergePdfScreen>
         final batch = mergeable[i];
         final path = await PdfService.mergeFiles(
           batch.map((f) => f.path).toList(),
+          passwords: batch.map((f) => f.password).toList(),
           // One title, several batches: number them so the outputs stay
           // distinguishable.
           fileName: mergeable.length > 1 ? '$fileName ${i + 1}' : fileName,
@@ -500,15 +556,20 @@ class _MergePdfScreenState extends State<MergePdfScreen>
                   onPressed: () {
                     HapticFeedback.lightImpact();
                     if (!File(file.path).existsSync()) {
-                      _showSnackBar('That file is no longer available',
-                          isError: true);
+                      _showSnackBar(
+                        'That file is no longer available',
+                        isError: true,
+                      );
                       return;
                     }
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (_) =>
-                            PdfViewerScreen(pdfPath: file.path, title: file.name),
+                        builder: (_) => PdfViewerScreen(
+                          pdfPath: file.path,
+                          title: file.name,
+                          password: file.password,
+                        ),
                       ),
                     );
                   },

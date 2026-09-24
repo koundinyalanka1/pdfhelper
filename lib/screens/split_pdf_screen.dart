@@ -4,11 +4,13 @@ import 'package:file_picker/file_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import '../services/ads_service.dart';
+import '../services/pdf_core_service.dart';
 import '../services/pdf_raster.dart';
 import '../services/pdf_service.dart';
 import '../services/notification_service.dart';
 import '../providers/theme_provider.dart';
 import '../utils/file_naming.dart';
+import '../widgets/password_prompt.dart';
 import '../widgets/pdf_name_dialog.dart';
 import '../widgets/recent_pdfs_strip.dart';
 import 'pdf_viewer_screen.dart';
@@ -29,6 +31,9 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
 
   String? _selectedFilePath;
   String? _selectedFileName;
+
+  /// Open password for [_selectedFilePath]; empty for an unprotected file.
+  String _password = '';
   int _totalPages = 0;
   final TextEditingController _fromController = TextEditingController();
   final TextEditingController _toController = TextEditingController();
@@ -70,15 +75,24 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
     }
   }
 
-  Future<void> _loadPdfFromPath(String path) async {
-    try {
-      final int pageCount = await PdfService.getPageCount(path);
-      final String name = path.split(RegExp(r'[/\\]')).last;
-
-      if (mounted) {
+  /// Select [path] as the document to split, asking for its password if it
+  /// has one. Every way in — the picker, a share intent, the Recent strip —
+  /// comes through here, so a locked file is never mistaken for a broken one.
+  Future<void> _loadPdfFromPath(String path, {String? name}) async {
+    final fileName = name ?? path.split(RegExp(r'[/\\]')).last;
+    String password = '';
+    bool isRetry = false;
+    while (true) {
+      try {
+        final int pageCount = await PdfService.getPageCount(
+          path,
+          password: password,
+        );
+        if (!mounted) return;
         setState(() {
           _selectedFilePath = path;
-          _selectedFileName = name;
+          _selectedFileName = fileName;
+          _password = password;
           _totalPages = pageCount;
           _fromController.clear();
           _toController.clear();
@@ -92,9 +106,27 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
           // Too many pages to thumbnail — fall back to range entry.
           setState(() => _splitMode = 'range');
         }
+        return;
+      } on PdfException catch (e) {
+        if (!mounted) return;
+        if (!e.isEncrypted && !e.isWrongPassword) {
+          _showSnackBar(PdfCoreService.describeError(e), isError: true);
+          return;
+        }
+        final entered = await showPdfPasswordPrompt(
+          context,
+          retry: isRetry || e.isWrongPassword,
+          fileName: fileName,
+        );
+        if (entered == null || !mounted) return;
+        password = entered;
+        isRetry = true;
+      } catch (e) {
+        if (mounted) {
+          _showSnackBar(PdfCoreService.describeError(e), isError: true);
+        }
+        return;
       }
-    } catch (e) {
-      debugPrint('Error loading PDF from intent: $e');
     }
   }
 
@@ -113,26 +145,7 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
       );
 
       if (result?.path != null) {
-        final String path = result!.path!;
-        final int pageCount = await PdfService.getPageCount(path);
-
-        setState(() {
-          _selectedFilePath = path;
-          _selectedFileName = result.name;
-          _totalPages = pageCount;
-          _fromController.clear();
-          _toController.clear();
-          _ranges.clear();
-          _selectedPages.clear();
-          _pagePreviews = [];
-        });
-
-        // Render thumbnails only when the page-picker mode is active.
-        if (_usePreviewMode) {
-          await _loadPagePreviews(path);
-        } else if (!_canUsePreviewMode && _splitMode == 'pages') {
-          setState(() => _splitMode = 'range');
-        }
+        await _loadPdfFromPath(result!.path!, name: result.name);
       }
     } catch (e) {
       _showSnackBar('Error selecting file: $e', isError: true);
@@ -146,9 +159,10 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
     });
 
     try {
-      final ratio = await PdfRaster.aspectRatio(path);
+      final ratio = await PdfRaster.aspectRatio(path, password: _password);
       final previews = await PdfRaster.renderAllPages(
         path,
+        password: _password,
         pageCount: _totalPages,
         onProgress: (done, total) {
           if (mounted) setState(() => _previewsRendered = done);
@@ -256,6 +270,7 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
         final String? outputPath = await PdfService.extractPagesFromFile(
           _selectedFilePath!,
           sortedPages, // Already 0-based
+          password: _password,
           fileName: fileName,
         );
 
@@ -307,6 +322,7 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
         final outputPaths = await PdfService.splitRangesFromFile(
           _selectedFilePath!,
           rangesToUse,
+          password: _password,
           fileName: fileName,
         );
 
@@ -344,6 +360,7 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
         final themeProvider = context.read<ThemeProvider>();
         final List<String> outputPaths = await PdfService.splitAllPagesFromFile(
           _selectedFilePath!,
+          password: _password,
           pageCount: _totalPages,
           fileName: fileName,
         );
@@ -544,6 +561,7 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
                   builder: (_) => PdfViewerScreen(
                     pdfPath: _selectedFilePath!,
                     title: _selectedFileName,
+                    password: _password,
                   ),
                 ),
               ),
@@ -686,6 +704,7 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
                                     setState(() {
                                       _selectedFilePath = null;
                                       _selectedFileName = null;
+                                      _password = '';
                                       _totalPages = 0;
                                       _fromController.clear();
                                       _toController.clear();

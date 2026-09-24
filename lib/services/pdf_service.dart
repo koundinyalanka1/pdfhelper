@@ -30,14 +30,20 @@ class PdfService {
   /// Merge [paths] in order. Returns the output path, or null on failure.
   ///
   /// [fileName] is the title the user typed; without one the output falls
-  /// back to the timestamped name.
+  /// back to the timestamped name. [passwords], when given, runs parallel to
+  /// [paths]; an empty entry means that file is not protected.
   static Future<String?> mergeFiles(
     List<String> paths, {
+    List<String>? passwords,
     String? fileName,
   }) async {
     if (paths.length < 2) return null;
     try {
-      return await PdfCoreService.merge(paths, fileName: fileName);
+      return await PdfCoreService.merge(
+        paths,
+        passwords: passwords,
+        fileName: fileName,
+      );
     } catch (e) {
       logError('PdfService.mergeFiles', e);
       return null;

@@ -16,9 +16,13 @@ class SelectedPdfFile {
   final int? fileSize;
   bool isLoading;
 
+  /// Open password, empty for an unprotected file.
+  String password = '';
+
   /// First-page preview, PNG bytes from the native rasterizer.
   Uint8List? thumbnail;
   int pageCount;
+
   /// First page width/height for responsive thumbnail sizing
   double? aspectRatio;
 }

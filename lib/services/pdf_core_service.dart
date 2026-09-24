@@ -103,12 +103,40 @@ class PdfCoreService {
   ///
   /// [fileName] is the user-chosen title; without one the output keeps the
   /// old `merged_pdf_<millis>.pdf` form.
+  ///
+  /// [passwords] runs parallel to [inputPaths]. The native merge opens every
+  /// input without a password, so each protected input is first decrypted to
+  /// a scratch copy, which is deleted once the merge is done.
   static Future<String> merge(
     List<String> inputPaths, {
+    List<String>? passwords,
     String? fileName,
   }) async {
     final out = await _outputPath('merged_pdf', fileName: fileName);
-    await PdfCore.mergeAsync(inputPaths, out);
+    Directory? scratch;
+    try {
+      final sources = <String>[];
+      for (int i = 0; i < inputPaths.length; i++) {
+        final password = passwords != null && i < passwords.length
+            ? passwords[i]
+            : '';
+        if (password.isEmpty) {
+          sources.add(inputPaths[i]);
+          continue;
+        }
+        scratch ??= await (await getTemporaryDirectory()).createTemp('merge_');
+        final unlocked = '${scratch.path}/$i.pdf';
+        await PdfCore.decryptAsync(inputPaths[i], password, unlocked);
+        sources.add(unlocked);
+      }
+      await PdfCore.mergeAsync(sources, out);
+    } finally {
+      if (scratch != null) {
+        try {
+          await scratch.delete(recursive: true);
+        } catch (_) {}
+      }
+    }
     return out;
   }
 

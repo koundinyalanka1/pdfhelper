@@ -90,6 +90,35 @@ void main() {
   );
 
   test(
+    'merge unlocks protected inputs and leaves no unlocked copies behind',
+    () async {
+      final encrypted = '${root.path}/protected.pdf';
+      await PdfCore.encryptAsync(simple, 'correct', encrypted);
+      for (final passwords in [
+        null,
+        ['wrong', ''],
+      ]) {
+        expect(
+          await PdfService.mergeFiles([
+            encrypted,
+            twoPages,
+          ], passwords: passwords),
+          isNull,
+        );
+      }
+      expect(paths.documents.listSync(), isEmpty);
+      final merged = await PdfService.mergeFiles(
+        [encrypted, twoPages],
+        passwords: ['correct', ''],
+      );
+      expect(merged, isNotNull);
+      expect(await PdfService.getPageCount(merged!), 3);
+      expect(await PdfCoreService.isEncrypted(merged), isFalse);
+      expect(paths.temporary.listSync(), isEmpty);
+    },
+  );
+
+  test(
     'invalid image batches fail without dropping pages or leaving files',
     () async {
       final image = File('${root.path}/valid.png')
