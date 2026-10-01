@@ -253,7 +253,9 @@ void main() {
   testWidgets('Recent lists a file that has been opened', (tester) async {
     seed('Invoice.pdf');
     await tester.runAsync(() async {
-      await RecentFilesService.markOpened('${paths.documents.path}/Invoice.pdf');
+      await RecentFilesService.markOpened(
+        '${paths.documents.path}/Invoice.pdf',
+      );
     });
 
     await settle(tester);
@@ -263,11 +265,63 @@ void main() {
     expect(find.text('Invoice'), findsOneWidget);
   });
 
+  testWidgets('viewed intent copies stay in Recent, outside All and Created', (
+    tester,
+  ) async {
+    seed('Original.pdf');
+    final intentCopy = File('${paths.temporary.path}/opened_pdfs/Viewed.pdf')
+      ..createSync(recursive: true)
+      ..writeAsStringSync('%PDF-1.7 temporary intent copy');
+    await tester.runAsync(() => RecentFilesService.markOpened(intentCopy.path));
+
+    await settle(tester);
+    expect(find.text('Original'), findsOneWidget);
+    expect(find.text('Viewed'), findsNothing);
+
+    await tester.tap(find.text('Recent'));
+    await tester.pump();
+    expect(find.text('Viewed'), findsOneWidget);
+    expect(find.text('Original'), findsNothing);
+
+    await tester.tap(find.text('Created'));
+    await tester.pump();
+    expect(find.text('Original'), findsOneWidget);
+    expect(find.text('Viewed'), findsNothing);
+    await flush(tester);
+  });
+
+  testWidgets('starred files outside the scan survive clearing recents', (
+    tester,
+  ) async {
+    final intentCopy = File('${paths.temporary.path}/opened_pdfs/Starred.pdf')
+      ..createSync(recursive: true)
+      ..writeAsStringSync('%PDF-1.7 temporary intent copy');
+    await tester.runAsync(() async {
+      await RecentFilesService.markOpened(intentCopy.path);
+      await RecentFilesService.toggleStar(intentCopy.path);
+      await RecentFilesService.clearRecents();
+    });
+
+    await settle(tester);
+    expect(find.text('Starred'), findsOneWidget); // Filter only.
+
+    await tester.tap(find.text('Starred'));
+    await tester.pump();
+    expect(find.text('Starred'), findsNWidgets(2));
+    expect(
+      find.text('Star a document to keep it close at hand.'),
+      findsNothing,
+    );
+    await flush(tester);
+  });
+
   testWidgets('Starred lists only starred files', (tester) async {
     seed('Invoice.pdf');
     seed('Contract.pdf');
     await tester.runAsync(() async {
-      await RecentFilesService.toggleStar('${paths.documents.path}/Invoice.pdf');
+      await RecentFilesService.toggleStar(
+        '${paths.documents.path}/Invoice.pdf',
+      );
     });
 
     await settle(tester);
@@ -393,10 +447,7 @@ void main() {
     await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
     await flush(tester);
 
-    expect(
-      File('${paths.documents.path}/Invoice.pdf').existsSync(),
-      isFalse,
-    );
+    expect(File('${paths.documents.path}/Invoice.pdf').existsSync(), isFalse);
     expect(find.text('Invoice'), findsNothing);
     expect(find.text('Contract'), findsOneWidget);
   });
@@ -505,10 +556,7 @@ void main() {
       isFalse,
       reason: 'the new name must stay inside the original directory',
     );
-    expect(
-      File('${paths.documents.path}/escaped.pdf').existsSync(),
-      isTrue,
-    );
+    expect(File('${paths.documents.path}/escaped.pdf').existsSync(), isTrue);
   });
 }
 

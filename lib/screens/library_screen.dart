@@ -39,6 +39,7 @@ class LibraryScreen extends StatefulWidget {
     this.onSendTo,
     this.onOpenInTools,
     this.refreshToken = 0,
+    this.isActive = true,
   });
 
   /// Open merge or split on a document. Null when this screen is pushed as a
@@ -54,6 +55,9 @@ class LibraryScreen extends StatefulWidget {
   /// so without this a PDF just produced in Merge or Scan would not appear
   /// here until the user thought to pull to refresh.
   final int refreshToken;
+
+  /// A kept-alive tab must not ask for storage access over another tab.
+  final bool isActive;
 
   @override
   State<LibraryScreen> createState() => _LibraryScreenState();
@@ -74,11 +78,13 @@ class _LibraryScreenState extends State<LibraryScreen>
   static const String _accessPromptKey = 'library.accessPromptShown';
 
   List<PdfFileEntry> _entries = const [];
+  List<PdfFileEntry> _referenceEntries = const [];
   List<String> _recentOrder = const [];
   Set<String> _starred = {};
 
   LibraryFilter _filter = LibraryFilter.all;
   LibrarySort _sort = LibrarySort.newest;
+
   /// List is the default: a filename, folder, size and date say more about a
   /// document than a thumbnail of its first page, and most first pages of
   /// text documents look alike. A saved preference still wins — see
@@ -155,7 +161,7 @@ class _LibraryScreenState extends State<LibraryScreen>
   /// people met Android's warning-toned settings screen with no context, or
   /// never found the button at all.
   Future<void> _offerAccessOnce() async {
-    if (!mounted || !Platform.isAndroid) return;
+    if (!mounted || !widget.isActive || !Platform.isAndroid) return;
     if (_accessPromptShown || _access == StorageAccess.full) return;
     // Do not talk over a sweep that might still turn the banner off.
     if (_isScanning) return;
@@ -226,19 +232,20 @@ class _LibraryScreenState extends State<LibraryScreen>
         }
       }
       final found = await PdfLibraryService.scan();
-      // Recents can point at files outside every scanned root — a document
-      // opened straight from another app, for instance. Describe those so the
-      // Recent filter never has holes in it.
+      // Intent/picker copies belong to Recent or Starred, not the device
+      // library. Keep them separate so viewing a file never imports its
+      // temporary copy into All PDFs or Created.
       final known = found.map((e) => e.path).toSet();
       final extras = <PdfFileEntry>[];
-      for (final path in _recentOrder) {
-        if (known.contains(path)) continue;
+      for (final path in {..._recentOrder, ..._starred}) {
+        if (!known.add(path)) continue;
         final entry = await PdfLibraryService.describe(path);
         if (entry != null) extras.add(entry);
       }
       if (!mounted) return;
       setState(() {
-        _entries = [...found, ...extras];
+        _entries = found;
+        _referenceEntries = extras;
         _access = access;
       });
     } catch (e) {
@@ -263,6 +270,8 @@ class _LibraryScreenState extends State<LibraryScreen>
         if (_refreshPending) {
           _refreshPending = false;
           unawaited(_refresh(prune: true));
+        } else {
+          unawaited(_offerAccessOnce());
         }
       }
     }
@@ -270,13 +279,18 @@ class _LibraryScreenState extends State<LibraryScreen>
 
   // ------------------------------------------------------------- filtering
 
-  List<PdfFileEntry> get _visible => LibraryQuery(
-    filter: _filter,
-    sort: _sort,
-    search: _query,
-    recents: _recentOrder,
-    starred: _starred,
-  ).apply(_entries);
+  List<PdfFileEntry> get _visible =>
+      LibraryQuery(
+        filter: _filter,
+        sort: _sort,
+        search: _query,
+        recents: _recentOrder,
+        starred: _starred,
+      ).apply(
+        _filter == LibraryFilter.recent || _filter == LibraryFilter.starred
+            ? [..._entries, ..._referenceEntries]
+            : _entries,
+      );
 
   // --------------------------------------------------------------- actions
 
@@ -287,10 +301,10 @@ class _LibraryScreenState extends State<LibraryScreen>
     await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) =>
-            PdfViewerScreen(pdfPath: entry.path, title: entry.name),
+        builder: (_) => PdfViewerScreen(pdfPath: entry.path, title: entry.name),
       ),
     );
+    if (mounted) await _refresh(prune: true);
   }
 
   Future<void> _requestAccess() async {
@@ -341,7 +355,9 @@ class _LibraryScreenState extends State<LibraryScreen>
 
       final imported = <String>[];
       for (final path in picked) {
-        imported.add(await _shouldCopy(path) ? await _copyIntoLibrary(path) : path);
+        imported.add(
+          await _shouldCopy(path) ? await _copyIntoLibrary(path) : path,
+        );
       }
       for (final path in imported) {
         await RecentFilesService.markOpened(path);
@@ -367,13 +383,7 @@ class _LibraryScreenState extends State<LibraryScreen>
   /// on Android is referenced where it already lives instead of duplicated.
   Future<bool> _shouldCopy(String path) async {
     if (Platform.isIOS) return true;
-    try {
-      final temp = await getTemporaryDirectory();
-      if (path == temp.path || path.startsWith('${temp.path}/')) return true;
-    } catch (_) {
-      // Fall through to the path check.
-    }
-    return path.contains('/cache/');
+    return PdfLibraryService.isTemporaryPath(path);
   }
 
   Future<String> _copyIntoLibrary(String path) async {
@@ -500,6 +510,9 @@ class _LibraryScreenState extends State<LibraryScreen>
       if (!mounted) return;
       setState(() {
         _entries = _entries.where((e) => e.path != entry.path).toList();
+        _referenceEntries = _referenceEntries
+            .where((e) => e.path != entry.path)
+            .toList();
         _starred.remove(entry.path);
         _recentOrder = _recentOrder.where((p) => p != entry.path).toList();
       });
@@ -518,6 +531,7 @@ class _LibraryScreenState extends State<LibraryScreen>
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: _colors.cardBackground,
+        scrollable: true,
         title: Text(
           entry.title,
           style: TextStyle(color: _colors.textPrimary, fontSize: 17),
@@ -528,7 +542,10 @@ class _LibraryScreenState extends State<LibraryScreen>
           children: [
             _detailRow('Pages', pageCount > 0 ? '$pageCount' : 'Unreadable'),
             _detailRow('Size', formatFileSize(entry.sizeBytes)),
-            _detailRow('Modified', formatLibraryDate(entry.modified, long: true)),
+            _detailRow(
+              'Modified',
+              formatLibraryDate(entry.modified, long: true),
+            ),
             _detailRow('Location', entry.path),
           ],
         ),
@@ -635,7 +652,9 @@ class _LibraryScreenState extends State<LibraryScreen>
                 () => _toggleStar(entry),
               ),
               _action(ctx, Icons.share_rounded, 'Share', () {
-                SharePlus.instance.share(ShareParams(files: [XFile(entry.path)]));
+                SharePlus.instance.share(
+                  ShareParams(files: [XFile(entry.path)]),
+                );
               }),
               Divider(color: _colors.divider, height: 20),
               if (Features.ai)
@@ -647,14 +666,19 @@ class _LibraryScreenState extends State<LibraryScreen>
                     ),
                   );
                 }),
-              _action(ctx, Icons.dashboard_customize_rounded, 'Organize pages', () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => OrganizePagesScreen(pdfPath: entry.path),
-                  ),
-                );
-              }),
+              _action(
+                ctx,
+                Icons.dashboard_customize_rounded,
+                'Organize pages',
+                () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => OrganizePagesScreen(pdfPath: entry.path),
+                    ),
+                  );
+                },
+              ),
               _action(ctx, Icons.text_snippet_rounded, 'Extract text', () {
                 Navigator.push(
                   context,
@@ -693,9 +717,14 @@ class _LibraryScreenState extends State<LibraryScreen>
                   widget.onOpenInTools!(entry.path);
                 }),
               Divider(color: _colors.divider, height: 20),
-              _action(ctx, Icons.drive_file_rename_outline_rounded, 'Rename', () {
-                _rename(entry);
-              }),
+              _action(
+                ctx,
+                Icons.drive_file_rename_outline_rounded,
+                'Rename',
+                () {
+                  _rename(entry);
+                },
+              ),
               _action(ctx, Icons.article_outlined, 'File info', () {
                 _showDetails(entry);
               }),
@@ -724,7 +753,11 @@ class _LibraryScreenState extends State<LibraryScreen>
     final color = danger ? Colors.red.shade400 : _colors.textPrimary;
     return ListTile(
       dense: true,
-      leading: Icon(icon, color: danger ? Colors.red.shade400 : _accent, size: 21),
+      leading: Icon(
+        icon,
+        color: danger ? Colors.red.shade400 : _accent,
+        size: 21,
+      ),
       title: Text(label, style: TextStyle(color: color, fontSize: 14.5)),
       onTap: () {
         Navigator.pop(sheetContext);
@@ -891,9 +924,11 @@ class _LibraryScreenState extends State<LibraryScreen>
             child: CircularProgressIndicator(strokeWidth: 2, color: _accent),
           ),
           const SizedBox(width: 10),
-          Text(
-            'Looking for PDFs on this device…',
-            style: TextStyle(color: _colors.textTertiary, fontSize: 12),
+          Expanded(
+            child: Text(
+              'Looking for PDFs on this device…',
+              style: TextStyle(color: _colors.textTertiary, fontSize: 12),
+            ),
           ),
         ],
       ),
@@ -944,8 +979,8 @@ class _LibraryScreenState extends State<LibraryScreen>
                   ),
                 ),
                 const SizedBox(height: 8),
-                SizedBox(
-                  height: 32,
+                ConstrainedBox(
+                  constraints: const BoxConstraints(minHeight: 32),
                   child: FilledButton(
                     onPressed: _isRequestingAccess
                         ? null
@@ -981,9 +1016,10 @@ class _LibraryScreenState extends State<LibraryScreen>
         LibraryFilter.starred => 'Star a document to keep it close at hand.',
         LibraryFilter.created =>
           'PDFs you make with PDF Helper are collected here.',
-        LibraryFilter.all => _hasScanned
-            ? 'No PDFs found on this device yet.'
-            : 'Looking for PDFs…',
+        LibraryFilter.all =>
+          _hasScanned
+              ? 'No PDFs found on this device yet.'
+              : 'Looking for PDFs…',
       };
     }
     // Explicitly always-scrollable: this content is shorter than the viewport,
@@ -994,11 +1030,7 @@ class _LibraryScreenState extends State<LibraryScreen>
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.only(top: 90),
       children: [
-        Icon(
-          Icons.folder_open_rounded,
-          size: 54,
-          color: _colors.textTertiary,
-        ),
+        Icon(Icons.folder_open_rounded, size: 54, color: _colors.textTertiary),
         const SizedBox(height: 14),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 40),
@@ -1149,8 +1181,10 @@ class _CoverState extends State<_Cover> {
     // queues one render per tile the list passes over, and the renderer spends
     // the next several seconds drawing covers for rows nobody is looking at.
     await Future<void>.delayed(const Duration(milliseconds: 80));
-    if (!mounted || widget.entry.path != path ||
-        widget.entry.modifiedMs != modified || _requested != longEdge) {
+    if (!mounted ||
+        widget.entry.path != path ||
+        widget.entry.modifiedMs != modified ||
+        _requested != longEdge) {
       return;
     }
 
@@ -1159,8 +1193,10 @@ class _CoverState extends State<_Cover> {
       modifiedMs: modified,
       longEdge: longEdge,
     );
-    if (!mounted || widget.entry.path != path ||
-        widget.entry.modifiedMs != modified || _requested != longEdge) {
+    if (!mounted ||
+        widget.entry.path != path ||
+        widget.entry.modifiedMs != modified ||
+        _requested != longEdge) {
       return;
     }
     setState(() {
@@ -1199,12 +1235,12 @@ class _CoverState extends State<_Cover> {
 
   Widget _placeholder({required bool failed}) {
     return ColoredBox(
-      color: widget.colors.isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.04),
+      color: widget.colors.isDark
+          ? Colors.white10
+          : Colors.black.withValues(alpha: 0.04),
       child: Center(
         child: Icon(
-          failed
-              ? Icons.picture_as_pdf_rounded
-              : Icons.hourglass_empty_rounded,
+          failed ? Icons.picture_as_pdf_rounded : Icons.hourglass_empty_rounded,
           color: widget.colors.textTertiary,
           size: 22,
         ),

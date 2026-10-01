@@ -1,12 +1,10 @@
 import 'package:flutter/material.dart';
-import '../services/ads_service.dart';
-import '../services/intent_service.dart';
-import '../utils/format_utils.dart';
 import 'home_screen.dart';
-import 'pdf_viewer_screen.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
+
+  static const routeName = '/splash';
 
   @override
   State<SplashScreen> createState() => _SplashScreenState();
@@ -46,62 +44,26 @@ class _SplashScreenState extends State<SplashScreen>
   }
 
   Future<void> _initializeApp() async {
-    // Ads initialize in parallel with the splash animation so they never add
-    // to perceived startup time. Firebase is already up (see main()).
-    final initFuture = AdsService.instance.initialize();
-
     // Wait for animation to start
     await Future.delayed(const Duration(milliseconds: 800));
 
-    if (mounted) {
-      setState(() => _statusText = 'Ready to go!');
-    }
-
-    // Make sure init completes before navigating, but cap the wait so we
-    // never block the user on a slow network. The services are no-ops if
-    // they haven't finished by the time they're called later.
-    await initFuture.timeout(const Duration(seconds: 3), onTimeout: () {});
+    if (!mounted) return;
+    setState(() => _statusText = 'Ready to go!');
 
     // Small delay before navigation
     await Future.delayed(const Duration(milliseconds: 500));
 
-    _navigateToHome();
-  }
-
-  void _navigateToHome() async {
-    if (!mounted) return;
-    String? pdfPath;
-    try {
-      pdfPath = await IntentService.getOpenedPdfPath();
-    } catch (_) {
-      // A failed external intent must still leave the library usable.
-    }
-    if (!mounted) return;
-
-    if (pdfPath == null) {
-      _goToHome();
-      return;
-    }
-
-    // Keep the library under an external document so Back always returns
-    // to a useful screen, including a cold start from a file manager.
-    final navigator = Navigator.of(context);
     _goToHome();
-    navigator.push(
-      MaterialPageRoute(
-        builder: (_) => PdfViewerScreen(
-          pdfPath: pdfPath!,
-          title: getPdfDisplayTitle(pdfPath),
-        ),
-      ),
-    );
   }
 
   void _goToHome() {
-    if (!mounted) return;
+    // A new external intent can replace the splash while its timer is running.
+    // Never let that timer replace the document the user just opened.
+    if (!mounted || ModalRoute.of(context)?.isCurrent != true) return;
     Navigator.pushReplacement(
       context,
       PageRouteBuilder(
+        settings: const RouteSettings(name: '/'),
         pageBuilder: (context, animation, secondaryAnimation) =>
             const HomeScreen(),
         transitionsBuilder: (context, animation, secondaryAnimation, child) {

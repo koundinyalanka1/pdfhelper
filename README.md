@@ -62,6 +62,8 @@ ask for one when tapped.
   Open, Share, Star, Rename, Delete, Merge with…, Split, or Open in Tools
 - Results are cached to disk, so reopening the tab is instant while a fresh
   sweep runs behind it
+- Temporary copies opened from other apps appear in Recent or Starred;
+  All PDFs lists unique files discovered in accessible device storage
 
 **Assemble**
 - **Merge** — combine PDFs, with batches for producing several outputs in one run
@@ -96,9 +98,16 @@ ask for one when tapped.
 
 **Also**
 - Continuous-scroll viewer with pinch-zoom that re-renders sharper as you zoom
+- In the viewer, tap **Select text**, long-press a word, adjust the handles,
+  then **Copy** (or **Select all** for that page). Selection follows the PDF's
+  text layer; image-only scans need OCR first.
 - Android "Open with" integration: **one** entry, because opening a PDF from
   another app means one thing — read it. Every tool is then a tap away in the
   viewer's own menu, chosen once the document is actually on screen
+- External PDF launches go directly to the viewer, skipping the app splash
+- One compact banner on the main app screen; PDF viewing is ad-free. An
+  available interstitial appears after every fourth successful document
+  operation in a session
 - Auto-save, output quality, dark/light theme, completion notifications
 - Just-in-time permission requests with rationale dialogs
 
@@ -295,11 +304,19 @@ signing configuration were excluded from this audit.
       Android/macOS native libraries were rebuilt. A release app bundle built,
       and native artifact checks verified all three PDF ABIs and all 14 packaged
       ELF64 libraries for 16 KB LOAD alignment and RELRO/writable-data overlap.
-- [ ] Verify the public privacy policy URL loads and accurately describes local
-      document handling, AdMob and Crashlytics. Its availability was not verified
-      during this audit.
-- [ ] Configure and publish the required privacy messages in AdMob, then test
+- [ ] Update the privacy policy. The URL loads, but the policy describes
+      Firebase Analytics, which the app does not use, and omits Crashlytics,
+      the AdMob consent choice and how to change it (Settings → Ad privacy
+      choices), and GDPR rights.
+- [x] Configure and publish the required privacy messages in AdMob, then test
       consent acceptance, refusal and changes on a registered test device.
+      Verified on a Motorola edge 70 fusion (Android 16) in EEA preview: the
+      form shows at launch; Consent and Do not consent both record a TCF
+      string and ads resume (limited ads after refusal); Settings → Ad privacy
+      choices reopens the form, hiding ads while it is open.
+      Debug builds preview the EEA message from anywhere with
+      `flutter run --dart-define=UMP_DEBUG_GEOGRAPHY=eea --dart-define=UMP_TEST_DEVICE_IDS=<hashed id>`
+      (`us` for a regulated US state); see `AdsService`.
 - [ ] Complete Play Console **Permissions Declaration** and obtain approval for
       `MANAGE_EXTERNAL_STORAGE`, with a document-management justification for
       full-device discovery. Access remains optional in the app; approval is a

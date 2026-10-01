@@ -2,31 +2,22 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
+
+import 'operation_ad_policy.dart';
+
+export 'operation_ad_policy.dart' show PdfOperation;
 
 /// Centralized AdMob coordinator.
 ///
 /// Uses test units in development and requests ads only when UMP permits it.
 ///
-/// **Interstitial UX policy:**
-/// We deliberately do NOT show an interstitial after every operation, because
-/// users typically perform several operations in a row (merge several batches,
-/// split a few files, scan multiple docs) and back-to-back fullscreen ads are
-/// the #1 reason users uninstall PDF tools.
-///
-/// Rules enforced by [maybeShowInterstitial]:
-/// 1. The very first completion of every app session is ad-free (let the user
-///    succeed and see the result).
-/// 2. After that, an ad is shown only every Nth completion ([_completionsBetweenAds]).
-/// 3. A hard minimum gap ([_minGapBetweenAds]) between any two interstitials,
-///    regardless of completion count.
+/// A ready interstitial may appear after every fourth successful document
+/// operation. Viewing never counts, and navigation waits for ad dismissal.
 class AdsService {
   AdsService._();
   static final AdsService instance = AdsService._();
-
-  // ---------- Throttling tunables ----------
-  static const int _completionsBetweenAds = 3;
-  static const Duration _minGapBetweenAds = Duration(seconds: 90);
 
   // ---------- State ----------
   bool _initialized = false;
@@ -39,8 +30,12 @@ class AdsService {
   InterstitialAd? _interstitial;
   bool _isLoadingInterstitial = false;
 
-  int _completionCount = 0;
-  DateTime? _lastInterstitialShownAt;
+  late final _operationPolicy = OperationAdPolicy(
+    showInterstitial: _showLoadedInterstitial,
+  );
+
+  @visibleForTesting
+  int get completedOperationCount => _operationPolicy.completedOperations;
 
   // ---------- Test ad-unit IDs (Google's official, safe to ship in dev) ----------
   static String get bannerAdUnitId {
@@ -63,6 +58,37 @@ class AdsService {
     return '';
   }
 
+  // ---------- Consent preview (debug and profile builds only) ----------
+  //
+  // UMP only asks for consent where a regulation applies, so outside the EEA
+  // the GDPR message never appears on its own. To preview it:
+  //
+  //   flutter run --dart-define=UMP_DEBUG_GEOGRAPHY=eea \
+  //     --dart-define=UMP_TEST_DEVICE_IDS=<hashed id>[,<hashed id>]
+  //
+  // `us` previews a regulated US state instead. The UMP SDK logs the device's
+  // hashed ID (logcat / Xcode console) on the first request. Stored consent
+  // is reset on each such launch so the form shows every time.
+  static const _debugGeography = String.fromEnvironment('UMP_DEBUG_GEOGRAPHY');
+  static const _testDeviceIds = String.fromEnvironment('UMP_TEST_DEVICE_IDS');
+
+  static ConsentDebugSettings? get _consentDebugSettings {
+    if (kReleaseMode) return null;
+    final geography = switch (_debugGeography) {
+      'eea' => DebugGeography.debugGeographyEea,
+      'us' => DebugGeography.debugGeographyRegulatedUsState,
+      _ => null,
+    };
+    if (geography == null) return null;
+    return ConsentDebugSettings(
+      debugGeography: geography,
+      testIdentifiers: [
+        for (final id in _testDeviceIds.split(','))
+          if (id.trim().isNotEmpty) id.trim(),
+      ],
+    );
+  }
+
   /// Initialize the Mobile Ads SDK and start preloading an interstitial.
   /// Safe to call multiple times.
   Future<void> initialize() => _initializing ??= _gatherConsent();
@@ -70,9 +96,14 @@ class AdsService {
   Future<void> _gatherConsent() async {
     if (!Platform.isAndroid && !Platform.isIOS) return;
     try {
+      final debugSettings = _consentDebugSettings;
+      if (debugSettings != null) {
+        debugPrint('[AdsService] consent preview: $_debugGeography');
+        await ConsentInformation.instance.reset();
+      }
       final updated = Completer<bool>();
       ConsentInformation.instance.requestConsentInfoUpdate(
-        ConsentRequestParameters(),
+        ConsentRequestParameters(consentDebugSettings: debugSettings),
         () => updated.complete(true),
         (_) => updated.complete(false),
       );
@@ -132,18 +163,6 @@ class AdsService {
           }
           _isLoadingInterstitial = false;
           _interstitial = ad;
-          ad.fullScreenContentCallback = FullScreenContentCallback(
-            onAdDismissedFullScreenContent: (a) {
-              a.dispose();
-              _interstitial = null;
-              _loadInterstitial();
-            },
-            onAdFailedToShowFullScreenContent: (a, _) {
-              a.dispose();
-              _interstitial = null;
-              _loadInterstitial();
-            },
-          );
         },
         onAdFailedToLoad: (err) {
           if (generation != _adGeneration) return;
@@ -155,54 +174,59 @@ class AdsService {
     );
   }
 
-  /// Call this after a user-visible operation completes (merge / split /
-  /// convert). The service decides whether to actually show the ad based on
-  /// the throttling policy described in the class doc.
-  ///
-  /// [trigger] is purely for logging.
-  Future<void> maybeShowInterstitial({String trigger = 'unknown'}) async {
+  /// Call exactly once when document processing succeeds, before opening its
+  /// preview/result. Awaiting this also waits for any fullscreen ad to close.
+  Future<void> operationCompleted(
+    PdfOperation operation, {
+    bool allowPresentation = true,
+    bool Function()? canPresent,
+  }) async {
+    final foreground = allowPresentation &&
+        (canPresent?.call() ?? true) &&
+        WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+    // Tools can be entered directly from an external document without ever
+    // visiting Home. Initialize here, and finish consent before navigation
+    // can open the operation's result in the ad-free viewer.
+    if (foreground) await initialize();
+    await _operationPolicy.completed(
+      operation,
+      allowPresentation: foreground &&
+          (canPresent?.call() ?? true) &&
+          WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed,
+    );
+  }
+
+  Future<void> _showLoadedInterstitial(PdfOperation operation) async {
     if (!isInitialized) return;
-    _completionCount++;
-
-    // Rule 1: first completion of the session is ad-free.
-    if (_completionCount == 1) {
-      _loadInterstitial(); // make sure one is queued for next time
-      debugPrint(
-        '[AdsService] skipping interstitial: first completion ($trigger)',
-      );
-      return;
-    }
-
-    // Rule 2: only every Nth completion.
-    if (_completionCount % _completionsBetweenAds != 0) {
-      debugPrint(
-        '[AdsService] skipping interstitial: count=$_completionCount ($trigger)',
-      );
-      return;
-    }
-
-    // Rule 3: hard min-gap between ads.
-    final last = _lastInterstitialShownAt;
-    if (last != null && DateTime.now().difference(last) < _minGapBetweenAds) {
-      debugPrint('[AdsService] skipping interstitial: too soon ($trigger)');
-      return;
-    }
-
     final ad = _interstitial;
     if (ad == null) {
-      // Not loaded yet — kick off a load so it's ready next time.
       _loadInterstitial();
-      debugPrint('[AdsService] interstitial not ready ($trigger)');
+      debugPrint('[AdsService] interstitial not ready (${operation.name})');
       return;
     }
+    _interstitial = null;
+    final dismissed = Completer<void>();
+    void finish() {
+      if (dismissed.isCompleted) return;
+      unawaited(ad.dispose());
+      dismissed.complete();
+      _loadInterstitial();
+    }
 
-    _interstitial = null; // consumed
-    _lastInterstitialShownAt = DateTime.now();
-    debugPrint('[AdsService] showing interstitial ($trigger)');
+    ad.fullScreenContentCallback = FullScreenContentCallback(
+      onAdDismissedFullScreenContent: (_) => finish(),
+      onAdFailedToShowFullScreenContent: (_, error) {
+        debugPrint('[AdsService] could not show ad: $error');
+        finish();
+      },
+    );
     try {
+      // show() resolves when the native SDK accepts the request, not when
+      // the ad closes. Only the fullscreen callbacks release navigation.
       await ad.show();
+      await dismissed.future;
     } catch (e) {
-      ad.dispose();
+      finish();
       debugPrint('[AdsService] could not show ad: $e');
     }
   }

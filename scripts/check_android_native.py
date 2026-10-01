@@ -44,9 +44,11 @@ def check(path):
                 # Some SDKs end RELRO within padding before the next LOAD.
                 # Rounding into unused padding is safe; rounding over mutable
                 # data would make that data read-only and crash on a 16 KB OS.
+                rounded_start = start // 16384 * 16384
                 rounded_end = (end + 16383) // 16384 * 16384
                 for load_start, load_end in writable:
-                    if max(end, load_start) < min(rounded_end, load_end):
+                    if (max(rounded_start, load_start) < min(start, load_end) or
+                            max(end, load_start) < min(rounded_end, load_end)):
                         failures.append(f'{name}: rounded RELRO overlaps writable data')
             if not loads:
                 failures.append(f'{name}: no LOAD segments')

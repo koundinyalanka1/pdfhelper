@@ -16,7 +16,9 @@ import 'pdf_preview_screen.dart';
 import 'scan_edit_screen.dart';
 
 class ConvertScreen extends StatefulWidget {
-  const ConvertScreen({super.key});
+  const ConvertScreen({super.key, this.isActive = true});
+
+  final bool isActive;
 
   @override
   State<ConvertScreen> createState() => _ConvertScreenState();
@@ -394,6 +396,12 @@ class _ConvertScreenState extends State<ConvertScreen>
 
       if (outputPath != null) {
         if (!mounted) return;
+        await AdsService.instance.operationCompleted(
+          PdfOperation.create,
+          canPresent: () => mounted && widget.isActive &&
+              (ModalRoute.of(context)?.isCurrent ?? false),
+        );
+        if (!mounted) return;
         if (themeProvider.skipPreview && themeProvider.autoSave) {
           // Fast path: save immediately, skip the preview screen.
           await autoSavePdfs(
@@ -408,7 +416,6 @@ class _ConvertScreenState extends State<ConvertScreen>
             'Saved $fileName.pdf (${_capturedImages.length} page(s))',
           );
           setState(() => _capturedImages.clear());
-          AdsService.instance.maybeShowInterstitial(trigger: 'convert');
         } else {
           await Navigator.push(
             context,
@@ -419,7 +426,7 @@ class _ConvertScreenState extends State<ConvertScreen>
                 pageCount: _capturedImages.length,
                 fileName: fileName,
                 onSaved: () {
-                  setState(() => _capturedImages.clear());
+                  if (mounted) setState(() => _capturedImages.clear());
                 },
               ),
             ),

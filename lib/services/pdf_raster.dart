@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:flutter_pdf_core/flutter_pdf_core.dart';
@@ -21,8 +22,10 @@ import '../utils/error_logger.dart';
 class PdfRaster {
   PdfRaster._();
 
-  /// Roughly 24 MB of decoded PNGs at typical page sizes.
+  /// Bound both count and encoded bytes: photo-heavy pages can be several
+  /// megabytes each even when there are only a few entries.
   static const int _maxCacheEntries = 40;
+  static const int _maxCacheBytes = 24 * 1024 * 1024;
   static final LinkedHashMap<
     ({String path, int page, int size, String password}),
     Uint8List
@@ -47,6 +50,7 @@ class PdfRaster {
   /// Covers are larger now that they are rendered at device resolution, so
   /// fewer are held.
   static const int _maxLibraryCacheEntries = 70;
+  static const int _maxLibraryCacheBytes = 16 * 1024 * 1024;
   static final LinkedHashMap<
     ({String path, int modifiedMs, int size, String password}),
     Uint8List?
@@ -189,9 +193,16 @@ class PdfRaster {
       password: password,
       useCache: false,
     );
+    _libraryCache.remove(key);
     _libraryCache[key] = bytes;
-    while (_libraryCache.length > _maxLibraryCacheEntries) {
-      _libraryCache.remove(_libraryCache.keys.first);
+    var cachedBytes = _libraryCache.values.fold(
+      0,
+      (total, value) => total + (value?.length ?? 0),
+    );
+    while (_libraryCache.length > _maxLibraryCacheEntries ||
+        cachedBytes > _maxLibraryCacheBytes) {
+      cachedBytes -=
+          _libraryCache.remove(_libraryCache.keys.first)?.length ?? 0;
     }
     return bytes;
   }
@@ -311,6 +322,23 @@ class PdfRaster {
     }
   }
 
+  /// Width/height of pages [start] up to [end] (exclusive), null for any page
+  /// whose size cannot be read.
+  ///
+  /// One isolate for the whole batch: reading a page size takes milliseconds,
+  /// far less than spawning an isolate per page would.
+  static Future<List<double?>> aspectRatios(
+    String path,
+    int start,
+    int end, {
+    String password = '',
+  }) => Isolate.run(
+    () => [
+      for (int page = start; page < end; page++)
+        _aspectRatioOrNull(path, page, password),
+    ],
+  );
+
   /// Drop cached bitmaps for one document (after it has been rewritten) or,
   /// with no argument, everything.
   static void invalidate([String? path]) {
@@ -329,11 +357,16 @@ class PdfRaster {
     ({String path, int page, int size, String password}) key,
     Uint8List bytes,
   ) {
+    _cache.remove(key);
     _cache[key] = bytes;
-    while (_cache.length > _maxCacheEntries) {
+    var cachedBytes = _cache.values.fold(
+      0,
+      (total, value) => total + value.length,
+    );
+    while (_cache.length > _maxCacheEntries || cachedBytes > _maxCacheBytes) {
       final oldest = _cache.keys.first;
       _warnings.remove(oldest);
-      _cache.remove(oldest);
+      cachedBytes -= _cache.remove(oldest)!.length;
     }
   }
 
@@ -358,5 +391,13 @@ class PdfRaster {
       return;
     }
     if (_activeRenders > 0) _activeRenders--;
+  }
+}
+
+double? _aspectRatioOrNull(String path, int page, String password) {
+  try {
+    return PdfCore.pageSize(path, page, password: password).aspectRatio;
+  } catch (_) {
+    return null;
   }
 }

@@ -31,6 +31,8 @@ class IntentService {
       return null;
     } on PlatformException {
       return null;
+    } on MissingPluginException {
+      return null;
     }
   }
 }

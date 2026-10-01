@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../providers/theme_provider.dart';
 import '../services/pdf_core_service.dart';
+import '../services/ads_service.dart';
 import '../widgets/pdf_result_dialog.dart';
 
 /// Add or remove a PDF password.
@@ -80,7 +81,7 @@ class _ProtectScreenState extends State<ProtectScreen> {
         password: widget.password,
       ),
       'Password added. Keep it somewhere safe — it cannot be recovered.',
-      'protect',
+      PdfOperation.protect,
     );
   }
 
@@ -92,18 +93,19 @@ class _ProtectScreenState extends State<ProtectScreen> {
     await _run(
       () => PdfCoreService.unlock(widget.pdfPath, _unlockController.text),
       'Password removed. The new file opens without one.',
-      'unlock',
+      PdfOperation.unlock,
     );
   }
 
   Future<void> _run(
     Future<String> Function() operation,
     String message,
-    String trigger,
+    PdfOperation completedOperation,
   ) async {
     if (!PdfCoreService.isAvailable) {
       setState(() {
-        _error = 'The native PDF core is not built, so encryption is '
+        _error =
+            'The native PDF core is not built, so encryption is '
             'unavailable. Run ./scripts/build_pdf_core.sh.';
       });
       return;
@@ -120,7 +122,7 @@ class _ProtectScreenState extends State<ProtectScreen> {
         context: context,
         filePaths: [output],
         accent: _accent,
-        adTrigger: trigger,
+        operation: completedOperation,
         message: message,
       );
       if (mounted) Navigator.pop(context, output);
@@ -153,7 +155,10 @@ class _ProtectScreenState extends State<ProtectScreen> {
         children: [
           _buildBanner(),
           const SizedBox(height: 20),
-          if (widget.isEncrypted) ..._buildUnlockFields() else ..._buildProtectFields(),
+          if (widget.isEncrypted)
+            ..._buildUnlockFields()
+          else
+            ..._buildProtectFields(),
           if (_error != null) ...[
             const SizedBox(height: 14),
             Text(

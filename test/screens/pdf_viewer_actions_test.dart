@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pdfhelper/config/features.dart';
 import 'package:pdfhelper/providers/theme_provider.dart';
 import 'package:pdfhelper/screens/pdf_viewer_screen.dart';
+import 'package:pdfhelper/widgets/banner_ad_widget.dart';
 import 'package:provider/provider.dart';
 
 import '../support/fake_path_provider.dart';
@@ -98,10 +99,7 @@ void main() {
     }
 
     // Hidden until the on-device AI work ships — see Features.ai.
-    expect(
-      find.text('Ask AI'),
-      Features.ai ? findsOneWidget : findsNothing,
-    );
+    expect(find.text('Ask AI'), Features.ai ? findsOneWidget : findsNothing);
   });
 
   testWidgets('a viewer opened from another app offers a way into the app', (
@@ -123,5 +121,45 @@ void main() {
     await tester.pumpWidget(app());
     await settle(tester);
     expect(find.byTooltip('Share'), findsOneWidget);
+  });
+
+  for (final asRoot in [true, false]) {
+    testWidgets(
+      'viewing ${asRoot ? 'an external' : 'an in-app'} PDF has no banner ads',
+      (tester) async {
+        await tester.pumpWidget(app(asRoot: asRoot));
+        await settle(tester);
+        if (!asRoot) {
+          await tester.tap(find.text('open'));
+          await settle(tester);
+        }
+
+        expect(find.byType(PdfViewerScreen), findsOneWidget);
+        expect(
+          find.descendant(
+            of: find.byType(PdfViewerScreen, skipOffstage: false),
+            matching: find.byType(BannerAdWidget, skipOffstage: false),
+          ),
+          findsNothing,
+        );
+      },
+    );
+  }
+
+  testWidgets('missing-file message fits a short landscape viewport', (
+    tester,
+  ) async {
+    pdf.deleteSync();
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(640, 240);
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(app());
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
+    await settle(tester);
+
+    expect(find.text('File not found'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 }

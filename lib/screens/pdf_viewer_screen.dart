@@ -12,9 +12,11 @@ import '../providers/theme_provider.dart';
 import '../services/pdf_core_service.dart';
 import '../services/pdf_raster.dart';
 import '../services/pdf_service.dart';
+import '../services/pdf_text_selection_service.dart';
 import '../services/recent_files_service.dart';
 import '../utils/error_logger.dart';
 import '../widgets/password_prompt.dart';
+import '../widgets/pdf_text_selection_overlay.dart';
 import 'ai_screen.dart';
 import 'extract_text_screen.dart';
 import 'home_screen.dart';
@@ -48,7 +50,15 @@ class PdfViewerScreen extends StatefulWidget {
 class _PdfViewerScreenState extends State<PdfViewerScreen>
     with SingleTickerProviderStateMixin {
   final ScrollController _scrollController = ScrollController();
-  final Map<int, double> _pageHeights = {};
+  final PdfTextSelectionController _textSelectionController =
+      PdfTextSelectionController();
+  bool _isSelectingText = false;
+
+  /// Every page's width/height as it becomes known — all of them shortly
+  /// after opening (see [_loadPageRatios]), or from the page itself if it
+  /// renders first. Held here rather than in each page so that a page rebuilt
+  /// after scrolling away is laid out at its real height straight away.
+  final Map<int, double> _pageRatios = {};
 
   /// Zoom for the whole document.
   ///
@@ -131,6 +141,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
 
   @override
   void dispose() {
+    _textSelectionController.dispose();
     _zoomAnimation?.dispose();
     _zoomController.removeListener(_onZoomChanged);
     _zoomController.dispose();
@@ -142,7 +153,13 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
 
   void _onPointerDown(PointerDownEvent _) {
     _activePointers++;
+    if (_activePointers > 1) _textSelectionController.clear();
     _syncMultiTouch();
+  }
+
+  void _setTextSelectionMode(bool enabled) {
+    _textSelectionController.clear();
+    setState(() => _isSelectingText = enabled);
   }
 
   void _onPointerFinished(PointerEvent _) {
@@ -191,6 +208,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
   }
 
   void _resetZoom() {
+    _zoomAnimation?.stop();
     _zoomController.value = Matrix4.identity();
   }
 
@@ -232,10 +250,12 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
         setState(() {
           _totalPages = count;
           _aspectRatio = ratio ?? _aspectRatio;
+          if (ratio != null) _pageRatios[0] = ratio;
           _isLoading = false;
           _needsPassword = false;
           if (count == 0) _error = 'This PDF has no pages to display.';
         });
+        unawaited(_loadPageRatios());
         return;
       } on PdfException catch (e) {
         if (!mounted) return;
@@ -277,13 +297,60 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
     }
   }
 
+  /// Learn every page's shape, a batch at a time, so pages are laid out at
+  /// their real height before they are ever built.
+  ///
+  /// Pages used to take page 1's shape until each one rendered. A document
+  /// whose pages differ — a portrait cover ahead of landscape spreads — then
+  /// had every page resize mid-scroll, and each resize above the viewport
+  /// shoved the page being read out of view: scrolling bounced between the
+  /// same two pages.
+  Future<void> _loadPageRatios() async {
+    const batchSize = 16;
+    for (int start = 0; start < _totalPages; start += batchSize) {
+      final end = start + batchSize < _totalPages
+          ? start + batchSize
+          : _totalPages;
+      final List<double?> ratios;
+      try {
+        ratios = await PdfRaster.aspectRatios(
+          widget.pdfPath,
+          start,
+          end,
+          password: _password,
+        );
+      } catch (e) {
+        // Pages still learn their own shape as they render.
+        logError('PdfViewer._loadPageRatios', e);
+        return;
+      }
+      if (!mounted) return;
+      setState(() {
+        for (int i = start; i < end; i++) {
+          final ratio = ratios[i - start];
+          if (ratio != null) _pageRatios[i] = ratio;
+        }
+      });
+    }
+  }
+
+  double get _pageWidth => MediaQuery.of(context).size.width - 24;
+
+  /// Height page [index] occupies in the list, margins included.
+  double _pageExtent(int index) =>
+      pageHeight(
+        _pageWidth,
+        pageAspectRatio(_pageRatios, index, _aspectRatio),
+      ) +
+      12;
+
   /// Track which page is under the middle of the viewport for the counter.
   void _onScroll() {
-    if (!_scrollController.hasClients || _pageHeights.isEmpty) return;
+    if (!_scrollController.hasClients || _totalPages == 0) return;
     final offset = _scrollController.offset + 100;
     double running = 0;
     for (int i = 0; i < _totalPages; i++) {
-      running += _pageHeights[i] ?? _estimatedPageHeight;
+      running += _pageExtent(i);
       if (running > offset) {
         if (_currentPage != i + 1) setState(() => _currentPage = i + 1);
         return;
@@ -291,14 +358,13 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
     }
   }
 
-  double get _estimatedPageHeight {
-    final width = MediaQuery.of(context).size.width - 24;
-    return width / _aspectRatio + 12;
-  }
-
   /// Pop back if there is somewhere to return to, otherwise land on Home —
   /// which happens when a PDF intent opened the viewer as the root route.
   void _onBack() {
+    if (_isSelectingText) {
+      _setTextSelectionMode(false);
+      return;
+    }
     if (Navigator.of(context).canPop()) {
       Navigator.pop(context);
     } else {
@@ -310,42 +376,23 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
   }
 
   Future<void> _jumpToPage() async {
-    final controller = TextEditingController(text: '$_currentPage');
     final target = await showDialog<int>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: _colors.cardBackground,
-        title: Text('Go to page', style: TextStyle(color: _colors.textPrimary)),
-        content: TextField(
-          controller: controller,
-          keyboardType: TextInputType.number,
-          autofocus: true,
-          style: TextStyle(color: _colors.textPrimary),
-          decoration: InputDecoration(hintText: '1 – $_totalPages'),
-          onSubmitted: (v) => Navigator.pop(ctx, int.tryParse(v)),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text(
-              'Cancel',
-              style: TextStyle(color: _colors.textSecondary),
-            ),
-          ),
-          FilledButton(
-            onPressed: () =>
-                Navigator.pop(ctx, int.tryParse(controller.text)),
-            child: const Text('Go'),
-          ),
-        ],
+      builder: (_) => _PageNumberDialog(
+        currentPage: _currentPage,
+        totalPages: _totalPages,
+        colors: _colors,
       ),
     );
-    if (target == null || target < 1 || target > _totalPages) return;
+    if (!mounted || target == null || !_scrollController.hasClients) return;
+    _textSelectionController.clear();
+    _resetZoom();
+    double offset = 0;
+    for (int i = 0; i < target - 1; i++) {
+      offset += _pageExtent(i);
+    }
     _scrollController.jumpTo(
-      ((target - 1) * _estimatedPageHeight).clamp(
-        0.0,
-        _scrollController.position.maxScrollExtent,
-      ),
+      offset.clamp(0.0, _scrollController.position.maxScrollExtent),
     );
   }
 
@@ -398,6 +445,16 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
                 ),
               ),
               Divider(color: colors.divider, height: 20),
+              if (_totalPages > 0)
+                _action(
+                  ctx,
+                  colors,
+                  Icons.text_fields_rounded,
+                  'Select text',
+                  () {
+                    _setTextSelectionMode(true);
+                  },
+                ),
               _action(ctx, colors, Icons.merge_rounded, 'Merge with…', () {
                 _push(MergePdfScreen(initialPdfPath: widget.pdfPath));
               }),
@@ -458,10 +515,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
                 Icons.info_outline_rounded,
                 'Document details',
                 () => _push(
-                  MetadataScreen(
-                    pdfPath: widget.pdfPath,
-                    password: _password,
-                  ),
+                  MetadataScreen(pdfPath: widget.pdfPath, password: _password),
                 ),
               ),
               Divider(color: colors.divider, height: 20),
@@ -524,60 +578,109 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
   @override
   Widget build(BuildContext context) {
     _colors = AppColors.of(context);
-    return Scaffold(
-      backgroundColor: _colors.isDark
-          ? const Color(0xFF12121C)
-          : Colors.grey.shade300,
-      appBar: AppBar(
-        title: Text(
-          _fileName,
-          style: TextStyle(color: _colors.textPrimary, fontSize: 16),
-          overflow: TextOverflow.ellipsis,
-        ),
-        backgroundColor: _colors.cardBackground,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: _onBack,
-          color: _colors.textPrimary,
-        ),
-        actions: [
-          if (_isZoomed)
+    return PopScope(
+      canPop: !_isSelectingText,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _isSelectingText) _setTextSelectionMode(false);
+      },
+      child: Scaffold(
+        backgroundColor: _colors.isDark
+            ? const Color(0xFF12121C)
+            : Colors.grey.shade300,
+        appBar: AppBar(
+          title: Text(
+            _fileName,
+            style: TextStyle(color: _colors.textPrimary, fontSize: 16),
+            overflow: TextOverflow.ellipsis,
+          ),
+          backgroundColor: _colors.cardBackground,
+          elevation: 0,
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: _onBack,
+            color: _colors.textPrimary,
+          ),
+          actions: [
+            if (_totalPages > 0)
+              IconButton(
+                icon: Icon(
+                  _isSelectingText ? Icons.close : Icons.text_fields_rounded,
+                ),
+                tooltip: _isSelectingText
+                    ? 'Finish selecting text'
+                    : 'Select text',
+                onPressed: () => _setTextSelectionMode(!_isSelectingText),
+                color: _isSelectingText
+                    ? const Color(0xFFE94560)
+                    : _colors.textPrimary,
+              ),
+            if (_isZoomed)
+              IconButton(
+                icon: const Icon(Icons.zoom_out_map_rounded),
+                tooltip: 'Fit to width',
+                onPressed: _resetZoom,
+                color: _colors.textPrimary,
+              ),
+            if (_totalPages > 0)
+              TextButton(
+                onPressed: _jumpToPage,
+                child: Text(
+                  '$_currentPage / $_totalPages',
+                  style: TextStyle(color: _colors.textSecondary, fontSize: 14),
+                ),
+              ),
             IconButton(
-              icon: const Icon(Icons.zoom_out_map_rounded),
-              tooltip: 'Fit to width',
-              onPressed: _resetZoom,
+              icon: const Icon(Icons.share),
+              tooltip: 'Share',
+              onPressed: () => SharePlus.instance.share(
+                ShareParams(files: [XFile(widget.pdfPath)], text: 'PDF'),
+              ),
               color: _colors.textPrimary,
             ),
-          if (_totalPages > 0)
-            TextButton(
-              onPressed: _jumpToPage,
-              child: Text(
-                '$_currentPage / $_totalPages',
-                style: TextStyle(color: _colors.textSecondary, fontSize: 14),
-              ),
+            IconButton(
+              icon: const Icon(Icons.more_vert),
+              tooltip: 'More actions',
+              onPressed: _showActions,
+              color: _colors.textPrimary,
             ),
-          IconButton(
-            icon: const Icon(Icons.share),
-            tooltip: 'Share',
-            onPressed: () => SharePlus.instance.share(
-              ShareParams(files: [XFile(widget.pdfPath)], text: 'PDF'),
-            ),
-            color: _colors.textPrimary,
+          ],
+        ),
+        body: SafeArea(
+          top: false,
+          left: false,
+          right: false,
+          child: Column(
+            children: [
+              if (_isSelectingText)
+                Material(
+                  color: _colors.cardBackground,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.touch_app_outlined, size: 18),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Long-press a word, then drag the handles to select text.',
+                            style: TextStyle(
+                              color: _colors.textSecondary,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              _approximateBanner(),
+              Expanded(child: _buildBody()),
+            ],
           ),
-          IconButton(
-            icon: const Icon(Icons.more_vert),
-            tooltip: 'More actions',
-            onPressed: _showActions,
-            color: _colors.textPrimary,
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          _approximateBanner(),
-          Expanded(child: _buildBody()),
-        ],
+        ),
       ),
     );
   }
@@ -626,9 +729,10 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
     }
     if (_error != null) {
       return Center(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(32),
           child: Column(
+            mainAxisSize: MainAxisSize.min,
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Icon(Icons.error_outline, size: 64, color: _colors.textTertiary),
@@ -669,10 +773,12 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
         // InteractiveViewer delays and sometimes swallows the zoom while the
         // arena waits to see whether a second tap is coming
         // (flutter/flutter#58636). With one finger down it is free to work.
-        onDoubleTapDown: _isMultiTouch ? null : _onDoubleTap,
+        onDoubleTapDown: _isMultiTouch || _isSelectingText
+            ? null
+            : _onDoubleTap,
         // The handler lives on onDoubleTapDown so the tap position is known;
         // onDoubleTap still has to be present for the recognizer to fire.
-        onDoubleTap: _isMultiTouch ? null : () {},
+        onDoubleTap: _isMultiTouch || _isSelectingText ? null : () {},
         child: InteractiveViewer(
           transformationController: _zoomController,
           minScale: 1.0,
@@ -688,10 +794,11 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
             scrollCacheExtent: const ScrollCacheExtent.viewport(1),
             // Locking the list removes its drag recognizer from the arena
             // outright, which is what leaves the pinch uncontested.
-            physics: shouldLockScroll(
-              isZoomed: _isZoomed,
-              activePointers: _activePointers,
-            )
+            physics:
+                shouldLockScroll(
+                  isZoomed: _isZoomed,
+                  activePointers: _activePointers,
+                )
                 ? const NeverScrollableScrollPhysics()
                 : const AlwaysScrollableScrollPhysics(),
             itemCount: _totalPages,
@@ -700,10 +807,15 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
               path: widget.pdfPath,
               password: _password,
               pageIndex: index,
-              fallbackAspectRatio: _aspectRatio,
+              aspectRatio: pageAspectRatio(_pageRatios, index, _aspectRatio),
+              aspectRatioKnown: _pageRatios.containsKey(index),
               isDark: _colors.isDark,
               zoom: _zoom,
-              onMeasured: (height) => _pageHeights[index] = height,
+              selectText: _isSelectingText,
+              textSelectionController: _textSelectionController,
+              // Recorded without a rebuild: the page resizes itself, and the
+              // counter and Go to page read the map when they need it.
+              onAspectRatio: (ratio) => _pageRatios[index] = ratio,
               onWarnings: _noteWarnings,
             ),
           ),
@@ -720,21 +832,34 @@ class _PageView extends StatefulWidget {
     required this.path,
     required this.password,
     required this.pageIndex,
-    required this.fallbackAspectRatio,
+    required this.aspectRatio,
+    required this.aspectRatioKnown,
     required this.isDark,
     required this.zoom,
-    required this.onMeasured,
+    required this.onAspectRatio,
     required this.onWarnings,
+    required this.selectText,
+    required this.textSelectionController,
   });
 
   final String path;
   final String password;
   final int pageIndex;
-  final double fallbackAspectRatio;
+
+  /// The viewer's best width/height for this page: the real one once known,
+  /// an estimate from the pages before it until then.
+  final double aspectRatio;
+
+  /// Whether [aspectRatio] is the page's real shape rather than an estimate.
+  final bool aspectRatioKnown;
   final bool isDark;
   final ValueListenable<double> zoom;
-  final ValueChanged<double> onMeasured;
+
+  /// Reports the page's real shape when it had to look it up itself.
+  final ValueChanged<double> onAspectRatio;
   final ValueChanged<List<String>> onWarnings;
+  final bool selectText;
+  final PdfTextSelectionController textSelectionController;
 
   @override
   State<_PageView> createState() => _PageViewState();
@@ -745,12 +870,103 @@ class _PageViewState extends State<_PageView> {
   double? _aspectRatio;
   int _renderedLongEdge = 0;
   bool _isRendering = false;
+  bool _renderFailed = false;
+  PdfPageTextLayout? _textLayout;
+  bool _loadingText = false;
+  String? _textError;
 
   @override
   void initState() {
     super.initState();
     widget.zoom.addListener(_onZoom);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _render());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _render();
+      if (widget.selectText) _loadText();
+    });
+  }
+
+  @override
+  void didUpdateWidget(_PageView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.selectText && !oldWidget.selectText) _loadText();
+  }
+
+  Future<void> _loadText() async {
+    if (_loadingText || _textLayout != null) return;
+    setState(() {
+      _loadingText = true;
+      _textError = null;
+    });
+    try {
+      final layout = await PdfTextSelectionService.load(
+        widget.path,
+        widget.pageIndex,
+        password: widget.password,
+      );
+      if (!mounted) return;
+      setState(() => _textLayout = layout);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _textError =
+            error is PdfException && error.code == 'TEXT_SELECTION_UNAVAILABLE'
+            ? 'Text selection is unavailable. Use Extract text from More actions.'
+            : 'Could not load text for this page.';
+      });
+    } finally {
+      if (mounted) setState(() => _loadingText = false);
+    }
+  }
+
+  Widget _withTextSelection(Widget page) {
+    if (!widget.selectText) return page;
+    final layout = _textLayout;
+    if (layout != null && layout.hasText) {
+      return PdfTextSelectionOverlay(
+        layout: layout,
+        enabled: true,
+        controller: widget.textSelectionController,
+        child: page,
+      );
+    }
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        page,
+        Align(
+          alignment: Alignment.topCenter,
+          child: Material(
+            color: const Color(0xFFF0F0F0),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(
+                    child: Text(
+                      _loadingText
+                          ? 'Loading selectable text…'
+                          : _textError ??
+                                'No selectable text on this page. Scanned images need OCR.',
+                      style: const TextStyle(
+                        color: Colors.black87,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                  if (_textError != null)
+                    TextButton(
+                      onPressed: _loadText,
+                      child: const Text('Retry'),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
   }
 
   @override
@@ -781,14 +997,16 @@ class _PageViewState extends State<_PageView> {
     if (_isRendering || !mounted) return;
     final target = longEdge ?? _baseLongEdge;
     _isRendering = true;
+    if (_renderFailed) setState(() => _renderFailed = false);
     try {
-      final ratio =
-          _aspectRatio ??
-          await PdfRaster.aspectRatio(
-            widget.path,
-            pageIndex: widget.pageIndex,
-            password: widget.password,
-          );
+      final ratio = widget.aspectRatioKnown
+          ? null
+          : _aspectRatio ??
+                await PdfRaster.aspectRatio(
+                  widget.path,
+                  pageIndex: widget.pageIndex,
+                  password: widget.password,
+                );
       final useCache = target <= PdfRaster.thumbnailSize * 4;
       final bytes = await PdfRaster.renderPage(
         widget.path,
@@ -810,16 +1028,19 @@ class _PageViewState extends State<_PageView> {
         );
       }
       if (!mounted) return;
+      if (ratio != null && _aspectRatio == null) widget.onAspectRatio(ratio);
       setState(() {
         _bytes = bytes ?? _bytes;
         _aspectRatio = ratio ?? _aspectRatio;
-        _renderedLongEdge = target;
+        _renderFailed = bytes == null && _bytes == null;
+        if (bytes != null) _renderedLongEdge = target;
       });
     } catch (e) {
       // One page failing is not the document failing: keep whatever was
       // already drawn and leave the placeholder for this one. The document
       // itself already opened, so this is a per-page problem.
       logError('PdfViewer._render', e);
+      if (mounted && _bytes == null) setState(() => _renderFailed = true);
     } finally {
       _isRendering = false;
     }
@@ -827,12 +1048,11 @@ class _PageViewState extends State<_PageView> {
 
   @override
   Widget build(BuildContext context) {
-    final ratio = _aspectRatio ?? widget.fallbackAspectRatio;
+    final ratio = widget.aspectRatioKnown
+        ? widget.aspectRatio
+        : _aspectRatio ?? widget.aspectRatio;
     final width = MediaQuery.of(context).size.width - 24;
-    final height = width / (ratio <= 0 ? 0.7071 : ratio);
-    WidgetsBinding.instance.addPostFrameCallback(
-      (_) => widget.onMeasured(height + 12),
-    );
+    final height = pageHeight(width, ratio);
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -850,7 +1070,28 @@ class _PageViewState extends State<_PageView> {
           ],
         ),
         clipBehavior: Clip.hardEdge,
-        child: _bytes == null
+        child: _renderFailed
+            ? Center(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'Could not display page ${widget.pageIndex + 1}',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: Colors.black54),
+                      ),
+                      TextButton.icon(
+                        onPressed: () => _render(),
+                        icon: const Icon(Icons.refresh),
+                        label: const Text('Retry'),
+                      ),
+                    ],
+                  ),
+                ),
+              )
+            : _bytes == null
             ? Center(
                 child: SizedBox(
                   width: 22,
@@ -861,19 +1102,108 @@ class _PageViewState extends State<_PageView> {
                   ),
                 ),
               )
-            : Image.memory(
-                _bytes!,
-                fit: BoxFit.contain,
-                gaplessPlayback: true,
-                // The whole document is magnified by one InteractiveViewer
-                // above the list, so the page itself just draws at its
-                // natural size — and re-rasterizes when the zoom changes.
-                filterQuality: FilterQuality.medium,
+            : _withTextSelection(
+                Image.memory(
+                  _bytes!,
+                  fit: BoxFit.contain,
+                  gaplessPlayback: true,
+                  // The whole document is magnified by one InteractiveViewer
+                  // above the list, so the page itself just draws at its
+                  // natural size — and re-rasterizes when the zoom changes.
+                  filterQuality: FilterQuality.medium,
+                ),
               ),
       ),
     );
   }
 }
+
+class _PageNumberDialog extends StatefulWidget {
+  const _PageNumberDialog({
+    required this.currentPage,
+    required this.totalPages,
+    required this.colors,
+  });
+
+  final int currentPage;
+  final int totalPages;
+  final AppColors colors;
+
+  @override
+  State<_PageNumberDialog> createState() => _PageNumberDialogState();
+}
+
+class _PageNumberDialogState extends State<_PageNumberDialog> {
+  final _formKey = GlobalKey<FormState>();
+  late final _controller = TextEditingController(text: '${widget.currentPage}');
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    if (_formKey.currentState!.validate()) {
+      Navigator.pop(context, int.parse(_controller.text.trim()));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    backgroundColor: widget.colors.cardBackground,
+    title: Text(
+      'Go to page',
+      style: TextStyle(color: widget.colors.textPrimary),
+    ),
+    content: Form(
+      key: _formKey,
+      child: TextFormField(
+        controller: _controller,
+        keyboardType: TextInputType.number,
+        autofocus: true,
+        style: TextStyle(color: widget.colors.textPrimary),
+        decoration: InputDecoration(hintText: '1 – ${widget.totalPages}'),
+        validator: (value) {
+          final page = int.tryParse(value?.trim() ?? '');
+          return page == null || page < 1 || page > widget.totalPages
+              ? 'Enter a page from 1 to ${widget.totalPages}'
+              : null;
+        },
+        onFieldSubmitted: (_) => _submit(),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: Text(
+          'Cancel',
+          style: TextStyle(color: widget.colors.textSecondary),
+        ),
+      ),
+      FilledButton(onPressed: _submit, child: const Text('Go')),
+    ],
+  );
+}
+
+/// Width/height to lay page [index] out at: its own when [known], otherwise
+/// the nearest earlier page's, otherwise [fallback].
+///
+/// Neighbouring pages usually share a size, while page 1 — often a cover — is
+/// the page most likely to differ from the rest, so it makes a poor stand-in
+/// for pages further on.
+double pageAspectRatio(Map<int, double> known, int index, double fallback) {
+  for (int i = index; i >= 0; i--) {
+    final ratio = known[i];
+    if (ratio != null && ratio.isFinite && ratio > 0) return ratio;
+  }
+  return fallback;
+}
+
+/// Height of a page drawn [width] wide. Pages and the viewer's scroll maths
+/// both size pages with this, so the two always agree.
+double pageHeight(double width, double aspectRatio) =>
+    width / (aspectRatio.isFinite && aspectRatio > 0 ? aspectRatio : 0.7071);
 
 /// Transform a double-tap should settle on.
 ///

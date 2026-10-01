@@ -26,7 +26,8 @@ void main() {
     PdfLibraryService.resetForTesting();
   });
 
-  tearDown(() {
+  tearDown(() async {
+    await PdfLibraryService.settleForTesting();
     if (root.existsSync()) root.deleteSync(recursive: true);
     FakePathProvider.restore();
   });
@@ -125,9 +126,9 @@ void main() {
       _pdf('${root.path}/shallow.pdf');
 
       expect(
-        PdfLibraryService.walkForTesting([root.path])
-            .map((e) => e.name)
-            .toSet(),
+        PdfLibraryService.walkForTesting([
+          root.path,
+        ]).map((e) => e.name).toSet(),
         {'shallow.pdf', 'deep.pdf'},
       );
     });
@@ -147,28 +148,35 @@ void main() {
       expect(found.map((e) => e.name), contains('on-card.pdf'));
     });
 
-    test('keeps app-owned PDFs under Android/data while scanning shared media', () {
-      final own = '${root.path}/Android/data/com.yourmateapps.pdfhelper/files';
-      _pdf('$own/mine.pdf');
-      _pdf('${root.path}/Android/data/com.other/private.pdf');
-      _pdf(
-        '${root.path}/Android/media/com.whatsapp/Media/.Documents/invoice.pdf',
-      );
-      _pdf('${root.path}/Documents/Android/data/backup.pdf');
+    test(
+      'keeps app-owned PDFs under Android/data while scanning shared media',
+      () {
+        final own =
+            '${root.path}/Android/data/com.yourmateapps.pdfhelper/files';
+        _pdf('$own/mine.pdf');
+        _pdf('${root.path}/Android/data/com.other/private.pdf');
+        _pdf(
+          '${root.path}/Android/media/com.whatsapp/Media/.Documents/invoice.pdf',
+        );
+        _pdf('${root.path}/Documents/Android/data/backup.pdf');
 
-      final found = PdfLibraryService.walkForTesting(
-        [root.path],
-        appRoots: [own],
-      );
+        final found = PdfLibraryService.walkForTesting(
+          [root.path],
+          appRoots: [own],
+        );
 
-      expect(found.map((e) => e.name).toSet(), {
-        'mine.pdf',
-        'private.pdf',
-        'invoice.pdf',
-        'backup.pdf',
-      });
-      expect(found.singleWhere((e) => e.name == 'mine.pdf').isAppOwned, isTrue);
-    });
+        expect(found.map((e) => e.name).toSet(), {
+          'mine.pdf',
+          'private.pdf',
+          'invoice.pdf',
+          'backup.pdf',
+        });
+        expect(
+          found.singleWhere((e) => e.name == 'mine.pdf').isAppOwned,
+          isTrue,
+        );
+      },
+    );
 
     test('deduplicates primary storage aliases', () {
       final volume = Directory('${root.path}/volume')..createSync();
@@ -179,6 +187,28 @@ void main() {
 
       expect(found, hasLength(1));
       expect(found.single.path, '${alias.path}/Download/one.pdf');
+    });
+
+    test('excludes app cache copies without hiding user cache folders', () {
+      final volume = Directory('${root.path}/volume')..createSync();
+      final cache = '${volume.path}/Android/data/pdfhelper/cache';
+      _pdf('$cache/opened_pdfs/intent_123_Report.pdf');
+      _pdf('${volume.path}/Download/Report.pdf');
+      _pdf('${volume.path}/Documents/cache/Saved.pdf');
+      _pdf('${volume.path}/Android/data/pdfhelper/cache-backup/Backup.pdf');
+      final alias = Link('${root.path}/sdcard')..createSync(volume.path);
+
+      final found = PdfLibraryService.walkForTesting(
+        [alias.path, volume.path],
+        excludedRoots: [cache],
+      );
+
+      expect(found.map((entry) => entry.name).toSet(), {
+        'Report.pdf',
+        'Saved.pdf',
+        'Backup.pdf',
+      });
+      expect(found, hasLength(3));
     });
 
     test('uses the supplied current-user storage root', () {
@@ -383,6 +413,23 @@ void main() {
     test('describe returns null for a missing file', () async {
       FakePathProvider.install(root);
       expect(await PdfLibraryService.describe('${root.path}/nope.pdf'), isNull);
+    });
+
+    test('temporary files are recognized by directory identity', () async {
+      final paths = FakePathProvider.install(root);
+      final temp = _pdf('${paths.temporary.path}/opened_pdfs/report.pdf');
+      final durable = _pdf('${paths.documents.path}/cache/report.pdf');
+      final alias = Link('${root.path}/temp-alias')
+        ..createSync(paths.temporary.path);
+
+      expect(await PdfLibraryService.isTemporaryPath(temp.path), isTrue);
+      expect(
+        await PdfLibraryService.isTemporaryPath(
+          '${alias.path}/opened_pdfs/report.pdf',
+        ),
+        isTrue,
+      );
+      expect(await PdfLibraryService.isTemporaryPath(durable.path), isFalse);
     });
 
     test('access is app-only off Android', () async {

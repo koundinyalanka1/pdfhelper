@@ -243,7 +243,7 @@ class _MergePdfScreenState extends State<MergePdfScreen>
   }
 
   Future<void> _mergePdfs() async {
-    if (_mergeableBatchCount == 0) return;
+    if (_isProcessing || _mergeableBatchCount == 0) return;
 
     if (!_allFilesLoaded) {
       _showSnackBar('Please wait for all files to load', isError: false);
@@ -309,6 +309,12 @@ class _MergePdfScreenState extends State<MergePdfScreen>
       if (outputPaths.isNotEmpty) {
         setState(() => _mergeProgress = 1.0);
         if (!mounted) return;
+        await AdsService.instance.operationCompleted(
+          PdfOperation.merge,
+          canPresent: () => mounted &&
+              (ModalRoute.of(context)?.isCurrent ?? false),
+        );
+        if (!mounted) return;
         if (themeProvider.skipPreview && themeProvider.autoSave) {
           // Fast path: save immediately, skip the preview screen.
           await autoSavePdfs(
@@ -323,7 +329,6 @@ class _MergePdfScreenState extends State<MergePdfScreen>
             'Merged ${outputPaths.length} PDF${outputPaths.length > 1 ? "s" : ""}',
           );
           setState(() => _batches = [[]]);
-          AdsService.instance.maybeShowInterstitial(trigger: 'merge');
         } else {
           await Navigator.push(
             context,
@@ -334,7 +339,7 @@ class _MergePdfScreenState extends State<MergePdfScreen>
                 pageCount: _totalBatchesPages,
                 fileName: fileName,
                 onSaved: () {
-                  setState(() => _batches = [[]]);
+                  if (mounted) setState(() => _batches = [[]]);
                 },
               ),
             ),
@@ -346,10 +351,12 @@ class _MergePdfScreenState extends State<MergePdfScreen>
     } catch (e) {
       _showSnackBar('Error: $e', isError: true);
     } finally {
-      setState(() {
-        _isProcessing = false;
-        _mergeProgress = 0.0;
-      });
+      if (mounted) {
+        setState(() {
+          _isProcessing = false;
+          _mergeProgress = 0.0;
+        });
+      }
     }
   }
 

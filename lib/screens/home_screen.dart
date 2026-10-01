@@ -85,6 +85,7 @@ class _HomeScreenState extends State<HomeScreen> {
       case HomeTabs.files:
         return LibraryScreen(
           refreshToken: _filesVisitToken,
+          isActive: _currentIndex == HomeTabs.files,
           onSendTo: _openHandoff,
           onOpenInTools: _openInTools,
         );
@@ -96,7 +97,7 @@ class _HomeScreenState extends State<HomeScreen> {
           onGoToTab: _goToTab,
         );
       case HomeTabs.scan:
-        return const ConvertScreen();
+        return ConvertScreen(isActive: _currentIndex == HomeTabs.scan);
       case HomeTabs.settings:
         return const SettingsScreen();
       default:
@@ -125,70 +126,63 @@ class _HomeScreenState extends State<HomeScreen> {
           itemCount: HomeTabs.count,
           itemBuilder: _buildScreen,
         ),
-        bottomNavigationBar: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              decoration: BoxDecoration(
-                color: _colors.bottomNavBackground,
-                boxShadow: [
-                  BoxShadow(
-                    color: _colors.shadowColor,
-                    blurRadius: 20,
-                    offset: const Offset(0, -5),
-                  ),
-                ],
-              ),
-              child: SafeArea(
-                bottom: false,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 8,
-                  ),
-                  child: Row(
-                    children: [
-                      _buildNavItem(
-                        HomeTabs.files,
-                        Icons.folder_rounded,
-                        Icons.folder_outlined,
-                        'Files',
-                      ),
-                      _buildNavItem(
-                        HomeTabs.tools,
-                        Icons.handyman_rounded,
-                        Icons.handyman_outlined,
-                        'Tools',
-                      ),
-                      _buildNavItem(
-                        HomeTabs.scan,
-                        Icons.camera_alt_rounded,
-                        Icons.camera_alt_outlined,
-                        'Scan',
-                      ),
-                      _buildNavItem(
-                        HomeTabs.settings,
-                        Icons.settings_rounded,
-                        Icons.settings_outlined,
-                        'Settings',
-                      ),
-                    ],
+        bottomNavigationBar: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                decoration: BoxDecoration(
+                  color: _colors.bottomNavBackground,
+                  boxShadow: [
+                    BoxShadow(
+                      color: _colors.shadowColor,
+                      blurRadius: 20,
+                      offset: const Offset(0, -5),
+                    ),
+                  ],
+                ),
+                child: SafeArea(
+                  bottom: false,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 8,
+                    ),
+                    child: Row(
+                      children: [
+                        _buildNavItem(
+                          HomeTabs.files,
+                          Icons.folder_rounded,
+                          Icons.folder_outlined,
+                          'Files',
+                        ),
+                        _buildNavItem(
+                          HomeTabs.tools,
+                          Icons.handyman_rounded,
+                          Icons.handyman_outlined,
+                          'Tools',
+                        ),
+                        _buildNavItem(
+                          HomeTabs.scan,
+                          Icons.camera_alt_rounded,
+                          Icons.camera_alt_outlined,
+                          'Scan',
+                        ),
+                        _buildNavItem(
+                          HomeTabs.settings,
+                          Icons.settings_rounded,
+                          Icons.settings_outlined,
+                          'Settings',
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
-            ),
-            // Banner ad sits below the nav, inside the device safe area so it
-            // doesn't get clipped by the iOS home indicator / Android gesture
-            // bar.
-            Container(
-              color: _colors.bottomNavBackground,
-              width: double.infinity,
-              child: SafeArea(
-                top: false,
-                child: const Center(child: BannerAdWidget()),
-              ),
-            ),
-          ],
+              const BannerAdWidget(),
+            ],
+          ),
         ),
       ),
     );
@@ -242,9 +236,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   style: TextStyle(
                     color: isSelected ? activeColor : inactiveColor,
                     fontSize: 11.5,
-                    fontWeight: isSelected
-                        ? FontWeight.w600
-                        : FontWeight.w400,
+                    fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
                   ),
                 ),
               ],

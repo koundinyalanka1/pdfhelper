@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:provider/provider.dart';
-import 'package:share_plus/share_plus.dart';
 import '../services/ads_service.dart';
 import '../services/pdf_core_service.dart';
 import '../services/pdf_raster.dart';
@@ -12,6 +11,7 @@ import '../providers/theme_provider.dart';
 import '../utils/file_naming.dart';
 import '../widgets/password_prompt.dart';
 import '../widgets/pdf_name_dialog.dart';
+import '../widgets/pdf_result_dialog.dart';
 import '../widgets/recent_pdfs_strip.dart';
 import 'pdf_viewer_screen.dart';
 
@@ -230,7 +230,7 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
   }
 
   Future<void> _splitPdf() async {
-    if (_selectedFilePath == null) return;
+    if (_isProcessing || _selectedFilePath == null) return;
 
     // Named before the work starts, like every other tool. Outputs that come
     // in sets get the page number or range appended to this title.
@@ -291,7 +291,7 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
             NotificationService().showSplitComplete(sortedPages.length);
           }
           setState(() => _splitProgress = 1.0);
-          _showSuccessDialog([
+          await _showSuccessDialog([
             outputPath,
           ], autoSavedPath != null ? [autoSavedPath] : null);
         } else {
@@ -346,7 +346,7 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
             NotificationService().showSplitComplete(outputPaths.length);
           }
           setState(() => _splitProgress = 1.0);
-          _showSuccessDialog(outputPaths, autoSavedPaths);
+          await _showSuccessDialog(outputPaths, autoSavedPaths);
         } else {
           _showSnackBar('Failed to split PDF', isError: true);
         }
@@ -386,7 +386,7 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
             NotificationService().showSplitComplete(outputPaths.length);
           }
           setState(() => _splitProgress = 1.0);
-          _showSuccessDialog(outputPaths, autoSavedPaths);
+          await _showSuccessDialog(outputPaths, autoSavedPaths);
         } else {
           _showSnackBar('Failed to split PDF', isError: true);
         }
@@ -394,139 +394,34 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
     } catch (e) {
       _showSnackBar('Error: $e', isError: true);
     } finally {
-      setState(() {
-        _isProcessing = false;
-        _splitProgress = 0.0;
-      });
+      if (mounted) {
+        setState(() {
+          _isProcessing = false;
+          _splitProgress = 0.0;
+        });
+      }
     }
   }
 
-  void _showSuccessDialog(
+  Future<void> _showSuccessDialog(
     List<String> filePaths, [
     List<String>? autoSavedPaths,
-  ]) {
-    // Clear selection after success
-    setState(() {
-      _selectedPages.clear();
-    });
-
-    final themeProvider = context.read<ThemeProvider>();
-    final saveLocation = themeProvider.saveLocation;
-    final hasAutoSaved = autoSavedPaths != null && autoSavedPaths.isNotEmpty;
-
-    showDialog(
+  ]) async {
+    if (!mounted) return;
+    setState(() => _selectedPages.clear());
+    await showPdfResultDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: _colors.cardBackground,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Row(
-          children: [
-            const Icon(Icons.check_circle, color: Color(0xFF4CAF50), size: 28),
-            const SizedBox(width: 10),
-            Text('Success!', style: TextStyle(color: _colors.textPrimary)),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              filePaths.length == 1
-                  ? 'PDF split successfully!'
-                  : '${filePaths.length} pages extracted successfully!',
-              style: TextStyle(color: _colors.textSecondary),
-            ),
-            if (hasAutoSaved) ...[
-              const SizedBox(height: 12),
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF4CAF50).withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(
-                      Icons.folder_rounded,
-                      color: Color(0xFF4CAF50),
-                      size: 18,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Saved to app storage (PDFHelper/$saveLocation)',
-                        style: const TextStyle(
-                          color: Color(0xFF4CAF50),
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              // Friendliest moment for an interstitial: user is done and not
-              // navigating into Share / Viewer.
-              AdsService.instance.maybeShowInterstitial(trigger: 'split_close');
-            },
-            child: Text(
-              'Close',
-              style: TextStyle(color: _colors.textSecondary),
-            ),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              // Share auto-saved files if available
-              final shareFiles = hasAutoSaved ? autoSavedPaths : filePaths;
-              SharePlus.instance.share(
-                ShareParams(
-                  files: shareFiles.map((p) => XFile(p)).toList(),
-                  text: 'Split PDF',
-                ),
-              );
-            },
-            child: const Text(
-              'Share',
-              style: TextStyle(color: Color(0xFFE94560)),
-            ),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context);
-              final openFile = hasAutoSaved
-                  ? autoSavedPaths.first
-                  : filePaths.first;
-              final name = openFile.split(RegExp(r'[/\\]')).last;
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) =>
-                      PdfViewerScreen(pdfPath: openFile, title: name),
-                ),
-              );
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFFFC107),
-            ),
-            child: Text(
-              filePaths.length == 1 ? 'Open' : 'View first PDF',
-              style: const TextStyle(color: Colors.black87),
-            ),
-          ),
-        ],
-      ),
+      filePaths: filePaths,
+      autoSavedPaths: autoSavedPaths,
+      operation: PdfOperation.split,
+      message: filePaths.length == 1
+          ? 'PDF split successfully!'
+          : '${filePaths.length} PDFs extracted successfully!',
     );
   }
 
   void _showSnackBar(String message, {bool isError = false}) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),

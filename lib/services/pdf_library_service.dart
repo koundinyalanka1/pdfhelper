@@ -156,7 +156,11 @@ class PdfLibraryService {
   static Future<List<PdfFileEntry>> _scan() async {
     final appRoots = await _appRoots();
     final sharedRoots = await _sharedRoots();
-    final request = _ScanRequest(sharedRoots: sharedRoots, appRoots: appRoots);
+    final request = _ScanRequest(
+      sharedRoots: sharedRoots,
+      appRoots: appRoots,
+      excludedRoots: await _temporaryRoots(),
+    );
 
     // Scan to completion on the worker. Returning a time/file/depth-limited
     // prefix and caching it as a complete library silently lost documents.
@@ -214,7 +218,23 @@ class PdfLibraryService {
   static List<PdfFileEntry> walkForTesting(
     List<String> roots, {
     List<String> appRoots = const [],
-  }) => _walk(_ScanRequest(sharedRoots: roots, appRoots: appRoots));
+    List<String> excludedRoots = const [],
+  }) => _walk(
+    _ScanRequest(
+      sharedRoots: roots,
+      appRoots: appRoots,
+      excludedRoots: excludedRoots,
+    ),
+  );
+
+  /// Picker and intent copies are temporary, even when external app cache
+  /// directories happen to be readable through a shared-storage scan.
+  static Future<bool> isTemporaryPath(String path) async {
+    final canonical = _canonicalRoot(path);
+    return (await _temporaryRoots())
+        .map(_canonicalRoot)
+        .any((root) => _isWithin(canonical, root));
+  }
 
   /// Drop cache entries whose file no longer exists.
   static Future<List<PdfFileEntry>> prune(List<PdfFileEntry> entries) async {
@@ -257,6 +277,27 @@ class PdfLibraryService {
   }
 
   // ---------------------------------------------------------------- roots
+
+  static Future<List<String>> _temporaryRoots() async {
+    final roots = <String>[];
+    try {
+      roots.add((await getTemporaryDirectory()).path);
+    } catch (_) {
+      // Not every platform exposes an application cache directory.
+    }
+    if (Platform.isAndroid) {
+      try {
+        roots.addAll(
+          (await getExternalCacheDirectories() ?? <Directory>[]).map(
+            (directory) => directory.path,
+          ),
+        );
+      } catch (_) {
+        // Internal cache is still excluded when no external cache exists.
+      }
+    }
+    return roots;
+  }
 
   /// Primary storage for the current Android user plus mounted SD/USB volumes.
   static Future<List<String>> _sharedRoots() async {
@@ -324,10 +365,15 @@ class PdfLibraryService {
 
 /// Plain, sendable description of one sweep.
 class _ScanRequest {
-  const _ScanRequest({required this.sharedRoots, required this.appRoots});
+  const _ScanRequest({
+    required this.sharedRoots,
+    required this.appRoots,
+    this.excludedRoots = const [],
+  });
 
   final List<String> sharedRoots;
   final List<String> appRoots;
+  final List<String> excludedRoots;
 }
 
 class _PendingDirectory {
@@ -365,9 +411,12 @@ List<PdfFileEntry> _walk(_ScanRequest request) {
   final seenDirs = <String>{};
   final queue = Queue<_PendingDirectory>();
   final appRoots = request.appRoots.map(_canonicalRoot).toSet();
+  final excludedRoots = request.excludedRoots.map(_canonicalRoot).toSet();
+  bool excluded(String path) =>
+      excludedRoots.any((root) => _isWithin(path, root));
   for (final root in [...request.appRoots, ...request.sharedRoots]) {
     final canonical = _canonicalRoot(root);
-    if (seenDirs.add(canonical)) {
+    if (!excluded(canonical) && seenDirs.add(canonical)) {
       // Preserve app paths used by recents/stars. Canonical paths are only
       // identity keys, so /sdcard and /storage/... cannot duplicate a tree.
       queue.add(_PendingDirectory(root, canonical));
@@ -389,6 +438,7 @@ List<PdfFileEntry> _walk(_ScanRequest request) {
       final path = child.path;
       final name = path.split('/').last;
       final canonical = '${current.canonicalPath}/$name';
+      if (excluded(canonical)) continue;
       if (child is Directory) {
         // Do not follow links below a root: a link can lead back into the
         // tree. Android itself enforces private-folder restrictions; do not

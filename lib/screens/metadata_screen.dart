@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../providers/theme_provider.dart';
 import '../services/pdf_core_service.dart';
+import '../services/ads_service.dart';
 import '../widgets/pdf_result_dialog.dart';
 
 /// Read and rewrite the `/Info` dictionary.
@@ -39,7 +40,11 @@ class _MetadataScreenState extends State<MetadataScreen> {
     (key: 'subject', label: 'Subject', icon: Icons.subject_rounded),
     (key: 'keywords', label: 'Keywords', icon: Icons.tag_rounded),
     (key: 'creator', label: 'Creator', icon: Icons.edit_note_rounded),
-    (key: 'producer', label: 'Producer', icon: Icons.precision_manufacturing_rounded),
+    (
+      key: 'producer',
+      label: 'Producer',
+      icon: Icons.precision_manufacturing_rounded,
+    ),
   ];
 
   bool get _isDirty =>
@@ -72,7 +77,8 @@ class _MetadataScreenState extends State<MetadataScreen> {
         if (mounted) {
           setState(() {
             _isLoading = false;
-            _error = 'The native PDF core is not built, so metadata cannot '
+            _error =
+                'The native PDF core is not built, so metadata cannot '
                 'be read or written. Run ./scripts/build_pdf_core.sh.';
           });
         }
@@ -137,7 +143,7 @@ class _MetadataScreenState extends State<MetadataScreen> {
         context: context,
         filePaths: [output],
         accent: _accent,
-        adTrigger: 'metadata',
+        operation: PdfOperation.metadata,
         message: 'Document details updated.',
       );
       if (mounted) Navigator.pop(context, output);
@@ -193,10 +199,7 @@ class _MetadataScreenState extends State<MetadataScreen> {
                 if (_original?.creationDate?.isNotEmpty == true)
                   Text(
                     'Created ${_original!.creationDate}',
-                    style: TextStyle(
-                      color: _colors.textTertiary,
-                      fontSize: 12,
-                    ),
+                    style: TextStyle(color: _colors.textTertiary, fontSize: 12),
                   ),
                 const SizedBox(height: 8),
                 Text(

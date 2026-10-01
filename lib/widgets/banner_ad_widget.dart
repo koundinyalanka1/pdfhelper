@@ -1,10 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 
 import '../services/ads_service.dart';
 
-/// Self-contained adaptive banner ad. Hides itself entirely if the SDK isn't
-/// initialized or the ad fails to load, so layout never reserves empty space.
+/// The app's single, compact home banner. It never expands beyond 320 × 50,
+/// and takes no space until an ad is available and the window can fit it.
 class BannerAdWidget extends StatefulWidget {
   const BannerAdWidget({super.key});
 
@@ -15,50 +17,71 @@ class BannerAdWidget extends StatefulWidget {
 class _BannerAdWidgetState extends State<BannerAdWidget> {
   BannerAd? _ad;
   bool _loaded = false;
+  bool _requested = false;
+  int _request = 0;
 
   @override
   void initState() {
     super.initState();
     AdsService.instance.adsAllowed.addListener(_consentChanged);
-    _consentChanged();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !(ModalRoute.of(context)?.isCurrent ?? false)) return;
+      unawaited(AdsService.instance.initialize());
+    });
   }
 
   void _consentChanged() {
     if (!mounted) return;
-    if (AdsService.instance.isInitialized) {
-      if (_ad == null) _load();
-    } else {
-      _ad?.dispose();
-      setState(() {
-        _ad = null;
-        _loaded = false;
-      });
-    }
+    _request++;
+    _ad?.dispose();
+    setState(() {
+      _ad = null;
+      _loaded = false;
+      _requested = false;
+    });
   }
 
-  void _load() {
+  Future<void> _load(int request) async {
+    if (!mounted || request != _request || !AdsService.instance.isInitialized) {
+      return;
+    }
     final ad = BannerAd(
       adUnitId: AdsService.bannerAdUnitId,
       size: AdSize.banner,
       request: const AdRequest(),
       listener: BannerAdListener(
         onAdLoaded: (ad) {
-          if (!mounted || _ad != ad) return;
+          if (!mounted || request != _request || _ad != ad) return;
           setState(() => _loaded = true);
         },
-        onAdFailedToLoad: (ad, err) {
+        onAdFailedToLoad: (ad, error) {
           ad.dispose();
-          if (_ad == ad) _ad = null;
-          debugPrint('[BannerAd] failed: $err');
+          if (!mounted || request != _request || _ad != ad) return;
+          setState(() {
+            _ad = null;
+            _loaded = false;
+          });
+          debugPrint('[BannerAd] failed: $error');
         },
       ),
     );
     _ad = ad;
-    ad.load();
+    try {
+      await ad.load();
+    } catch (error) {
+      ad.dispose();
+      if (!mounted || request != _request || _ad != ad) return;
+      setState(() {
+        _ad = null;
+        _loaded = false;
+      });
+      debugPrint('[BannerAd] unavailable: $error');
+    }
   }
 
   @override
   void dispose() {
+    _request++;
     AdsService.instance.adsAllowed.removeListener(_consentChanged);
     _ad?.dispose();
     super.dispose();
@@ -66,12 +89,31 @@ class _BannerAdWidgetState extends State<BannerAdWidget> {
 
   @override
   Widget build(BuildContext context) {
-    final ad = _ad;
-    if (!_loaded || ad == null) return const SizedBox.shrink();
-    return SizedBox(
-      width: ad.size.width.toDouble(),
-      height: ad.size.height.toDouble(),
-      child: AdWidget(ad: ad),
+    if (!AdsService.instance.isInitialized) return const SizedBox.shrink();
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.hasBoundedWidth
+            ? constraints.maxWidth
+            : MediaQuery.sizeOf(context).width;
+        if (width < AdSize.banner.width) return const SizedBox.shrink();
+        if (!_requested) {
+          _requested = true;
+          final request = ++_request;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            unawaited(_load(request));
+          });
+        }
+        final ad = _ad;
+        if (!_loaded || ad == null) return const SizedBox.shrink();
+        return Center(
+          heightFactor: 1,
+          child: SizedBox(
+            width: AdSize.banner.width.toDouble(),
+            height: AdSize.banner.height.toDouble(),
+            child: AdWidget(ad: ad),
+          ),
+        );
+      },
     );
   }
 }

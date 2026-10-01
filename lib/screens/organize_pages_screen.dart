@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../providers/theme_provider.dart';
 import '../services/pdf_core_service.dart';
+import '../services/ads_service.dart';
 import '../services/pdf_raster.dart';
 import '../widgets/pdf_result_dialog.dart';
 
@@ -165,7 +166,7 @@ class _OrganizePagesScreenState extends State<OrganizePagesScreen> {
         context: context,
         filePaths: [current],
         accent: _accent,
-        adTrigger: 'organize',
+        operation: PdfOperation.organize,
         message: [
           '${kept.length} page${kept.length == 1 ? '' : 's'} kept',
           if (removed > 0) '$removed removed',

@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
-import '../services/ads_service.dart';
 import '../services/pdf_service.dart';
 import '../services/notification_service.dart';
 import '../providers/theme_provider.dart';
@@ -173,7 +172,7 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
       widget.onSaved?.call();
 
       if (mounted) {
-        _showSuccessDialog(autoSavedPaths.isEmpty ? null : autoSavedPaths);
+        await _showSuccessDialog(autoSavedPaths.isEmpty ? null : autoSavedPaths);
       }
     } catch (e) {
       if (mounted) {
@@ -185,16 +184,17 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
     }
   }
 
-  void _showSuccessDialog(List<String>? autoSavedPaths) {
+  Future<void> _showSuccessDialog(List<String>? autoSavedPaths) {
     final themeProvider = context.read<ThemeProvider>();
     final saveLocation = themeProvider.saveLocation;
     final hasAutoSaved = autoSavedPaths != null && autoSavedPaths.isNotEmpty;
     final shareFiles = hasAutoSaved ? autoSavedPaths : widget.filePaths;
     final nav = Navigator.of(context);
 
-    showDialog(
+    return showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
+        scrollable: true,
         backgroundColor: _colors.cardBackground,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: Row(
@@ -251,13 +251,6 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
             onPressed: () {
               Navigator.pop(ctx);
               nav.pop(true);
-              // User is truly finished here (not navigating into Share/Viewer),
-              // so this is the friendliest moment to show an interstitial.
-              AdsService.instance.maybeShowInterstitial(
-                trigger: widget.sourceType == PdfPreviewSourceType.merge
-                    ? 'merge_preview_close'
-                    : 'convert_preview_close',
-              );
             },
             child: Text(
               'Close',
@@ -303,7 +296,9 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
           ),
         ],
       ),
-    );
+    ).whenComplete(() {
+      if (mounted) setState(() => _isSaving = false);
+    });
   }
 
   void _onBack() {

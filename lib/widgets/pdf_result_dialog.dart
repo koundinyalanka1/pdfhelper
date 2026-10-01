@@ -6,6 +6,8 @@ import '../providers/theme_provider.dart';
 import '../screens/pdf_viewer_screen.dart';
 import '../services/ads_service.dart';
 
+enum _ResultAction { close, share, open }
+
 /// The "operation finished" dialog shared by every tool.
 ///
 /// Previously merge, split and preview each carried their own near-identical
@@ -15,19 +17,26 @@ Future<void> showPdfResultDialog({
   required BuildContext context,
   required List<String> filePaths,
   required String message,
+  required PdfOperation operation,
   String title = 'Success!',
   List<String>? autoSavedPaths,
-  String adTrigger = 'operation',
   Color accent = const Color(0xFFE94560),
-}) {
+}) async {
+  await AdsService.instance.operationCompleted(
+    operation,
+    canPresent: () => context.mounted &&
+        (ModalRoute.of(context)?.isCurrent ?? false),
+  );
+  if (!context.mounted) return;
   final colors = AppColors(context.read<ThemeProvider>().isDarkMode);
   final saveLocation = context.read<ThemeProvider>().saveLocation;
   final hasAutoSaved = autoSavedPaths != null && autoSavedPaths.isNotEmpty;
   final shareFiles = hasAutoSaved ? autoSavedPaths : filePaths;
 
-  return showDialog<void>(
+  final action = await showDialog<_ResultAction>(
     context: context,
     builder: (ctx) => AlertDialog(
+      scrollable: true,
       backgroundColor: colors.cardBackground,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       title: Row(
@@ -78,37 +87,15 @@ Future<void> showPdfResultDialog({
       ),
       actions: [
         TextButton(
-          onPressed: () {
-            Navigator.pop(ctx);
-            // The user is finished and is not heading into Share or the
-            // viewer — the least intrusive moment for an interstitial.
-            AdsService.instance.maybeShowInterstitial(trigger: adTrigger);
-          },
+          onPressed: () => Navigator.pop(ctx, _ResultAction.close),
           child: Text('Close', style: TextStyle(color: colors.textSecondary)),
         ),
         TextButton(
-          onPressed: () {
-            Navigator.pop(ctx);
-            SharePlus.instance.share(
-              ShareParams(files: shareFiles.map((p) => XFile(p)).toList()),
-            );
-          },
+          onPressed: () => Navigator.pop(ctx, _ResultAction.share),
           child: Text('Share', style: TextStyle(color: accent)),
         ),
         ElevatedButton(
-          onPressed: () {
-            final navigator = Navigator.of(context);
-            Navigator.pop(ctx);
-            final path = shareFiles.first;
-            navigator.push(
-              MaterialPageRoute(
-                builder: (_) => PdfViewerScreen(
-                  pdfPath: path,
-                  title: path.split(RegExp(r'[/\\]')).last,
-                ),
-              ),
-            );
-          },
+          onPressed: () => Navigator.pop(ctx, _ResultAction.open),
           style: ElevatedButton.styleFrom(backgroundColor: accent),
           child: Text(
             shareFiles.length == 1 ? 'Open' : 'View first PDF',
@@ -118,4 +105,22 @@ Future<void> showPdfResultDialog({
       ],
     ),
   );
+  if (!context.mounted) return;
+  if (action == _ResultAction.share) {
+    await SharePlus.instance.share(
+      ShareParams(files: shareFiles.map((path) => XFile(path)).toList()),
+    );
+  } else if (action == _ResultAction.open) {
+    final path = shareFiles.first;
+    // Keep the operation's caller pending until the viewer closes. Otherwise
+    // callers that pop their tool screen accidentally pop the new viewer.
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => PdfViewerScreen(
+          pdfPath: path,
+          title: path.split(RegExp(r'[/\\]')).last,
+        ),
+      ),
+    );
+  }
 }
