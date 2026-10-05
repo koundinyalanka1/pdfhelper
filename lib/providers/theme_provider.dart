@@ -5,9 +5,16 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
 import '../services/notification_service.dart';
+import '../services/public_pdf_save_service.dart';
 import '../utils/file_naming.dart';
 
 class ThemeProvider extends ChangeNotifier {
+  static const _textSelectionTheme = TextSelectionThemeData(
+    cursorColor: Color(0xFF1976D2),
+    selectionHandleColor: Color(0xFF1976D2),
+    selectionColor: Color(0x401976D2),
+  );
+
   static const String _themeKey = 'isDarkMode';
   static const String _autoSaveKey = 'autoSave';
   static const String _saveLocationKey = 'saveLocation';
@@ -29,6 +36,10 @@ class ThemeProvider extends ChangeNotifier {
   bool get autoSave => _autoSave;
   bool get notifications => _notifications;
   String get saveLocation => _saveLocation;
+  bool get usesPublicStorage => Platform.isAndroid;
+  String get saveLocationDescription => usesPublicStorage
+      ? '$_saveLocation/PDFHelper (device storage)'
+      : 'app storage (PDFHelper/$_saveLocation)';
   String get outputQuality => _outputQuality;
 
   /// When true and [autoSave] is on, merge/convert skip the preview screen
@@ -146,32 +157,22 @@ class ThemeProvider extends ChangeNotifier {
     return true;
   }
 
-  /// Get the auto-save directory path based on settings.
-  /// Uses app-private storage (scoped storage) - no MANAGE_EXTERNAL_STORAGE needed.
-  /// Files are accessible via Files app (Android) or Share.
-  Future<String?> getAutoSavePath() async {
-    if (!_autoSave) return null;
+  /// Local working directory. Android also publishes a durable public copy
+  /// through [autoSaveFile]; this directory alone is not a public save.
+  Future<String?> getAutoSavePath() async =>
+      _autoSave ? _workingSavePath() : null;
 
-    try {
-      final docDir = await getApplicationDocumentsDirectory();
-      // Use subfolder based on user preference (Downloads/Documents)
-      // Both are in app-private storage - Android 10+ compatible
-      final subfolder = _saveLocation == 'Documents'
-          ? 'Documents'
-          : 'Downloads';
-      return '${docDir.path}/PDFHelper/$subfolder';
-    } catch (e) {
-      debugPrint('Error getting auto-save path: $e');
-    }
-    return null;
+  Future<String> _workingSavePath() async {
+    final docDir = await getApplicationDocumentsDirectory();
+    final subfolder = _saveLocation == 'Documents' ? 'Documents' : 'Downloads';
+    return '${docDir.path}/PDFHelper/$subfolder';
   }
 
   /// Auto-save a file to the configured location.
   ///
-  /// On success the source file (typically in
-  /// `getApplicationDocumentsDirectory()`) is deleted so we don't keep two
-  /// copies on disk indefinitely. Callers should reference the returned path
-  /// (the saved copy) for any subsequent share/open operations.
+  /// Android publishes to shared storage and retains the source as a working
+  /// file for viewing and sharing. Other platforms move it into the configured
+  /// app document folder. The return value is always a usable local path.
   ///
   /// [fileName] is the title the user typed. Without one the file keeps the
   /// old `<prefix>_<millis>.pdf` form, which is what every tool did before
@@ -182,10 +183,36 @@ class ThemeProvider extends ChangeNotifier {
     String? fileName,
   }) async {
     if (!_autoSave) return null;
+    return saveFile(sourcePath, prefix, fileName: fileName);
+  }
+
+  /// An explicit Save always saves, even when automatic saving is disabled.
+  Future<String> saveFile(
+    String sourcePath,
+    String prefix, {
+    String? fileName,
+  }) async {
+    if (usesPublicStorage) {
+      final name = withPdfExtension(
+        sanitizeFileName(
+          fileName?.trim().isNotEmpty == true
+              ? fileName!
+              : sourcePath.split(Platform.pathSeparator).last,
+        ),
+      );
+      // Outputs already live in the app's documents directory. Keep this
+      // working file usable by the native engine even under scoped storage;
+      // the public copy survives uninstall independently of it.
+      await PublicPdfSaveService.save(
+        sourcePath: sourcePath,
+        displayName: name,
+        location: _saveLocation,
+      );
+      return sourcePath;
+    }
 
     try {
-      final savePath = await getAutoSavePath();
-      if (savePath == null) return null;
+      final savePath = await _workingSavePath();
 
       // Create directory if it doesn't exist
       final saveDir = Directory(savePath);
@@ -219,7 +246,7 @@ class ThemeProvider extends ChangeNotifier {
       return destPath;
     } catch (e) {
       debugPrint('Error auto-saving file: $e');
-      return null;
+      rethrow;
     }
   }
 
@@ -244,6 +271,7 @@ class ThemeProvider extends ChangeNotifier {
   ThemeData get darkTheme => ThemeData(
     useMaterial3: true,
     brightness: Brightness.dark,
+    textSelectionTheme: _textSelectionTheme,
     colorScheme: ColorScheme.fromSeed(
       seedColor: const Color(0xFFE94560),
       brightness: Brightness.dark,
@@ -268,6 +296,7 @@ class ThemeProvider extends ChangeNotifier {
   ThemeData get lightTheme => ThemeData(
     useMaterial3: true,
     brightness: Brightness.light,
+    textSelectionTheme: _textSelectionTheme,
     colorScheme: ColorScheme.fromSeed(
       seedColor: const Color(0xFFE94560),
       brightness: Brightness.light,

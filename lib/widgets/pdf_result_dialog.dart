@@ -22,14 +22,26 @@ Future<void> showPdfResultDialog({
   List<String>? autoSavedPaths,
   Color accent = const Color(0xFFE94560),
 }) async {
+  final settings = context.read<ThemeProvider>();
+  // Split has already saved its outputs; other tools arrive with local
+  // working files. Export those before claiming success or showing an ad.
+  if (settings.usesPublicStorage &&
+      settings.autoSave &&
+      autoSavedPaths == null) {
+    autoSavedPaths = [];
+    for (final path in filePaths) {
+      final saved = await settings.autoSaveFile(path, operation.name);
+      if (saved != null) autoSavedPaths.add(saved);
+    }
+    if (!context.mounted) return;
+  }
   await AdsService.instance.operationCompleted(
     operation,
-    canPresent: () => context.mounted &&
-        (ModalRoute.of(context)?.isCurrent ?? false),
+    canPresent: () =>
+        context.mounted && (ModalRoute.of(context)?.isCurrent ?? false),
   );
   if (!context.mounted) return;
   final colors = AppColors(context.read<ThemeProvider>().isDarkMode);
-  final saveLocation = context.read<ThemeProvider>().saveLocation;
   final hasAutoSaved = autoSavedPaths != null && autoSavedPaths.isNotEmpty;
   final shareFiles = hasAutoSaved ? autoSavedPaths : filePaths;
 
@@ -71,7 +83,7 @@ Future<void> showPdfResultDialog({
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'Saved to app storage (PDFHelper/$saveLocation)',
+                      'Saved to ${settings.saveLocationDescription}',
                       style: const TextStyle(
                         color: Color(0xFF4CAF50),
                         fontSize: 12,

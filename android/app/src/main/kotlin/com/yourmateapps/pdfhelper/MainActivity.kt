@@ -39,6 +39,37 @@ class MainActivity : FlutterActivity() {
                             openStorageSettings()
                             result.success(null)
                         }
+                        "savePublicPdf" -> {
+                            val source = call.argument<String>("sourcePath")
+                            val name = call.argument<String>("displayName")
+                            val location = call.argument<String>("location")
+                            require(source != null && name != null && location != null) { "Missing PDF save details" }
+                            pdfIo.execute {
+                                try {
+                                    val saved = PublicPdfExporter(applicationContext).save(source, name, location)
+                                    runOnUiThread { result.success(saved) }
+                                } catch (e: Exception) {
+                                    runOnUiThread { result.error("PUBLIC_SAVE_FAILED", e.message, null) }
+                                }
+                            }
+                        }
+                        "deletePublicPdf", "renamePublicPdf" -> {
+                            val path = call.argument<String>("publicPath")
+                            val uri = call.argument<String>("uri")
+                            val name = call.argument<String>("displayName")
+                            require(!path.isNullOrBlank()) { "Missing public PDF location" }
+                            if (call.method == "renamePublicPdf") require(!name.isNullOrBlank()) { "Missing PDF name" }
+                            pdfIo.execute {
+                                try {
+                                    val exporter = PublicPdfExporter(applicationContext)
+                                    val changed: Any = if (call.method == "deletePublicPdf")
+                                        exporter.delete(uri, path) else exporter.rename(uri, path, name!!)
+                                    runOnUiThread { result.success(changed) }
+                                } catch (e: Exception) {
+                                    runOnUiThread { result.error("PUBLIC_MUTATION_FAILED", e.message, null) }
+                                }
+                            }
+                        }
                         else -> result.notImplemented()
                     }
                 } catch (e: Exception) {

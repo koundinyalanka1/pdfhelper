@@ -1,5 +1,9 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pdfhelper/services/pdf_raster.dart';
+
+import '../support/text_pdf_fixture.dart';
 
 /// The library grid caches failures as well as successes, so that a file it
 /// cannot render is not retried on every scroll. That negative cache used to
@@ -9,6 +13,34 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   setUp(PdfRaster.invalidate);
+
+  test(
+    'high-resolution uncached renders return warnings without retaining them',
+    () async {
+      final root = Directory.systemTemp.createTempSync('raster-warnings-');
+      addTearDown(() => root.deleteSync(recursive: true));
+      final pdf = writeTextPdfFixture(root, ['Font substitution warning']);
+      final rendered = await PdfRaster.renderPageWithWarnings(
+        pdf.path,
+        0,
+        longEdge: 1800,
+        useCache: false,
+        throwOnError: true,
+      );
+      expect(rendered, isNotNull);
+      expect(rendered!.bytes, isNotEmpty);
+      expect(rendered.warnings, isNotEmpty);
+      expect(PdfRaster.warningsFor(pdf.path, 0, longEdge: 1800), isEmpty);
+
+      final cached = await PdfRaster.renderPageWithWarnings(pdf.path, 0);
+      final hit = await PdfRaster.renderPageWithWarnings(pdf.path, 0);
+      expect(hit!.warnings, cached!.warnings);
+      expect(hit.warnings, isNotEmpty);
+      PdfRaster.invalidate(pdf.path);
+      expect(PdfRaster.warningsFor(pdf.path, 0), isEmpty);
+    },
+    skip: Platform.environment['PDF_CORE_LIB_PATH'] == null,
+  );
 
   test('a failed cover is remembered so it is not retried', () async {
     const path = '/nonexistent/locked.pdf';

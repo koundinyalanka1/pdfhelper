@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:provider/provider.dart';
@@ -16,6 +17,7 @@ import '../services/pdf_text_selection_service.dart';
 import '../services/recent_files_service.dart';
 import '../utils/error_logger.dart';
 import '../widgets/password_prompt.dart';
+import '../widgets/banner_ad_widget.dart';
 import '../widgets/pdf_text_selection_overlay.dart';
 import 'ai_screen.dart';
 import 'extract_text_screen.dart';
@@ -48,11 +50,11 @@ class PdfViewerScreen extends StatefulWidget {
 }
 
 class _PdfViewerScreenState extends State<PdfViewerScreen>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   final ScrollController _scrollController = ScrollController();
   final PdfTextSelectionController _textSelectionController =
       PdfTextSelectionController();
-  bool _isSelectingText = false;
+  double _lastScrollOffset = 0;
 
   /// Every page's width/height as it becomes known — all of them shortly
   /// after opening (see [_loadPageRatios]), or from the page itself if it
@@ -70,12 +72,14 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
   /// list fixes both — it sees the gesture first, and it magnifies what is
   /// actually on screen.
   final TransformationController _zoomController = TransformationController();
+  Matrix4 _lastDocumentTransform = Matrix4.identity();
 
   /// Current scale, watched by each visible page so it can re-rasterize
   /// sharper instead of showing a magnified thumbnail.
   final ValueNotifier<double> _zoom = ValueNotifier<double>(1.0);
 
-  /// While zoomed, dragging pans instead of scrolling the list.
+  /// While zoomed, the scale recognizer owns dragging. Its vertical movement
+  /// scrolls the page list; its horizontal movement pans the enlarged page.
   bool _isZoomed = false;
 
   /// Fingers currently on the glass, counted by a [Listener].
@@ -101,6 +105,9 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
   bool _isMultiTouch = false;
 
   AnimationController? _zoomAnimation;
+  late final AnimationController _verticalPanAnimation;
+  double _lastVerticalPanValue = 0;
+  bool _verticalPanGesture = false;
 
   /// The password actually in use. Starts as whatever the caller knew (Tools
   /// passes one along) and is replaced by whatever the user types when the
@@ -134,6 +141,9 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
   @override
   void initState() {
     super.initState();
+    _verticalPanAnimation = AnimationController.unbounded(vsync: this)
+      ..addListener(_onVerticalPanTick);
+    _textSelectionController.addListener(_onSelectionChanged);
     _scrollController.addListener(_onScroll);
     _zoomController.addListener(_onZoomChanged);
     _open();
@@ -141,8 +151,10 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
 
   @override
   void dispose() {
+    _textSelectionController.removeListener(_onSelectionChanged);
     _textSelectionController.dispose();
     _zoomAnimation?.dispose();
+    _verticalPanAnimation.dispose();
     _zoomController.removeListener(_onZoomChanged);
     _zoomController.dispose();
     _zoom.dispose();
@@ -152,17 +164,22 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
   }
 
   void _onPointerDown(PointerDownEvent _) {
+    _verticalPanAnimation.stop();
+    _verticalPanGesture = false;
     _activePointers++;
     if (_activePointers > 1) _textSelectionController.clear();
     _syncMultiTouch();
   }
 
-  void _setTextSelectionMode(bool enabled) {
-    _textSelectionController.clear();
-    setState(() => _isSelectingText = enabled);
+  void _onSelectionChanged() {
+    if (mounted) setState(() {});
   }
 
-  void _onPointerFinished(PointerEvent _) {
+  void _onPointerFinished(PointerEvent event) {
+    if (event is PointerCancelEvent) {
+      _verticalPanGesture = false;
+      _verticalPanAnimation.stop();
+    }
     if (_activePointers > 0) _activePointers--;
     _syncMultiTouch();
   }
@@ -177,10 +194,78 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
   }
 
   void _onZoomChanged() {
-    final scale = _zoomController.value.getMaxScaleOnAxis();
+    final transform = _zoomController.value;
+    if (!listEquals(transform.storage, _lastDocumentTransform.storage)) {
+      _lastDocumentTransform = Matrix4.copy(transform);
+      // Controls live above the page to keep their touch targets unscaled.
+      // Dismiss them when the reader moves the document, before they can
+      // follow selected text into the app bar or beyond the viewport.
+      _textSelectionController.clear();
+    }
+    final scale = transform.getMaxScaleOnAxis();
     _zoom.value = scale;
     final zoomed = scale > 1.02;
     if (zoomed != _isZoomed) setState(() => _isZoomed = zoomed);
+    _updateCurrentPage();
+  }
+
+  void _onInteractionUpdate(ScaleUpdateDetails details) {
+    // The list has no competing drag recognizer while zoomed. Only consume a
+    // recognized one-finger pan, so pinches and text-selection handles retain
+    // their own gestures and focal points.
+    _verticalPanGesture =
+        _isZoomed && details.pointerCount == 1 && details.scale == 1.0;
+    if (_verticalPanGesture) _panVertically(details.focalPointDelta.dy);
+  }
+
+  /// Move in screen pixels while keeping the list lazy and the zoom intact.
+  /// InteractiveViewer's child is only a viewport high, so translating that
+  /// child alone cannot reach the rest of a document. Scroll through its pages
+  /// first, then use the remaining vertical pan at the document's two ends to
+  /// expose the top/bottom of the enlarged viewport.
+  bool _panVertically(double delta) {
+    if (delta == 0 || !_scrollController.hasClients) return false;
+    final transform = _zoomController.value;
+    final scale = transform.getMaxScaleOnAxis();
+    final position = _scrollController.position;
+    final before = position.pixels;
+    final after = (before - delta / scale).clamp(
+      position.minScrollExtent,
+      position.maxScrollExtent,
+    );
+    final oldY = transform.storage[13];
+    final newY = (oldY + delta + (after - before) * scale).clamp(
+      position.viewportDimension * (1 - scale),
+      0.0,
+    );
+    if (after != before) _scrollController.jumpTo(after);
+    if ((newY - oldY).abs() > 0.001) {
+      _zoomController.value = Matrix4.copy(transform)..setEntry(1, 3, newY);
+    }
+    return after != before || (newY - oldY).abs() > 0.001;
+  }
+
+  void _onInteractionEnd(ScaleEndDetails details) {
+    final velocity = details.velocity.pixelsPerSecond.dy;
+    if (!_verticalPanGesture || velocity.abs() < kMinFlingVelocity) return;
+    _verticalPanGesture = false;
+    _lastVerticalPanValue = 0;
+    _verticalPanAnimation.value = 0;
+    // InteractiveViewer supplies horizontal inertia. Vertical inertia follows
+    // the same document/viewport boundary handling as a drag, including when
+    // the final page needs a little more pan after the list reaches its end.
+    unawaited(
+      _verticalPanAnimation.animateWith(
+        ClampingScrollSimulation(position: 0, velocity: velocity),
+      ),
+    );
+  }
+
+  void _onVerticalPanTick() {
+    final value = _verticalPanAnimation.value;
+    final delta = value - _lastVerticalPanValue;
+    _lastVerticalPanValue = value;
+    if (delta != 0 && !_panVertically(delta)) _verticalPanAnimation.stop();
   }
 
   /// Double-tap toggles between fit-width and 2.5x, centred on the tap.
@@ -188,6 +273,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
   /// Pinch works too, but a double-tap is a single-pointer gesture that can
   /// never be lost to the scroll view — so there is always a way to zoom.
   void _onDoubleTap(TapDownDetails details) {
+    _verticalPanAnimation.stop();
     final target = doubleTapZoomTarget(
       isZoomed: _isZoomed,
       focalPoint: details.localPosition,
@@ -208,6 +294,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
   }
 
   void _resetZoom() {
+    _verticalPanAnimation.stop();
     _zoomAnimation?.stop();
     _zoomController.value = Matrix4.identity();
   }
@@ -344,10 +431,24 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
       ) +
       12;
 
-  /// Track which page is under the middle of the viewport for the counter.
+  /// Clear selection when the document scrolls, then update the page counter.
   void _onScroll() {
-    if (!_scrollController.hasClients || _totalPages == 0) return;
-    final offset = _scrollController.offset + 100;
+    if (!_scrollController.hasClients) return;
+    final scrollOffset = _scrollController.offset;
+    if (scrollOffset != _lastScrollOffset) {
+      _lastScrollOffset = scrollOffset;
+      _textSelectionController.clear();
+    }
+    _updateCurrentPage();
+  }
+
+  void _updateCurrentPage() {
+    if (!_scrollController.hasClients) return;
+    if (_totalPages == 0) return;
+    final transform = _zoomController.value;
+    final offset =
+        _scrollController.offset +
+        (100 - transform.storage[13]) / transform.getMaxScaleOnAxis();
     double running = 0;
     for (int i = 0; i < _totalPages; i++) {
       running += _pageExtent(i);
@@ -361,8 +462,8 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
   /// Pop back if there is somewhere to return to, otherwise land on Home —
   /// which happens when a PDF intent opened the viewer as the root route.
   void _onBack() {
-    if (_isSelectingText) {
-      _setTextSelectionMode(false);
+    if (_textSelectionController.hasSelection) {
+      _textSelectionController.clear();
       return;
     }
     if (Navigator.of(context).canPop()) {
@@ -403,6 +504,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
   /// than a menu of verbs chosen before the user has seen the document. Once
   /// it is on screen, picking a tool is an informed decision.
   void _showActions() {
+    _textSelectionController.clear();
     final isRoot = !Navigator.of(context).canPop();
     // Read, not watch: this runs from a tap handler rather than from build,
     // and `watch` outside build throws.
@@ -445,16 +547,6 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
                 ),
               ),
               Divider(color: colors.divider, height: 20),
-              if (_totalPages > 0)
-                _action(
-                  ctx,
-                  colors,
-                  Icons.text_fields_rounded,
-                  'Select text',
-                  () {
-                    _setTextSelectionMode(true);
-                  },
-                ),
               _action(ctx, colors, Icons.merge_rounded, 'Merge with…', () {
                 _push(MergePdfScreen(initialPdfPath: widget.pdfPath));
               }),
@@ -579,9 +671,9 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
   Widget build(BuildContext context) {
     _colors = AppColors.of(context);
     return PopScope(
-      canPop: !_isSelectingText,
+      canPop: !_textSelectionController.hasSelection,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop && _isSelectingText) _setTextSelectionMode(false);
+        if (!didPop) _textSelectionController.clear();
       },
       child: Scaffold(
         backgroundColor: _colors.isDark
@@ -601,19 +693,6 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
             color: _colors.textPrimary,
           ),
           actions: [
-            if (_totalPages > 0)
-              IconButton(
-                icon: Icon(
-                  _isSelectingText ? Icons.close : Icons.text_fields_rounded,
-                ),
-                tooltip: _isSelectingText
-                    ? 'Finish selecting text'
-                    : 'Select text',
-                onPressed: () => _setTextSelectionMode(!_isSelectingText),
-                color: _isSelectingText
-                    ? const Color(0xFFE94560)
-                    : _colors.textPrimary,
-              ),
             if (_isZoomed)
               IconButton(
                 icon: const Icon(Icons.zoom_out_map_rounded),
@@ -651,33 +730,9 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
           right: false,
           child: Column(
             children: [
-              if (_isSelectingText)
-                Material(
-                  color: _colors.cardBackground,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 8,
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.touch_app_outlined, size: 18),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'Long-press a word, then drag the handles to select text.',
-                            style: TextStyle(
-                              color: _colors.textSecondary,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
               _approximateBanner(),
               Expanded(child: _buildBody()),
+              const BannerAdWidget(),
             ],
           ),
         ),
@@ -769,20 +824,34 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
       onPointerUp: _onPointerFinished,
       onPointerCancel: _onPointerFinished,
       child: GestureDetector(
+        // Also clear a selection when tapping a different page or its margins.
+        // Handles and the Copy toolbar handle their own taps first.
+        onTap: _textSelectionController.hasSelection
+            ? _textSelectionController.clear
+            : null,
         // Withdrawn during a pinch: a tap recognizer wrapping an
         // InteractiveViewer delays and sometimes swallows the zoom while the
         // arena waits to see whether a second tap is coming
         // (flutter/flutter#58636). With one finger down it is free to work.
-        onDoubleTapDown: _isMultiTouch || _isSelectingText
+        onDoubleTapDown: _isMultiTouch || _textSelectionController.hasSelection
             ? null
             : _onDoubleTap,
         // The handler lives on onDoubleTapDown so the tap position is known;
         // onDoubleTap still has to be present for the recognizer to fire.
-        onDoubleTap: _isMultiTouch || _isSelectingText ? null : () {},
+        onDoubleTap: _isMultiTouch || _textSelectionController.hasSelection
+            ? null
+            : () {},
         child: InteractiveViewer(
           transformationController: _zoomController,
           minScale: 1.0,
           maxScale: 6.0,
+          // Let a pinch move freely around its focal point. One-finger pans
+          // use the list for vertical travel and this transform for horizontal
+          // travel, so zooming never limits reading to one screenful.
+          panAxis: _isMultiTouch ? PanAxis.free : PanAxis.horizontal,
+          onInteractionStart: (_) => _zoomAnimation?.stop(),
+          onInteractionUpdate: _onInteractionUpdate,
+          onInteractionEnd: _onInteractionEnd,
           // Panning is handed to the list until the user actually zooms in;
           // otherwise a plain drag would never scroll the document.
           panEnabled: _isZoomed,
@@ -811,7 +880,6 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
               aspectRatioKnown: _pageRatios.containsKey(index),
               isDark: _colors.isDark,
               zoom: _zoom,
-              selectText: _isSelectingText,
               textSelectionController: _textSelectionController,
               // Recorded without a rebuild: the page resizes itself, and the
               // counter and Go to page read the map when they need it.
@@ -838,7 +906,6 @@ class _PageView extends StatefulWidget {
     required this.zoom,
     required this.onAspectRatio,
     required this.onWarnings,
-    required this.selectText,
     required this.textSelectionController,
   });
 
@@ -858,7 +925,6 @@ class _PageView extends StatefulWidget {
   /// Reports the page's real shape when it had to look it up itself.
   final ValueChanged<double> onAspectRatio;
   final ValueChanged<List<String>> onWarnings;
-  final bool selectText;
   final PdfTextSelectionController textSelectionController;
 
   @override
@@ -882,14 +948,8 @@ class _PageViewState extends State<_PageView> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _render();
-      if (widget.selectText) _loadText();
+      _loadText();
     });
-  }
-
-  @override
-  void didUpdateWidget(_PageView oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.selectText && !oldWidget.selectText) _loadText();
   }
 
   Future<void> _loadText() async {
@@ -920,7 +980,6 @@ class _PageViewState extends State<_PageView> {
   }
 
   Widget _withTextSelection(Widget page) {
-    if (!widget.selectText) return page;
     final layout = _textLayout;
     if (layout != null && layout.hasText) {
       return PdfTextSelectionOverlay(
@@ -930,42 +989,31 @@ class _PageViewState extends State<_PageView> {
         child: page,
       );
     }
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        page,
-        Align(
-          alignment: Alignment.topCenter,
-          child: Material(
-            color: const Color(0xFFF0F0F0),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Flexible(
-                    child: Text(
-                      _loadingText
-                          ? 'Loading selectable text…'
-                          : _textError ??
-                                'No selectable text on this page. Scanned images need OCR.',
-                      style: const TextStyle(
-                        color: Colors.black87,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ),
-                  if (_textError != null)
-                    TextButton(
-                      onPressed: _loadText,
-                      child: const Text('Retry'),
-                    ),
-                ],
-              ),
-            ),
-          ),
+    // Keep the page unobstructed while loading and for image-only scans.
+    // Explain unavailable text only when the reader tries to select it.
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onLongPress: _explainUnavailableText,
+      child: page,
+    );
+  }
+
+  void _explainUnavailableText() {
+    widget.textSelectionController.clear();
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          _loadingText
+              ? 'Text is still loading. Try again in a moment.'
+              : _textError ??
+                    'No selectable text on this page. Scanned images need OCR.',
         ),
-      ],
+        action: _textError == null
+            ? null
+            : SnackBarAction(label: 'Retry', onPressed: _loadText),
+      ),
     );
   }
 
@@ -1008,7 +1056,7 @@ class _PageViewState extends State<_PageView> {
                   password: widget.password,
                 );
       final useCache = target <= PdfRaster.thumbnailSize * 4;
-      final bytes = await PdfRaster.renderPage(
+      final rendered = await PdfRaster.renderPageWithWarnings(
         widget.path,
         widget.pageIndex,
         longEdge: target,
@@ -1017,16 +1065,8 @@ class _PageViewState extends State<_PageView> {
         // evict every thumbnail in the cache.
         useCache: useCache,
       );
-      if (bytes != null) {
-        widget.onWarnings(
-          PdfRaster.warningsFor(
-            widget.path,
-            widget.pageIndex,
-            longEdge: target,
-            password: widget.password,
-          ),
-        );
-      }
+      final bytes = rendered?.bytes;
+      if (rendered != null) widget.onWarnings(rendered.warnings);
       if (!mounted) return;
       if (ratio != null && _aspectRatio == null) widget.onAspectRatio(ratio);
       setState(() {
@@ -1217,8 +1257,8 @@ double pageHeight(double width, double aspectRatio) =>
 /// and looks exactly like "zoom is broken".
 /// Whether the page list should refuse drags right now.
 ///
-/// Two reasons, and they are different in kind. While zoomed, dragging means
-/// pan, not scroll. And from the moment a second finger lands, the list has to
+/// While zoomed, the scale recognizer handles horizontal panning and forwards
+/// vertical movement to the list. When a second finger lands, the list has to
 /// stand down so the pinch is not stolen: `InteractiveViewer`'s scale
 /// recognizer and the list's vertical-drag recognizer compete in the same
 /// gesture arena, and the drag frequently wins on the downward drift that

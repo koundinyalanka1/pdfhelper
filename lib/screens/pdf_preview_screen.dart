@@ -41,16 +41,25 @@ enum PdfPreviewSourceType { merge, convert }
 /// Auto-save the produced PDFs and (optionally) post a completion notification.
 /// Used both by [PdfPreviewScreen._onSave] and by the "Skip Preview" fast path.
 /// Returns the list of saved paths (may be empty if auto-save is off).
+/// [completedFiles] retains successful saves if a later output fails, so a
+/// retry only publishes the remaining outputs. Explicit Save ignores Auto Save.
 Future<List<String>> autoSavePdfs({
   required ThemeProvider themeProvider,
   required List<String> filePaths,
   required PdfPreviewSourceType sourceType,
   required int pageCount,
   String? fileName,
+  bool explicitlySave = false,
+  Map<String, String>? completedFiles,
 }) async {
   final List<String> autoSavedPaths = [];
-  if (themeProvider.autoSave) {
+  if (themeProvider.autoSave || explicitlySave) {
     for (int i = 0; i < filePaths.length; i++) {
+      final previous = completedFiles?[filePaths[i]];
+      if (previous != null) {
+        autoSavedPaths.add(previous);
+        continue;
+      }
       final prefix = sourceType == PdfPreviewSourceType.merge
           ? 'merged_${i + 1}'
           : 'scanned';
@@ -61,12 +70,13 @@ Future<List<String>> autoSavePdfs({
           : filePaths.length > 1
           ? '$fileName ${i + 1}'
           : fileName;
-      final saved = await themeProvider.autoSaveFile(
+      final saved = await themeProvider.saveFile(
         filePaths[i],
         prefix,
         fileName: name,
       );
-      if (saved != null) autoSavedPaths.add(saved);
+      autoSavedPaths.add(saved);
+      completedFiles?[filePaths[i]] = saved;
     }
   }
   if (themeProvider.notifications) {
@@ -86,6 +96,13 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
   bool _isSaving = false;
   int _previewRequest = 0;
   int _currentFileIndex = 0;
+  List<String>? _savedPaths;
+  final Map<String, String> _completedSaves = {};
+  bool _saveAttempted = false;
+
+  List<String> get _availablePaths => _savedPaths?.isNotEmpty == true
+      ? _savedPaths!
+      : [for (final path in widget.filePaths) _completedSaves[path] ?? path];
 
   /// Title used when the file is saved. Seeded from the name the user gave
   /// when they started the operation, and editable right up to Save.
@@ -131,7 +148,7 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
       _currentFileIndex = idx;
     });
     try {
-      final path = widget.filePaths[idx];
+      final path = _availablePaths[idx];
       final aspectRatio = await PdfService.getFirstPageAspectRatio(path);
       final previews = await PdfService.loadPagePreviews(path);
       if (mounted && request == _previewRequest) {
@@ -158,21 +175,29 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
   Future<void> _onSave() async {
     if (_isSaving) return;
     final themeProvider = context.read<ThemeProvider>();
-    setState(() => _isSaving = true);
+    setState(() {
+      _isSaving = true;
+      _saveAttempted = true;
+    });
 
     try {
-      final autoSavedPaths = await autoSavePdfs(
+      final alreadySaved = _savedPaths != null;
+      final autoSavedPaths = _savedPaths ??= await autoSavePdfs(
         themeProvider: themeProvider,
         filePaths: widget.filePaths,
         sourceType: widget.sourceType,
         pageCount: widget.pageCount ?? _previews.length,
         fileName: _fileName,
+        explicitlySave: true,
+        completedFiles: _completedSaves,
       );
 
-      widget.onSaved?.call();
+      if (!alreadySaved) widget.onSaved?.call();
 
       if (mounted) {
-        await _showSuccessDialog(autoSavedPaths.isEmpty ? null : autoSavedPaths);
+        await _showSuccessDialog(
+          autoSavedPaths.isEmpty ? null : autoSavedPaths,
+        );
       }
     } catch (e) {
       if (mounted) {
@@ -186,7 +211,6 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
 
   Future<void> _showSuccessDialog(List<String>? autoSavedPaths) {
     final themeProvider = context.read<ThemeProvider>();
-    final saveLocation = themeProvider.saveLocation;
     final hasAutoSaved = autoSavedPaths != null && autoSavedPaths.isNotEmpty;
     final shareFiles = hasAutoSaved ? autoSavedPaths : widget.filePaths;
     final nav = Navigator.of(context);
@@ -232,7 +256,7 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        'Saved to app storage (PDFHelper/$saveLocation)',
+                        'Saved to ${themeProvider.saveLocationDescription}',
                         style: const TextStyle(
                           color: Color(0xFF4CAF50),
                           fontSize: 12,
@@ -303,102 +327,112 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
 
   void _onBack() {
     HapticFeedback.lightImpact();
-    for (final path in widget.filePaths) {
-      unawaited(File(path).delete().catchError((_) => File(path)));
+    // Dismissing the success dialog must not turn Back into "discard" or
+    // cause the next Save tap to publish the same PDF again.
+    if (!_saveAttempted) {
+      for (final path in widget.filePaths) {
+        unawaited(File(path).delete().catchError((_) => File(path)));
+      }
     }
-    Navigator.pop(context, false);
+    Navigator.pop(context, _savedPaths != null);
   }
 
   @override
   Widget build(BuildContext context) {
     _colors = AppColors.of(context);
-    return Scaffold(
-      backgroundColor: _colors.background,
-      appBar: AppBar(
-        title: Text(
-          widget.filePaths.length > 1
-              ? 'Preview PDF (${_currentFileIndex + 1}/${widget.filePaths.length})'
-              : widget.sourceType == PdfPreviewSourceType.merge
-              ? 'Preview merged PDF'
-              : 'Preview PDF',
-          style: TextStyle(color: _colors.textPrimary),
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.visibility_rounded),
-            onPressed: _isLoading
-                ? null
-                : () {
-                    final path = widget.filePaths[_currentFileIndex];
-                    final name = path.split(RegExp(r'[/\\]')).last;
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) =>
-                            PdfViewerScreen(pdfPath: path, title: name),
-                      ),
-                    );
-                  },
-            color: _colors.textPrimary,
-            tooltip: 'View PDF',
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop && !_isSaving) _onBack();
+      },
+      child: Scaffold(
+        backgroundColor: _colors.background,
+        appBar: AppBar(
+          title: Text(
+            widget.filePaths.length > 1
+                ? 'Preview PDF (${_currentFileIndex + 1}/${widget.filePaths.length})'
+                : widget.sourceType == PdfPreviewSourceType.merge
+                ? 'Preview merged PDF'
+                : 'Preview PDF',
+            style: TextStyle(color: _colors.textPrimary),
           ),
-          if (widget.filePaths.length > 1) ...[
-            if (_currentFileIndex > 0)
-              IconButton(
-                icon: const Icon(Icons.chevron_left),
-                onPressed: _isLoading
-                    ? null
-                    : () => _loadPreviews(_currentFileIndex - 1),
-                color: _colors.textPrimary,
-              ),
-            if (_currentFileIndex < widget.filePaths.length - 1)
-              IconButton(
-                icon: const Icon(Icons.chevron_right),
-                onPressed: _isLoading
-                    ? null
-                    : () => _loadPreviews(_currentFileIndex + 1),
-                color: _colors.textPrimary,
-              ),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.visibility_rounded),
+              onPressed: _isLoading || _isSaving
+                  ? null
+                  : () {
+                      final path = _availablePaths[_currentFileIndex];
+                      final name = path.split(RegExp(r'[/\\]')).last;
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) =>
+                              PdfViewerScreen(pdfPath: path, title: name),
+                        ),
+                      );
+                    },
+              color: _colors.textPrimary,
+              tooltip: 'View PDF',
+            ),
+            if (widget.filePaths.length > 1) ...[
+              if (_currentFileIndex > 0)
+                IconButton(
+                  icon: const Icon(Icons.chevron_left),
+                  onPressed: _isLoading || _isSaving
+                      ? null
+                      : () => _loadPreviews(_currentFileIndex - 1),
+                  color: _colors.textPrimary,
+                ),
+              if (_currentFileIndex < widget.filePaths.length - 1)
+                IconButton(
+                  icon: const Icon(Icons.chevron_right),
+                  onPressed: _isLoading || _isSaving
+                      ? null
+                      : () => _loadPreviews(_currentFileIndex + 1),
+                  color: _colors.textPrimary,
+                ),
+            ],
           ],
-        ],
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: _isSaving ? null : _onBack,
-          color: _colors.textPrimary,
-        ),
-      ),
-      body: Column(
-        children: [
-          Expanded(
-            child: _isLoading
-                ? Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const CircularProgressIndicator(
-                          color: Color(0xFFE94560),
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          'Loading preview...',
-                          style: TextStyle(color: _colors.textSecondary),
-                        ),
-                      ],
-                    ),
-                  )
-                : _previews.isEmpty
-                ? Center(
-                    child: Text(
-                      'No pages to preview',
-                      style: TextStyle(color: _colors.textSecondary),
-                    ),
-                  )
-                : _buildPreviewsGrid(),
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: _isSaving ? null : _onBack,
+            color: _colors.textPrimary,
           ),
-          _buildBottomBar(),
-        ],
+        ),
+        body: Column(
+          children: [
+            Expanded(
+              child: _isLoading
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const CircularProgressIndicator(
+                            color: Color(0xFFE94560),
+                          ),
+                          const SizedBox(height: 16),
+                          Text(
+                            'Loading preview...',
+                            style: TextStyle(color: _colors.textSecondary),
+                          ),
+                        ],
+                      ),
+                    )
+                  : _previews.isEmpty
+                  ? Center(
+                      child: Text(
+                        'No pages to preview',
+                        style: TextStyle(color: _colors.textSecondary),
+                      ),
+                    )
+                  : _buildPreviewsGrid(),
+            ),
+            _buildBottomBar(),
+          ],
+        ),
       ),
     );
   }
@@ -463,7 +497,9 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
           children: [
             if (_fileName != null) ...[
               InkWell(
-                onTap: _isSaving ? null : _renameOutput,
+                onTap: _isSaving || _completedSaves.isNotEmpty
+                    ? null
+                    : _renameOutput,
                 borderRadius: BorderRadius.circular(12),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(

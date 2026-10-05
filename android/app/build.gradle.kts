@@ -11,6 +11,16 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// CI can keep credentials outside the checkout. Never fall back to a debug key
+// for a release artifact; missing credentials must still allow debug builds.
+val releaseKeystorePropertiesFile = rootProject.file(
+    providers.gradleProperty("signingPropertiesFile").orElse("key.properties").get()
+)
+val releaseKeystoreProperties = Properties()
+if (releaseKeystorePropertiesFile.isFile) {
+    FileInputStream(releaseKeystorePropertiesFile).use { releaseKeystoreProperties.load(it) }
+}
+
 android {
     namespace = "com.yourmateapps.pdfhelper"
     // Pinned ahead of flutter.compileSdkVersion (36): permission_handler_android
@@ -41,24 +51,14 @@ kotlin {
 
 android {
 
-    // Release signing is configured only when android/key.properties exists.
-    // Reading the properties unconditionally used to fail *every* build,
-    // debug included, on a fresh clone with "null cannot be cast to
-    // non-null type kotlin.String".
-    val keystorePropertiesFile = rootProject.file("key.properties")
-    val keystoreProperties = Properties()
-    val hasKeystore = keystorePropertiesFile.exists()
-    if (hasKeystore) {
-        FileInputStream(keystorePropertiesFile).use { keystoreProperties.load(it) }
-    }
-
     signingConfigs {
-        if (hasKeystore) {
+        if (releaseKeystorePropertiesFile.isFile) {
             create("release") {
-                keyAlias = keystoreProperties.getProperty("keyAlias")
-                keyPassword = keystoreProperties.getProperty("keyPassword")
-                storeFile = file(keystoreProperties.getProperty("storeFile"))
-                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = releaseKeystoreProperties.getProperty("keyAlias")
+                keyPassword = releaseKeystoreProperties.getProperty("keyPassword")
+                storeFile = releaseKeystoreProperties.getProperty("storeFile")
+                    ?.takeIf { it.isNotBlank() }?.let { file(it) }
+                storePassword = releaseKeystoreProperties.getProperty("storePassword")
             }
         }
     }
@@ -72,6 +72,9 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        // The exporter checks use Android's built-in instrumentation API;
+        // there are no additional test dependencies or release permissions.
+        testInstrumentationRunner = "com.yourmateapps.pdfhelper.PublicPdfExporterInstrumentation"
         // Required for flutter_local_notifications
         multiDexEnabled = true
     }
@@ -88,18 +91,7 @@ android {
         }
 
         release {
-            // Without key.properties this falls through to the debug key, so
-            // `flutter build apk --release` still produces an installable
-            // (but unpublishable) APK instead of failing.
-            signingConfig = if (hasKeystore) {
-                signingConfigs.getByName("release")
-            } else {
-                logger.warn(
-                    "android/key.properties not found — signing the release " +
-                        "build with the debug key. Do not publish this artifact."
-                )
-                signingConfigs.getByName("debug")
-            }
+            signingConfig = signingConfigs.findByName("release")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -137,6 +129,26 @@ val verifyPdfCore by tasks.registering {
     }
 }
 tasks.named("preBuild").configure { dependsOn(verifyPdfCore) }
+
+val verifyReleaseSigning by tasks.registering {
+    doLast {
+        check(releaseKeystorePropertiesFile.isFile) {
+            "Release signing is required. Provide android/key.properties or " +
+                "-PsigningPropertiesFile=/path/to/key.properties. Use a debug build for local testing."
+        }
+        for (name in listOf("keyAlias", "keyPassword", "storeFile", "storePassword")) {
+            check(!releaseKeystoreProperties.getProperty(name).isNullOrBlank()) {
+                "Release signing configuration is missing $name."
+            }
+        }
+        check(file(releaseKeystoreProperties.getProperty("storeFile")).isFile) {
+            "Release signing keystore does not exist. Check storeFile in the signing configuration."
+        }
+    }
+}
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    dependsOn(verifyReleaseSigning)
+}
 
 // Local validation builds do not contact Crashlytics to publish symbols.
 // Opt in from the release pipeline with -PuploadCrashlytics=true.

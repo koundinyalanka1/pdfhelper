@@ -94,14 +94,14 @@ void main() {
     intents.add(const Intent(action: 'android.intent.action.VIEW'));
   }
 
-  void expectAdFreeViewer() {
+  void expectViewerWithBanner() {
     expect(find.byType(PdfViewerScreen), findsOneWidget);
     expect(
       find.descendant(
         of: find.byType(PdfViewerScreen, skipOffstage: false),
         matching: find.byType(BannerAdWidget, skipOffstage: false),
       ),
-      findsNothing,
+      findsOneWidget,
     );
   }
 
@@ -112,8 +112,8 @@ void main() {
     await tester.pumpWidget(PDFHelperApp(initialPdfPath: path));
     await frames(tester);
 
-    expectAdFreeViewer();
-    expect(find.byType(BannerAdWidget, skipOffstage: false), findsNothing);
+    expectViewerWithBanner();
+    expect(find.byType(BannerAdWidget, skipOffstage: false), findsOneWidget);
     expect(find.byType(SplashScreen, skipOffstage: false), findsNothing);
     expect(find.byType(HomeScreen, skipOffstage: false), findsNothing);
     expect(navigatorKey.currentState!.canPop(), isFalse);
@@ -128,14 +128,14 @@ void main() {
 
     open(pdf('During startup'));
     await frames(tester);
-    expectAdFreeViewer();
+    expectViewerWithBanner();
     expect(find.byType(SplashScreen, skipOffstage: false), findsNothing);
     expect(find.byType(HomeScreen, skipOffstage: false), findsNothing);
     expect(key.currentState!.canPop(), isFalse);
 
     await tester.pump(const Duration(seconds: 2));
     await tester.pump(const Duration(seconds: 2));
-    expectAdFreeViewer();
+    expectViewerWithBanner();
     expect(find.byType(HomeScreen, skipOffstage: false), findsNothing);
   });
 
@@ -145,7 +145,7 @@ void main() {
     pendingPath = pdf('Pending launch');
     await tester.pumpWidget(app(splash: true));
     await frames(tester);
-    expectAdFreeViewer();
+    expectViewerWithBanner();
     expect(find.byType(SplashScreen, skipOffstage: false), findsNothing);
     await tester.pump(const Duration(seconds: 2));
   });
@@ -164,7 +164,7 @@ void main() {
       find.byType(PdfViewerScreen, skipOffstage: false),
     );
     expect(viewers.map((viewer) => viewer.pdfPath), [second]);
-    expectAdFreeViewer();
+    expectViewerWithBanner();
     expect(key.currentState!.canPop(), isFalse);
     await tester.pump(const Duration(seconds: 2));
   });
@@ -177,7 +177,7 @@ void main() {
       open(pdf('Warm launch'));
       await frames(tester);
 
-      expectAdFreeViewer();
+      expectViewerWithBanner();
       key.currentState!.pop();
       await tester.pump(const Duration(seconds: 1));
       await tester.pump();
@@ -194,7 +194,7 @@ void main() {
 
     open(pdf('Recovery'));
     await frames(tester);
-    expectAdFreeViewer();
+    expectViewerWithBanner();
     expect(tester.takeException(), isNull);
   });
 }

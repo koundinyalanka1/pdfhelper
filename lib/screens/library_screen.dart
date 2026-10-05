@@ -18,6 +18,7 @@ import '../services/recent_files_service.dart';
 import '../utils/error_logger.dart';
 import '../utils/format_utils.dart';
 import '../utils/file_naming.dart';
+import '../widgets/pdf_scan_dialog.dart';
 import '../widgets/storage_access_dialog.dart';
 import 'ai_screen.dart';
 import 'extract_text_screen.dart';
@@ -99,6 +100,11 @@ class _LibraryScreenState extends State<LibraryScreen>
   bool _isRequestingAccess = false;
   bool _hasScanned = false;
   bool _accessPromptShown = false;
+
+  /// [_access] holds a real reading rather than its initial default, so a
+  /// change to full access means a new grant, not a cold start that had it.
+  bool _accessChecked = false;
+  bool _searchDialogOpen = false;
 
   final TextEditingController _searchController = TextEditingController();
 
@@ -220,11 +226,23 @@ class _LibraryScreenState extends State<LibraryScreen>
       return;
     }
     setState(() => _isScanning = true);
+    // Set when this sweep is the first to see a new storage grant, so it is
+    // shown in a dialog. Resolves to the number found, or null on failure.
+    Completer<int?>? shown;
     try {
       await _loadUserLists();
       final access = await PdfLibraryService.access();
       if (!mounted) return;
+      final justGranted =
+          _accessChecked &&
+          _access == StorageAccess.appOnly &&
+          access == StorageAccess.full;
+      _accessChecked = true;
       setState(() => _access = access);
+      if (justGranted) {
+        shown = Completer<int?>();
+        unawaited(_showSearchProgress(shown.future));
+      }
       if (prune) {
         final alive = await PdfLibraryService.prune(_entries);
         if (mounted && alive.length != _entries.length) {
@@ -232,6 +250,7 @@ class _LibraryScreenState extends State<LibraryScreen>
         }
       }
       final found = await PdfLibraryService.scan();
+      await _loadUserLists();
       // Intent/picker copies belong to Recent or Starred, not the device
       // library. Keep them separate so viewing a file never imports its
       // temporary copy into All PDFs or Created.
@@ -248,11 +267,13 @@ class _LibraryScreenState extends State<LibraryScreen>
         _referenceEntries = extras;
         _access = access;
       });
+      shown?.complete(found.length);
     } catch (e) {
       // A failed sweep leaves whatever was already listed on screen. The one
       // outcome that must not happen is a spinner that never stops.
       logError('LibraryScreen._refresh', e);
-      if (mounted) {
+      // An open search dialog reports the failure itself.
+      if (mounted && !_searchDialogOpen) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
@@ -262,6 +283,7 @@ class _LibraryScreenState extends State<LibraryScreen>
         );
       }
     } finally {
+      if (shown != null && !shown.isCompleted) shown.complete(null);
       if (mounted) {
         setState(() {
           _isScanning = false;
@@ -275,6 +297,43 @@ class _LibraryScreenState extends State<LibraryScreen>
         }
       }
     }
+  }
+
+  /// Show the sweep that follows a new storage grant in a dialog.
+  ///
+  /// Routine re-sweeps — on resume, on returning to the tab — stay a thin bar
+  /// under the filters; a dialog each time the app comes back would be an
+  /// interruption. This one is different: the user has just granted access
+  /// and is waiting to see what it finds.
+  Future<void> _showSearchProgress(Future<int?> found) async {
+    // A kept-alive tab, or one under a pushed route, must not put a dialog
+    // over whatever the user is actually looking at.
+    if (!widget.isActive || !(ModalRoute.of(context)?.isCurrent ?? false)) {
+      return;
+    }
+    var finished = false;
+    unawaited(found.then((_) => finished = true));
+    _searchDialogOpen = true;
+    try {
+      await showPdfScanDialog(context, found: found);
+    } finally {
+      _searchDialogOpen = false;
+    }
+    final closedOnResult = finished;
+    final count = await found;
+    if (!mounted || count == null) return;
+    if (closedOnResult) {
+      // "View PDFs" means the whole library, whichever list was showing.
+      if (count > 0) setState(() => _filter = LibraryFilter.all);
+      return;
+    }
+    // Sent to the background: say how it ended once it has. A failure is
+    // reported by [_refresh], now that the dialog is not there to show it.
+    _snack(switch (count) {
+      0 => 'No PDFs found on this device',
+      1 => 'Found 1 PDF',
+      _ => 'Found ${formatCount(count)} PDFs',
+    });
   }
 
   // ------------------------------------------------------------- filtering
@@ -315,11 +374,11 @@ class _LibraryScreenState extends State<LibraryScreen>
     setState(() => _isRequestingAccess = true);
     final granted = await PdfLibraryService.requestAccess();
     if (!mounted) return;
-    setState(() {
-      _access = granted;
-      _isRequestingAccess = false;
-    });
+    setState(() => _isRequestingAccess = false);
     if (granted == StorageAccess.full) {
+      // Leave [_access] for the sweep to update: seeing the change itself is
+      // how it knows to show this search in a dialog. Returning from Settings
+      // can start that sweep first, through the resume refresh.
       await _refresh();
       return;
     }
@@ -451,22 +510,17 @@ class _LibraryScreenState extends State<LibraryScreen>
     // Path separators in a file name would silently move the file somewhere
     // else, so they are stripped rather than rejected.
     final safe = sanitizeFileName(stripPdfExtension(trimmed));
-    final directory = entry.path.substring(0, entry.path.lastIndexOf('/'));
-    final target = '$directory/$safe.pdf';
-    if (target == entry.path) return;
-
     try {
-      if (await File(target).exists()) {
-        if (mounted) _snack('A file with that name already exists');
-        return;
+      final result = await PdfLibraryService.renameDocument(
+        entry.path,
+        '$safe.pdf',
+      );
+      for (final path in result.renamedPaths.keys) {
+        PdfRaster.invalidate(path);
       }
-      await File(entry.path).rename(target);
-      PdfRaster.invalidate(entry.path);
-      PdfLibraryService.forget(entry.path);
-      await RecentFilesService.rename(entry.path, target);
       await _loadUserLists();
       await _refresh();
-      if (mounted) _snack('Renamed to $safe.pdf');
+      if (mounted) _snack(result.warning ?? 'Renamed to $safe.pdf');
     } catch (e) {
       if (mounted) _snack('Could not rename: $e');
     }
@@ -482,7 +536,8 @@ class _LibraryScreenState extends State<LibraryScreen>
           style: TextStyle(color: _colors.textPrimary),
         ),
         content: Text(
-          '${entry.name} will be permanently deleted from this device.',
+          'Delete ${entry.name} and its linked working and public copies? '
+          'Other copies made outside this app are not included. This cannot be undone.',
           style: TextStyle(color: _colors.textSecondary),
         ),
         actions: [
@@ -503,20 +558,13 @@ class _LibraryScreenState extends State<LibraryScreen>
     );
     if (confirmed != true) return;
     try {
-      await File(entry.path).delete();
-      PdfRaster.invalidate(entry.path);
-      PdfLibraryService.forget(entry.path);
-      await RecentFilesService.forget(entry.path);
-      if (!mounted) return;
-      setState(() {
-        _entries = _entries.where((e) => e.path != entry.path).toList();
-        _referenceEntries = _referenceEntries
-            .where((e) => e.path != entry.path)
-            .toList();
-        _starred.remove(entry.path);
-        _recentOrder = _recentOrder.where((p) => p != entry.path).toList();
-      });
-      _snack('${entry.name} deleted');
+      final result = await PdfLibraryService.deleteDocument(entry.path);
+      for (final path in result.removedPaths) {
+        PdfRaster.invalidate(path);
+      }
+      await _loadUserLists();
+      await _refresh(prune: true);
+      if (mounted) _snack(result.warning ?? '${entry.name} deleted');
     } catch (e) {
       if (mounted) _snack('Could not delete: $e');
     }
@@ -779,7 +827,7 @@ class _LibraryScreenState extends State<LibraryScreen>
       body: Column(
         children: [
           _buildFilterBar(),
-          if (_isScanning) _buildScanIndicator(),
+          _buildScanIndicator(),
           if (_access == StorageAccess.appOnly && !_isScanning)
             _buildAccessBanner(),
           Expanded(
@@ -913,25 +961,20 @@ class _LibraryScreenState extends State<LibraryScreen>
     );
   }
 
+  /// A routine re-sweep, as a thin bar in a slot that is always reserved so
+  /// the list never jumps when one starts or ends. A new grant's first sweep
+  /// is shown in a dialog instead — see [_showSearchProgress].
   Widget _buildScanIndicator() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: Row(
-        children: [
-          const SizedBox(
-            width: 13,
-            height: 13,
-            child: CircularProgressIndicator(strokeWidth: 2, color: _accent),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              'Looking for PDFs on this device…',
-              style: TextStyle(color: _colors.textTertiary, fontSize: 12),
-            ),
-          ),
-        ],
-      ),
+    return SizedBox(
+      height: 2,
+      child: _isScanning
+          ? LinearProgressIndicator(
+              minHeight: 2,
+              color: _accent,
+              backgroundColor: _accent.withValues(alpha: 0.12),
+              semanticsLabel: 'Looking for PDFs',
+            )
+          : null,
     );
   }
 

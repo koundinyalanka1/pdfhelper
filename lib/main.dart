@@ -9,6 +9,7 @@ import 'services/firebase_service.dart';
 import 'services/intent_service.dart';
 import 'services/notification_service.dart';
 import 'services/pdf_core_service.dart';
+import 'services/scan_route_observer.dart';
 import 'widgets/pdf_intent_listener.dart';
 import 'utils/format_utils.dart';
 
@@ -58,6 +59,7 @@ class PDFHelperApp extends StatelessWidget {
             navigatorKey: navigatorKey,
             child: MaterialApp(
               navigatorKey: navigatorKey,
+              navigatorObservers: [scanRouteObserver],
               title: 'PDF Helper',
               debugShowCheckedModeBanner: false,
               theme: themeProvider.lightTheme,

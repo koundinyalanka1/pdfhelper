@@ -8,6 +8,7 @@ import 'package:pdfhelper/config/features.dart';
 import 'package:pdfhelper/providers/theme_provider.dart';
 import 'package:pdfhelper/screens/library_screen.dart';
 import 'package:pdfhelper/services/pdf_library_service.dart';
+import 'package:pdfhelper/services/public_pdf_save_service.dart';
 import 'package:pdfhelper/services/recent_files_service.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -24,6 +25,7 @@ void main() {
     root = Directory.systemTemp.createTempSync('library_screen_test');
     paths = FakePathProvider.install(root);
     SharedPreferences.setMockInitialValues({});
+    PublicPdfSaveService.resetForTesting();
     RecentFilesService.resetCacheForTesting();
     PdfLibraryService.resetForTesting();
   });

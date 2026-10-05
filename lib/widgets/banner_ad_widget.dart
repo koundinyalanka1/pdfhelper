@@ -5,7 +5,7 @@ import 'package:google_mobile_ads/google_mobile_ads.dart';
 
 import '../services/ads_service.dart';
 
-/// The app's single, compact home banner. It never expands beyond 320 × 50,
+/// A compact bottom banner for the home screen and viewer. It never expands beyond 320 × 50,
 /// and takes no space until an ad is available and the window can fit it.
 class BannerAdWidget extends StatefulWidget {
   const BannerAdWidget({super.key});

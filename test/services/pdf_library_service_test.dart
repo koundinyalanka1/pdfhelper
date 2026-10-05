@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pdfhelper/services/pdf_library_service.dart';
+import 'package:pdfhelper/services/recent_files_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../support/fake_path_provider.dart';
 
@@ -20,6 +22,8 @@ void main() {
   late Directory root;
 
   setUp(() {
+    SharedPreferences.setMockInitialValues({});
+    RecentFilesService.resetCacheForTesting();
     root = Directory.systemTemp.createTempSync('pdf_library_test');
     // Static sweep state is process-wide; without this a later test would
     // read the previous test's results out of memory.
@@ -33,6 +37,21 @@ void main() {
   });
 
   group('walk', () {
+    test('reports final counts of folders searched and PDFs found', () {
+      _pdf('${root.path}/top.pdf');
+      _pdf('${root.path}/a/one.pdf');
+      _pdf('${root.path}/a/b/two.pdf');
+      Directory('${root.path}/empty').createSync();
+      final reports = <(int, int)>[];
+
+      PdfLibraryService.walkForTesting([
+        root.path,
+      ], onProgress: (folders, pdfs) => reports.add((folders, pdfs)));
+
+      // root, a, a/b and empty: the last report is always the finished walk.
+      expect(reports.last, (4, 3));
+    });
+
     test('finds PDFs regardless of extension case', () {
       _pdf('${root.path}/lower.pdf');
       _pdf('${root.path}/UPPER.PDF');
@@ -372,6 +391,21 @@ void main() {
         isTrue,
         reason: 'a completed sweep should be readable on the next cold start',
       );
+    });
+
+    test('publishes progress while sweeping and clears it after', () async {
+      final fake = FakePathProvider.install(root);
+      _pdf('${fake.documents.path}/one.pdf');
+      final seen = <PdfScanProgress?>[];
+      void record() => seen.add(PdfLibraryService.progress.value);
+      PdfLibraryService.progress.addListener(record);
+      addTearDown(() => PdfLibraryService.progress.removeListener(record));
+
+      expect(PdfLibraryService.progress.value, isNull);
+      await PdfLibraryService.scan();
+
+      expect(seen.first, isNotNull, reason: 'a sweep announces itself');
+      expect(PdfLibraryService.progress.value, isNull);
     });
 
     test('cached() returns the previous sweep', () async {

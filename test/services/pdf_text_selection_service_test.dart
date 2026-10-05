@@ -5,6 +5,8 @@ import 'package:flutter_pdf_core/flutter_pdf_core.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pdfhelper/services/pdf_text_selection_service.dart';
 
+import '../support/text_pdf_fixture.dart';
+
 void main() {
   test(
     'negative viewer page indexes fail before native library lookup',
@@ -18,7 +20,13 @@ void main() {
 
   final library = Platform.environment['PDF_CORE_LIB_PATH'];
   if (library == null || !File(library).existsSync()) return;
-  const fixture = 'packages/flutter_pdf_core/rust/fixtures/two_pages.pdf';
+  late Directory root;
+  late String fixture;
+  setUp(() {
+    root = Directory.systemTemp.createTempSync('pdf_text_selection');
+    fixture = writeTextPdfFixture(root, ['Hello world', 'Second page']).path;
+  });
+  tearDown(() => root.deleteSync(recursive: true));
   final supportsSelection = DynamicLibrary.open(
     library,
   ).providesSymbol('pdf_page_text_layout_json');
@@ -54,6 +62,7 @@ void main() {
           page: pageIndex + 1,
         );
         final size = await PdfCore.pageSizeAsync(fixture, pageIndex);
+        expect(layout.text, pageIndex == 0 ? 'Hello world' : 'Second page');
         expect(layout.text, native.text);
         expect(layout.glyphs.length, native.glyphs.length);
         expect(layout.hasText, true);
@@ -82,6 +91,7 @@ void main() {
           password: 'correct',
         );
         expect(layout.hasText, true);
+        expect(layout.text, 'Hello world');
         await expectLater(
           PdfTextSelectionService.load(protected, 0, password: 'wrong'),
           throwsA(isA<PdfException>()),

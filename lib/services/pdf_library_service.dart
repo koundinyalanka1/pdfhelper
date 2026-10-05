@@ -9,6 +9,8 @@ import 'package:path_provider/path_provider.dart';
 
 import '../utils/error_logger.dart';
 import 'android_storage_service.dart';
+import 'public_pdf_save_service.dart';
+import 'recent_files_service.dart';
 
 /// How much of the device the app can actually see.
 ///
@@ -83,6 +85,20 @@ class PdfFileEntry {
   }
 }
 
+/// How far the sweep in progress has got.
+///
+/// The walk cannot know how many folders remain until it reaches them, so
+/// this is a running count rather than a fraction.
+class PdfScanProgress {
+  const PdfScanProgress({required this.folders, required this.pdfs});
+
+  /// Directories listed so far.
+  final int folders;
+
+  /// PDFs found so far.
+  final int pdfs;
+}
+
 /// Finds every PDF the app is allowed to read, the way a document reader does.
 ///
 /// The walk runs on a background isolate — a full sweep of shared storage
@@ -103,8 +119,13 @@ class PdfLibraryService {
   /// waits for it to land.
   static Future<void> _cacheWrite = Future<void>.value();
 
+  static final ValueNotifier<PdfScanProgress?> _progress = ValueNotifier(null);
+
   /// Last completed scan, if the Files tab has already run one this session.
   static List<PdfFileEntry>? get lastResult => _memory;
+
+  /// Running counts for the sweep in progress; null when none is running.
+  static ValueListenable<PdfScanProgress?> get progress => _progress;
 
   // --------------------------------------------------------------- access
 
@@ -154,18 +175,46 @@ class PdfLibraryService {
   }
 
   static Future<List<PdfFileEntry>> _scan() async {
-    final appRoots = await _appRoots();
-    final sharedRoots = await _sharedRoots();
-    final request = _ScanRequest(
-      sharedRoots: sharedRoots,
-      appRoots: appRoots,
-      excludedRoots: await _temporaryRoots(),
-    );
+    final updates = ReceivePort();
+    updates.listen((message) {
+      if (message case [final int folders, final int pdfs]) {
+        _progress.value = PdfScanProgress(folders: folders, pdfs: pdfs);
+      }
+    });
+    _progress.value = const PdfScanProgress(folders: 0, pdfs: 0);
 
-    // Scan to completion on the worker. Returning a time/file/depth-limited
-    // prefix and caching it as a complete library silently lost documents.
-    // Let failures reach the screen, which retains its previous list.
-    final found = await Isolate.run(() => _walk(request));
+    final List<PdfFileEntry> found;
+    try {
+      final appRoots = await _appRoots();
+      final sharedRoots = await _sharedRoots();
+      final request = _ScanRequest(
+        sharedRoots: sharedRoots,
+        appRoots: appRoots,
+        excludedRoots: await _temporaryRoots(),
+      );
+
+      // Scan to completion on the worker. Returning a time/file/depth-limited
+      // prefix and caching it as a complete library silently lost documents.
+      // Let failures reach the screen, which retains its previous list.
+      final scanned = await _walkInBackground(request, updates.sendPort);
+      // A public export and its local rendering copy are one document. Keep
+      // the working copy visible until the public file is actually found,
+      // including when storage access was denied or the export was moved.
+      final documents = await PublicPdfSaveService.documents();
+      found = reconcileDocuments(scanned, documents);
+      // Storage permission changes can switch the visible alias. Stars and
+      // recents follow the logical document rather than the previous path.
+      for (final alias in documentAliases(found, documents).entries) {
+        if (alias.key != alias.value) {
+          await RecentFilesService.rename(alias.key, alias.value);
+        }
+      }
+    } finally {
+      // Close first so an update still in flight cannot make a finished
+      // sweep look as if it were running again.
+      updates.close();
+      _progress.value = null;
+    }
 
     found.sort((a, b) => b.modifiedMs.compareTo(a.modifiedMs));
     _memory = found;
@@ -173,6 +222,101 @@ class PdfLibraryService {
     unawaited(_cacheWrite);
     return found;
   }
+
+  @visibleForTesting
+  static List<PdfFileEntry> reconcilePublicExports(
+    List<PdfFileEntry> files,
+    Map<String, String> exports,
+  ) => reconcileDocuments(files, [
+    for (final entry in exports.entries)
+      PdfDocumentRecord(
+        id: entry.key,
+        workingPath: entry.key,
+        copies: [PublicPdfCopy(path: entry.value)],
+      ),
+  ]);
+
+  static Map<String, String> documentAliases(
+    List<PdfFileEntry> files,
+    List<PdfDocumentRecord> documents,
+  ) {
+    final visible = files.map((entry) => entry.path).toSet();
+    final aliases = <String, String>{};
+    for (final document in documents) {
+      final preferred = [
+        ...document.copies.reversed.map((copy) => copy.path),
+        document.workingPath,
+      ].where(visible.contains).firstOrNull;
+      if (preferred != null) {
+        for (final path in document.paths) {
+          aliases[path] = preferred;
+        }
+      }
+    }
+    return aliases;
+  }
+
+  static List<PdfFileEntry> reconcileDocuments(
+    List<PdfFileEntry> files,
+    List<PdfDocumentRecord> documents,
+  ) {
+    final aliases = documentAliases(files, documents);
+    return [
+      for (final entry in files)
+        if (!aliases.containsKey(entry.path) ||
+            aliases[entry.path] == entry.path)
+          if (aliases.containsKey(entry.path))
+            PdfFileEntry(
+              path: entry.path,
+              name: entry.name,
+              sizeBytes: entry.sizeBytes,
+              modifiedMs: entry.modifiedMs,
+              folder: entry.folder,
+              isAppOwned: true,
+            )
+          else
+            entry,
+    ];
+  }
+
+  static Future<PdfDocumentMutation> deleteDocument(String path) async =>
+      _applyMutation(await PublicPdfSaveService.deleteDocument(path));
+
+  static Future<PdfDocumentMutation> renameDocument(
+    String path,
+    String name,
+  ) async =>
+      _applyMutation(await PublicPdfSaveService.renameDocument(path, name));
+
+  static Future<PdfDocumentMutation> _applyMutation(
+    PdfDocumentMutation result,
+  ) async {
+    for (final rename in result.renamedPaths.entries) {
+      forget(rename.key);
+      await RecentFilesService.rename(rename.key, rename.value);
+    }
+    for (final path in result.removedPaths) {
+      forget(path);
+      if (result.remainingPath case final remaining?) {
+        await RecentFilesService.rename(path, remaining);
+      } else {
+        await RecentFilesService.forget(path);
+      }
+    }
+    return result;
+  }
+
+  /// Kept apart from [_scan] so the isolate's closure can only capture
+  /// sendable values, never the [ReceivePort] beside them.
+  static Future<List<PdfFileEntry>> _walkInBackground(
+    _ScanRequest request,
+    SendPort updates,
+  ) => Isolate.run(
+    () => _walk(
+      request,
+      onProgress: (folders, pdfs) => updates.send([folders, pdfs]),
+    ),
+  );
 
   /// The previous scan, read from disk. Returns an empty list when there
   /// isn't one — this is a warm start, never an error path.
@@ -219,12 +363,14 @@ class PdfLibraryService {
     List<String> roots, {
     List<String> appRoots = const [],
     List<String> excludedRoots = const [],
+    void Function(int folders, int pdfs)? onProgress,
   }) => _walk(
     _ScanRequest(
       sharedRoots: roots,
       appRoots: appRoots,
       excludedRoots: excludedRoots,
     ),
+    onProgress: onProgress,
   );
 
   /// Picker and intent copies are temporary, even when external app cache
@@ -401,12 +547,23 @@ String _folderLabel(String path) {
   return folder.isEmpty ? '/' : folder;
 }
 
+/// How often the sweep reports its running counts: often enough to read as
+/// live, rarely enough not to flood the UI isolate with messages.
+const Duration _progressInterval = Duration(milliseconds: 100);
+
 /// Breadth-first sweep. Runs on a background isolate.
 ///
 /// The iterative queue handles deep trees without recursion. No arbitrary
 /// file count, depth or time limit: every accessible branch is visited.
-List<PdfFileEntry> _walk(_ScanRequest request) {
+/// [onProgress] receives running counts at most every [_progressInterval],
+/// and always once more with the final counts.
+List<PdfFileEntry> _walk(
+  _ScanRequest request, {
+  void Function(int folders, int pdfs)? onProgress,
+}) {
   final results = <PdfFileEntry>[];
+  var folders = 0;
+  final sinceReport = Stopwatch()..start();
   final seenFiles = <String>{};
   final seenDirs = <String>{};
   final queue = Queue<_PendingDirectory>();
@@ -424,6 +581,10 @@ List<PdfFileEntry> _walk(_ScanRequest request) {
   }
 
   while (queue.isNotEmpty) {
+    if (onProgress != null && sinceReport.elapsed >= _progressInterval) {
+      onProgress(folders, results.length);
+      sinceReport.reset();
+    }
     final current = queue.removeFirst();
     List<FileSystemEntity> children;
     try {
@@ -433,6 +594,7 @@ List<PdfFileEntry> _walk(_ScanRequest request) {
       // branch must never abort the sweep.
       continue;
     }
+    folders++;
 
     for (final child in children) {
       final path = child.path;
@@ -469,5 +631,6 @@ List<PdfFileEntry> _walk(_ScanRequest request) {
     }
   }
 
+  onProgress?.call(folders, results.length);
   return results;
 }

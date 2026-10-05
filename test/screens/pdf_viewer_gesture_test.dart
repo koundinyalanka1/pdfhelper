@@ -117,8 +117,7 @@ void main() {
     await flush(tester);
   });
 
-  testWidgets('lifting back to one finger restores scrolling',
-      (tester) async {
+  testWidgets('lifting back to one finger restores scrolling', (tester) async {
     await open(tester);
 
     final first = await tester.startGesture(const Offset(180, 400));
@@ -187,6 +186,155 @@ void main() {
     await b.up();
     await flush(tester);
   });
+
+  testWidgets('zoomed reading reaches the last page and returns to the first', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(400, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await open(tester);
+
+    final list = find.byType(ListView);
+    final viewer = find.byType(InteractiveViewer);
+    final scroll = tester.widget<ListView>(list).controller!;
+    final zoom = tester
+        .widget<InteractiveViewer>(viewer)
+        .transformationController!;
+    zoom.value = doubleTapZoomTarget(
+      isZoomed: false,
+      focalPoint: const Offset(160, 300),
+    );
+    await tester.pump();
+    final horizontalOffset = zoom.value.storage[12];
+    final viewport = tester.getRect(viewer);
+
+    for (var i = 0; i < 22; i++) {
+      await tester.dragFrom(
+        Offset(viewport.center.dx, viewport.bottom - 60),
+        const Offset(0, -500),
+      );
+      await tester.pump(const Duration(milliseconds: 400));
+    }
+
+    expect(scroll.offset, closeTo(scroll.position.maxScrollExtent, 1));
+    expect(find.text('6 / 6'), findsOneWidget);
+    final lastPage = find.byKey(ValueKey('${pdf.path}#5'));
+    expect(lastPage, findsOneWidget);
+    expect(
+      tester.getBottomRight(lastPage).dy,
+      lessThanOrEqualTo(viewport.bottom),
+    );
+    expect(zoom.value.getMaxScaleOnAxis(), closeTo(2.5, 0.001));
+    expect(zoom.value.storage[12], closeTo(horizontalOffset, 0.001));
+
+    for (var i = 0; i < 22; i++) {
+      await tester.dragFrom(
+        Offset(viewport.center.dx, viewport.top + 60),
+        const Offset(0, 500),
+      );
+      await tester.pump(const Duration(milliseconds: 400));
+    }
+
+    expect(scroll.offset, closeTo(0, 1));
+    expect(find.text('1 / 6'), findsOneWidget);
+    expect(zoom.value.storage[13], closeTo(0, 1));
+    expect(zoom.value.getMaxScaleOnAxis(), closeTo(2.5, 0.001));
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await flush(tester);
+  });
+
+  testWidgets('zoomed fling continues until a new touch stops it', (
+    tester,
+  ) async {
+    await open(tester);
+    final viewer = find.byType(InteractiveViewer);
+    final scroll = tester.widget<ListView>(find.byType(ListView)).controller!;
+    final zoom = tester
+        .widget<InteractiveViewer>(viewer)
+        .transformationController!;
+    zoom.value = doubleTapZoomTarget(
+      isZoomed: false,
+      focalPoint: const Offset(200, 240),
+    );
+    await tester.pump();
+
+    await tester.flingFrom(
+      tester.getCenter(viewer) + const Offset(0, 100),
+      const Offset(0, -180),
+      1800,
+    );
+    final releasedAt = scroll.offset;
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 120));
+    expect(scroll.offset, greaterThan(releasedAt + 20));
+
+    final finger = await tester.startGesture(tester.getCenter(viewer));
+    await tester.pump();
+    final stoppedAt = scroll.offset;
+    await tester.pump(const Duration(milliseconds: 160));
+    expect(scroll.offset, closeTo(stoppedAt, 0.01));
+    await finger.cancel();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(scroll.offset, closeTo(stoppedAt, 0.01));
+    expect(zoom.value.getMaxScaleOnAxis(), closeTo(2.5, 0.001));
+    await tester.pumpWidget(const SizedBox.shrink());
+    await flush(tester);
+  });
+
+  testWidgets('horizontal pan and focal pinch work after zoomed scrolling', (
+    tester,
+  ) async {
+    await open(tester);
+    final viewer = find.byType(InteractiveViewer);
+    final scroll = tester.widget<ListView>(find.byType(ListView)).controller!;
+    final zoom = tester
+        .widget<InteractiveViewer>(viewer)
+        .transformationController!;
+    zoom.value = doubleTapZoomTarget(
+      isZoomed: false,
+      focalPoint: const Offset(200, 240),
+    );
+    await tester.pump();
+    await tester.dragFrom(tester.getCenter(viewer), const Offset(0, -300));
+    await flush(tester);
+    expect(scroll.offset, greaterThan(50));
+    final scrolledAt = scroll.offset;
+    final oldX = zoom.value.storage[12];
+    await tester.dragFrom(tester.getCenter(viewer), const Offset(-120, 0));
+    await flush(tester);
+    expect(zoom.value.storage[12], lessThan(oldX - 50));
+    expect(scroll.offset, closeTo(scrolledAt, 0.01));
+
+    final centre = tester.getCenter(viewer);
+    final a = await tester.startGesture(centre - const Offset(60, 0));
+    final b = await tester.startGesture(centre + const Offset(60, 0));
+    await tester.pump();
+    // Establish the pinch, then check that subsequent scaling keeps the same
+    // document point at its centre even though the list is already scrolled.
+    await a.moveBy(const Offset(-12, 0));
+    await b.moveBy(const Offset(12, 0));
+    await tester.pump(const Duration(milliseconds: 16));
+    final localY = centre.dy - tester.getTopLeft(viewer).dy;
+    double focalDocumentY() =>
+        scroll.offset +
+        (localY - zoom.value.storage[13]) / zoom.value.getMaxScaleOnAxis();
+    final focalBefore = focalDocumentY();
+    final scaleBefore = zoom.value.getMaxScaleOnAxis();
+    for (var i = 0; i < 4; i++) {
+      await a.moveBy(const Offset(-8, 0));
+      await b.moveBy(const Offset(8, 0));
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    expect(zoom.value.getMaxScaleOnAxis(), greaterThan(scaleBefore));
+    expect(focalDocumentY(), closeTo(focalBefore, 1));
+    await a.up();
+    await b.up();
+    await tester.pumpWidget(const SizedBox.shrink());
+    await flush(tester);
+  });
 }
 
 /// A minimal multi-page PDF; the viewer only needs it to parse and count.
@@ -199,8 +347,10 @@ File _writePdf(Directory dir, String name, {required int pages}) {
   for (var i = 0; i < pages; i++) {
     final contentId = 3 + pages + i;
     kids.add('${3 + i} 0 R');
-    objects.add('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] '
-        '/Contents $contentId 0 R >>');
+    objects.add(
+      '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] '
+      '/Contents $contentId 0 R >>',
+    );
   }
   for (var i = 0; i < pages; i++) {
     final body = '0 0 1 rg 72 ${600 - i * 20} 300 100 re f';
@@ -219,8 +369,10 @@ File _writePdf(Directory dir, String name, {required int pages}) {
   for (final offset in offsets) {
     out.write('${offset.toString().padLeft(10, '0')} 00000 n \n');
   }
-  out.write('trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\n'
-      'startxref\n$xref\n%%EOF\n');
+  out.write(
+    'trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\n'
+    'startxref\n$xref\n%%EOF\n',
+  );
 
   final file = File('${dir.path}/$name');
   file.writeAsBytesSync(Uint8List.fromList(out.toString().codeUnits));

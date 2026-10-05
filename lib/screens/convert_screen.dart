@@ -5,10 +5,11 @@ import 'package:camera/camera.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:path_provider/path_provider.dart';
 import '../services/ads_service.dart';
 import '../services/pdf_service.dart';
 import '../services/permission_service.dart';
+import '../services/scan_image_store.dart';
+import '../services/scan_route_observer.dart';
 import '../providers/theme_provider.dart';
 import '../utils/file_naming.dart';
 import '../widgets/pdf_name_dialog.dart';
@@ -25,13 +26,21 @@ class ConvertScreen extends StatefulWidget {
 }
 
 class _ConvertScreenState extends State<ConvertScreen>
-    with WidgetsBindingObserver, AutomaticKeepAliveClientMixin {
+    with WidgetsBindingObserver, AutomaticKeepAliveClientMixin, RouteAware {
   @override
   bool get wantKeepAlive => true;
 
   CameraController? _cameraController;
   Future<void>? _cameraInitialization;
-  bool _cameraActive = true;
+  bool _cameraActive = false;
+  bool _appResumed = true;
+  bool _routeVisible = false;
+  bool _isPicking = false;
+  ModalRoute<dynamic>? _scanRoute;
+  Future<void>? _cameraDisposal;
+  Future<XFile>? _captureInFlight;
+  CameraController? _captureController;
+  final ScanImageStore _images = ScanImageStore();
   int _cameraGeneration = 0;
   bool _isCameraInitialized = false;
   bool _cameraPermissionDenied = false;
@@ -51,41 +60,122 @@ class _ConvertScreenState extends State<ConvertScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _checkCameraAndInit();
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    _appResumed = lifecycle == null || lifecycle == AppLifecycleState.resumed;
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (_scanRoute != route) {
+      scanRouteObserver.unsubscribe(this);
+      _scanRoute = route;
+      _routeVisible = route?.isCurrent ?? false;
+      if (route != null) scanRouteObserver.subscribe(this, route);
+    }
+    _syncCameraOwnership();
+  }
+
+  @override
+  void didUpdateWidget(ConvertScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.isActive != widget.isActive) _syncCameraOwnership();
+  }
+
+  @override
+  void didPush() {
+    _routeVisible = _scanRoute?.isCurrent ?? false;
+    _syncCameraOwnership();
+  }
+
+  @override
+  void didPushNext() {
+    _routeVisible = false;
+    _syncCameraOwnership();
+  }
+
+  @override
+  void didPopNext() {
+    _routeVisible = true;
+    _syncCameraOwnership();
+  }
+
+  @override
+  void didPop() {
+    _routeVisible = false;
+    _syncCameraOwnership();
   }
 
   @override
   void dispose() {
     _cameraActive = false;
     _cameraGeneration++;
+    scanRouteObserver.unsubscribe(this);
     WidgetsBinding.instance.removeObserver(this);
-    _cameraController?.dispose();
+    final controller = _cameraController;
+    _cameraController = null;
+    if (controller != null) unawaited(_closeCamera(controller));
+    unawaited(_images.dispose());
     _focusTimer?.cancel();
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.inactive ||
-        state == AppLifecycleState.paused) {
-      _cameraActive = false;
-      _cameraGeneration++;
-      final controller = _cameraController;
-      _cameraController = null;
-      if (mounted) {
-        setState(() {
-          _isCameraInitialized = false;
-          _isFlashOn = false;
-        });
-      }
-      if (controller != null) unawaited(controller.dispose());
-    } else if (state == AppLifecycleState.resumed) {
-      _cameraActive = true;
+    _appResumed = state == AppLifecycleState.resumed;
+    _syncCameraOwnership();
+  }
+
+  void _syncCameraOwnership() {
+    final active =
+        mounted &&
+        widget.isActive &&
+        _routeVisible &&
+        _appResumed &&
+        !_isPicking;
+    if (active == _cameraActive) return;
+    _cameraActive = active;
+    _cameraGeneration++;
+    if (active) {
       unawaited(_checkCameraAndInit());
+      return;
+    }
+    final controller = _cameraController;
+    _cameraController = null;
+    _focusTimer?.cancel();
+    setState(() {
+      _isCameraInitialized = false;
+      _isFlashOn = false;
+      _showFocusIndicator = false;
+    });
+    if (controller != null) _cameraDisposal = _closeCamera(controller);
+  }
+
+  Future<void> _closeCamera(CameraController controller) async {
+    try {
+      await controller.setFlashMode(FlashMode.off);
+    } catch (_) {
+      // Disposal still releases a controller that cannot accept flash changes.
+    }
+    if (identical(_captureController, controller)) {
+      try {
+        // CameraController updates its value when takePicture completes. Let
+        // that finish before disposal so the returned cache file can be cleaned.
+        await _captureInFlight;
+      } catch (_) {
+        // A failed exposure must still release the camera.
+      }
+    }
+    try {
+      await controller.dispose();
+    } catch (error) {
+      debugPrint('Error releasing camera: $error');
     }
   }
 
   Future<void> _checkCameraAndInit() async {
+    if (!mounted || !_cameraActive) return;
     final granted = await PermissionService.isGranted(Permission.camera);
     if (granted) {
       await _initializeCamera();
@@ -146,7 +236,13 @@ class _ConvertScreenState extends State<ConvertScreen>
   }
 
   Future<void> _initializeCamera() async {
-    await _cameraInitialization;
+    if (_cameraInitialization != null) {
+      await _cameraInitialization;
+      if (mounted && _cameraActive && !_isCameraInitialized) {
+        await _initializeCamera();
+      }
+      return;
+    }
     if (!mounted || !_cameraActive || _isCameraInitialized) return;
     final pending = _initializeCameraOnce();
     _cameraInitialization = pending;
@@ -163,6 +259,8 @@ class _ConvertScreenState extends State<ConvertScreen>
     final generation = _cameraGeneration;
     CameraController? controller;
     try {
+      await _cameraDisposal;
+      if (!mounted || !_cameraActive || generation != _cameraGeneration) return;
       final cameras = await availableCameras();
       if (!mounted ||
           !_cameraActive ||
@@ -177,6 +275,11 @@ class _ConvertScreenState extends State<ConvertScreen>
         imageFormatGroup: ImageFormatGroup.jpeg,
       );
       await controller.initialize();
+      try {
+        await controller.setFlashMode(FlashMode.off);
+      } catch (_) {
+        // Cameras without a flash can still provide a usable preview.
+      }
       try {
         await controller.setFocusMode(FocusMode.auto);
       } catch (_) {}
@@ -196,7 +299,7 @@ class _ConvertScreenState extends State<ConvertScreen>
         );
       }
     } finally {
-      await controller?.dispose();
+      if (controller != null) await _closeCamera(controller);
     }
   }
 
@@ -245,128 +348,126 @@ class _ConvertScreenState extends State<ConvertScreen>
   }
 
   Future<void> _toggleFlash() async {
-    if (_cameraController == null) return;
-
+    final controller = _cameraController;
+    if (controller == null || !_cameraActive || _isCapturing) return;
+    final next = !_isFlashOn;
     try {
-      if (_isFlashOn) {
-        await _cameraController!.setFlashMode(FlashMode.off);
-      } else {
-        await _cameraController!.setFlashMode(FlashMode.torch);
+      await controller.setFlashMode(next ? FlashMode.torch : FlashMode.off);
+      if (mounted && identical(controller, _cameraController)) {
+        setState(() => _isFlashOn = next);
       }
-      setState(() {
-        _isFlashOn = !_isFlashOn;
-      });
-    } catch (e) {
-      debugPrint('Error toggling flash: $e');
+    } catch (error) {
+      debugPrint('Error toggling flash: $error');
     }
   }
 
   Future<void> _captureImage() async {
-    if (_cameraController == null || !_cameraController!.value.isInitialized) {
+    final controller = _cameraController;
+    if (controller == null ||
+        !controller.value.isInitialized ||
+        !_cameraActive ||
+        _isCapturing ||
+        _isProcessing) {
       return;
     }
-
-    if (_isCapturing) return;
-
     setState(() => _isCapturing = true);
-
+    String? cameraPath;
+    String? source;
     try {
-      // Turn off flash for capture if it was on as torch
-      if (_isFlashOn) {
-        await _cameraController!.setFlashMode(FlashMode.off);
+      // Keep the user's preview illumination throughout the exposure.
+      _captureController = controller;
+      final pending = controller.takePicture();
+      _captureInFlight = pending;
+      final image = await pending;
+      cameraPath = image.path;
+      if (!mounted ||
+          !_cameraActive ||
+          !identical(controller, _cameraController)) {
+        return;
       }
-
-      final XFile image = await _cameraController!.takePicture();
-
-      // Save to app's document directory
-      final Directory appDir = await getApplicationDocumentsDirectory();
-      final String fileName =
-          'scan_${DateTime.now().millisecondsSinceEpoch}.jpg';
-      final String savedPath = '${appDir.path}/$fileName';
-      await File(image.path).copy(savedPath);
-
-      // Restore torch if it was on
-      if (_isFlashOn) {
-        await _cameraController!.setFlashMode(FlashMode.torch);
+      source = await _images.importFile(cameraPath);
+      if (!mounted ||
+          !_cameraActive ||
+          !identical(controller, _cameraController)) {
+        return;
       }
-
-      if (mounted) setState(() => _isCapturing = false);
-
-      // Navigate to edit screen
-      if (mounted) {
-        final themeProvider = context.read<ThemeProvider>();
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => ScanEditScreen(
-              imagePath: savedPath,
-              imageQuality: themeProvider.outputQualityAsImageQuality,
-              onSave: (processedPath) {
-                if (!mounted) return;
-                setState(() {
-                  _capturedImages.add(processedPath);
-                });
-                _showSnackBar('Page added! (${_capturedImages.length} total)');
-              },
-            ),
-          ),
-        );
+      await _editNewImages([source]);
+    } catch (error) {
+      _showSnackBar('Error capturing image: $error', isError: true);
+    } finally {
+      _captureInFlight = null;
+      _captureController = null;
+      if (source != null) await _images.delete(source);
+      if (cameraPath != null) {
+        try {
+          await File(cameraPath).delete();
+        } on FileSystemException catch (error) {
+          debugPrint('Could not remove camera temporary file: $error');
+        }
       }
-    } catch (e) {
-      _showSnackBar('Error capturing image: $e', isError: true);
       if (mounted) setState(() => _isCapturing = false);
     }
   }
 
   Future<void> _pickFromGallery() async {
+    if (_isPicking || _isCapturing || _isProcessing) return;
+    _isPicking = true;
+    _syncCameraOwnership();
+    final imported = <String>[];
     try {
-      // The system picker grants access only to selected photos.
-      if (!mounted) return;
-      final themeProvider = context.read<ThemeProvider>();
-      final imageQuality = themeProvider.outputQualityAsImageQuality;
-      final List<XFile> images = await _imagePicker.pickMultiImage(
-        imageQuality: imageQuality.clamp(1, 100),
+      final quality = context.read<ThemeProvider>().outputQualityAsImageQuality;
+      final selected = await _imagePicker.pickMultiImage(
+        imageQuality: quality.clamp(1, 100),
       );
-
-      if (images.isNotEmpty && mounted) {
-        final Directory appDir = await getApplicationDocumentsDirectory();
-
-        // Process first image through the edit screen
-        final image = images[0];
-        final String fileName =
-            'picked_${DateTime.now().millisecondsSinceEpoch}_0.jpg';
-        final String savedPath = '${appDir.path}/$fileName';
-        await File(image.path).copy(savedPath);
-        final remaining = <String>[];
-        for (var i = 1; i < images.length; i++) {
-          final copied = await File(images[i].path).copy(
-            '${appDir.path}/picked_${DateTime.now().microsecondsSinceEpoch}_$i.jpg',
-          );
-          remaining.add(copied.path);
-        }
-
-        if (mounted) {
-          final themeProvider = context.read<ThemeProvider>();
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => ScanEditScreen(
-                imagePath: savedPath,
-                imageQuality: themeProvider.outputQualityAsImageQuality,
-                onSave: (processedPath) {
-                  if (!mounted) return;
-                  setState(
-                    () => _capturedImages.addAll([processedPath, ...remaining]),
-                  );
-                  _showSnackBar('${images.length} image(s) added!');
-                },
-              ),
-            ),
-          );
-        }
+      if (!mounted || !widget.isActive || !_routeVisible) return;
+      for (final image in selected) {
+        imported.add(await _images.importFile(image.path));
       }
-    } catch (e) {
-      _showSnackBar('Error selecting images: $e', isError: true);
+      if (mounted && widget.isActive && _routeVisible && imported.isNotEmpty) {
+        await _editNewImages(imported);
+      }
+    } catch (error) {
+      _showSnackBar('Error selecting images: $error', isError: true);
+    } finally {
+      // Gallery originals remain untouched. Only copies not accepted into the
+      // scan draft are discarded, including every image in a cancelled batch.
+      for (final path in imported) {
+        if (!_capturedImages.contains(path)) await _images.delete(path);
+      }
+      _isPicking = false;
+      if (mounted) _syncCameraOwnership();
+    }
+  }
+
+  Future<void> _editNewImages(List<String> sources) async {
+    if (!mounted) return;
+    final quality = context.read<ThemeProvider>().outputQualityAsImageQuality;
+    await Navigator.push<void>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ScanEditScreen(
+          imagePath: sources.first,
+          imageQuality: quality,
+          onSave: (processedPath) {
+            _images.adopt(processedPath);
+            if (!mounted) return;
+            setState(
+              () => _capturedImages.addAll([processedPath, ...sources.skip(1)]),
+            );
+            _showSnackBar('${sources.length} page(s) added!');
+          },
+        ),
+      ),
+    );
+  }
+
+  void _clearSavedImages() {
+    // Only called after saving succeeds. A failed save/preview cancellation
+    // leaves all images available for retry.
+    final saved = _capturedImages.toList();
+    if (mounted) setState(() => _capturedImages.clear());
+    for (final path in saved) {
+      unawaited(_images.delete(path));
     }
   }
 
@@ -388,17 +489,22 @@ class _ConvertScreenState extends State<ConvertScreen>
     try {
       final themeProvider = context.read<ThemeProvider>();
       final outputQuality = themeProvider.outputQuality;
-      final String? outputPath = await PdfService.imagesToPdf(
-        _capturedImages,
-        outputQuality: outputQuality,
-        fileName: fileName,
+      final pages = List<String>.of(_capturedImages);
+      final String? outputPath = await _images.retainWhile(
+        () => PdfService.imagesToPdf(
+          pages,
+          outputQuality: outputQuality,
+          fileName: fileName,
+        ),
       );
 
       if (outputPath != null) {
         if (!mounted) return;
         await AdsService.instance.operationCompleted(
           PdfOperation.create,
-          canPresent: () => mounted && widget.isActive &&
+          canPresent: () =>
+              mounted &&
+              widget.isActive &&
               (ModalRoute.of(context)?.isCurrent ?? false),
         );
         if (!mounted) return;
@@ -413,9 +519,10 @@ class _ConvertScreenState extends State<ConvertScreen>
           );
           if (!mounted) return;
           _showSnackBar(
-            'Saved $fileName.pdf (${_capturedImages.length} page(s))',
+            'Saved $fileName.pdf to ${themeProvider.saveLocationDescription} '
+            '(${_capturedImages.length} page(s))',
           );
-          setState(() => _capturedImages.clear());
+          _clearSavedImages();
         } else {
           await Navigator.push(
             context,
@@ -426,7 +533,7 @@ class _ConvertScreenState extends State<ConvertScreen>
                 pageCount: _capturedImages.length,
                 fileName: fileName,
                 onSaved: () {
-                  if (mounted) setState(() => _capturedImages.clear());
+                  if (mounted) _clearSavedImages();
                 },
               ),
             ),
@@ -528,30 +635,29 @@ class _ConvertScreenState extends State<ConvertScreen>
 
   void _removeImage(int index) {
     final path = _capturedImages[index];
-    setState(() {
-      _capturedImages.removeAt(index);
-    });
-    // Delete asynchronously off the UI thread.
-    unawaited(
-      File(path).delete().catchError((Object e) {
-        debugPrint('Error deleting file: $e');
-        return File(path);
-      }),
-    );
+    setState(() => _capturedImages.removeAt(index));
+    unawaited(_images.delete(path));
   }
 
   void _editImage(int index) {
-    final themeProvider = context.read<ThemeProvider>();
+    final original = _capturedImages[index];
+    final quality = context.read<ThemeProvider>().outputQualityAsImageQuality;
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => ScanEditScreen(
-          imagePath: _capturedImages[index],
-          imageQuality: themeProvider.outputQualityAsImageQuality,
+        builder: (_) => ScanEditScreen(
+          imagePath: original,
+          imageQuality: quality,
           onSave: (processedPath) {
-            setState(() {
-              _capturedImages[index] = processedPath;
-            });
+            _images.adopt(processedPath);
+            if (!mounted) return;
+            final currentIndex = _capturedImages.indexOf(original);
+            if (currentIndex < 0) {
+              unawaited(_images.delete(processedPath));
+              return;
+            }
+            setState(() => _capturedImages[currentIndex] = processedPath);
+            unawaited(_images.delete(original));
             _showSnackBar('Page updated!');
           },
         ),

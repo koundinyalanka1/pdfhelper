@@ -1,5 +1,9 @@
 # Android / Google Play readiness
 
+**Current status:** the September audit below is historical. Follow the
+[October production repair tracker](PRODUCTION_FIX_PLAN.md) for current fixes,
+test totals, signing checks and Android artifacts. iOS is deferred by the user.
+
 Audit date: 2026-09-20. Scope: PDF Helper and its `flutter_pdf_core` native
 library, excluding AI features and signing configuration. Existing local edits
 were retained. No account changes, Play upload or publication were performed.

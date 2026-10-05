@@ -186,7 +186,7 @@ class AdsService {
         WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
     // Tools can be entered directly from an external document without ever
     // visiting Home. Initialize here, and finish consent before navigation
-    // can open the operation's result in the ad-free viewer.
+    // can open the operation's result in the viewer.
     if (foreground) await initialize();
     await _operationPolicy.completed(
       operation,

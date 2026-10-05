@@ -10,6 +10,16 @@ String formatFileSize(int? bytes) {
   return '${size.toStringAsFixed(i == 0 ? 0 : 1)} ${units[i]}';
 }
 
+/// A whole number with thousands separators: 12480 → "12,480".
+String formatCount(int value) {
+  final digits = value.abs().toString();
+  final grouped = digits.replaceAllMapped(
+    RegExp(r'\B(?=(\d{3})+(?!\d))'),
+    (_) => ',',
+  );
+  return value < 0 ? '-$grouped' : grouped;
+}
+
 /// Gets a display title for a PDF path. Strips intent temp file prefix (intent_TIMESTAMP_)
 /// and falls back to 'View PDF' if the name looks like a temp file.
 String getPdfDisplayTitle(String path) {

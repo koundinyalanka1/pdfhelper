@@ -138,7 +138,6 @@ class _MetadataScreenState extends State<MetadataScreen> {
         password: widget.password,
       );
       if (!mounted) return;
-      setState(() => _isSaving = false);
       await showPdfResultDialog(
         context: context,
         filePaths: [output],

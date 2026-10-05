@@ -2,6 +2,17 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pdfhelper/utils/format_utils.dart';
 
 void main() {
+  group('formatCount', () {
+    test('groups thousands', () {
+      expect(formatCount(0), '0');
+      expect(formatCount(999), '999');
+      expect(formatCount(1000), '1,000');
+      expect(formatCount(12480), '12,480');
+      expect(formatCount(1234567), '1,234,567');
+      expect(formatCount(-1234), '-1,234');
+    });
+  });
+
   group('formatFileSize', () {
     test('formats bytes', () {
       expect(formatFileSize(0), contains('B'));

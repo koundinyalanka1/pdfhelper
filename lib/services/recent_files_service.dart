@@ -94,6 +94,10 @@ class RecentFilesService {
       }
     }
     if (changed) {
+      // Working/public aliases may both have been opened. Keep the newest
+      // occurrence when they are reconciled to the same document path.
+      final seen = <String>{};
+      loaded.removeWhere((entry) => !seen.add(entry.path));
       _recents = loaded;
       await _saveRecents(loaded);
     }

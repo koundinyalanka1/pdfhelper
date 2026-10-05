@@ -20,8 +20,8 @@ import 'split_pdf_screen.dart';
 import '../config/features.dart';
 import '../widgets/password_prompt.dart';
 
-/// Every operation in the app, on one screen, grouped by what you are trying
-/// to get done.
+/// Every document operation in the app, on one screen, grouped by what you
+/// are trying to get done. Scanning is not here: it has its own tab.
 ///
 /// The old version showed a file picker and nothing else until you had chosen
 /// a document — you had to commit to a file before the app would tell you what
@@ -30,21 +30,13 @@ import '../widgets/password_prompt.dart';
 /// document chosen once stays selected, so a run of tools on the same file
 /// costs one pick rather than one per tool.
 class ToolsScreen extends StatefulWidget {
-  const ToolsScreen({
-    super.key,
-    this.initialPdfPath,
-    this.onSendTo,
-    this.onGoToTab,
-  });
+  const ToolsScreen({super.key, this.initialPdfPath, this.onSendTo});
 
   final String? initialPdfPath;
 
   /// Open merge or split over the tab scaffold. Null when this screen is
   /// pushed as a standalone route.
   final void Function(DocHandoff action, String? path)? onSendTo;
-
-  /// Switch the tab scaffold to another destination.
-  final void Function(int tabIndex)? onGoToTab;
 
   @override
   State<ToolsScreen> createState() => _ToolsScreenState();
@@ -168,11 +160,19 @@ class _ToolsScreenState extends State<ToolsScreen>
   /// Run a tool that works on exactly one document, picking one first if none
   /// is selected. Reloads the summary if the tool produced a new file.
   Future<void> _runOnDocument(
-    Widget Function(String path, String password) builder,
-  ) async {
+    Widget Function(String path, String password) builder, {
+    bool requireEncrypted = false,
+  }) async {
+    if (_isLoading) return;
     if (_path == null && !await _pick()) return;
     final path = _path;
     if (path == null || !mounted) return;
+    if (requireEncrypted && _info?.encrypted == false) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('This PDF is not password-protected.')),
+      );
+      return;
+    }
     final replacement = await Navigator.push<String>(
       context,
       MaterialPageRoute(builder: (_) => builder(path, _password)),
@@ -249,18 +249,7 @@ class _ToolsScreenState extends State<ToolsScreen>
   /// somebody looking to lock a file looks under "Protect", not under
   /// "flutter_pdf_core".
   List<Widget> _buildSections() {
-    final encrypted = _info?.encrypted == true;
     final sections = <_Section>[
-      _Section('Create', [
-        _Tool(
-          'Scan to PDF',
-          'Camera, or pick images from the gallery',
-          Icons.document_scanner_rounded,
-          const Color(0xFF00D9FF),
-          () => widget.onGoToTab?.call(HomeTabs.scan),
-          enabled: widget.onGoToTab != null,
-        ),
-      ]),
       _Section('Combine & split', [
         _Tool(
           'Merge PDFs',
@@ -299,18 +288,24 @@ class _ToolsScreenState extends State<ToolsScreen>
           needsDocument: true,
         ),
         _Tool(
-          encrypted ? 'Remove password' : 'Protect with a password',
-          encrypted
-              ? 'Decrypt this document'
-              : 'Lock the file with AES-256 encryption',
-          encrypted ? Icons.lock_open_rounded : Icons.lock_rounded,
+          'Protect with a password',
+          'Lock the file with AES-256 encryption',
+          Icons.lock_rounded,
           const Color(0xFF4CAF50),
           () => _runOnDocument(
-            (p, pw) => ProtectScreen(
-              pdfPath: p,
-              password: pw,
-              isEncrypted: _info?.encrypted ?? false,
-            ),
+            (p, pw) => ProtectScreen(pdfPath: p, password: pw),
+          ),
+          needsDocument: true,
+        ),
+        _Tool(
+          'Remove password',
+          'Save a copy without password protection',
+          Icons.lock_open_rounded,
+          const Color(0xFF4CAF50),
+          () => _runOnDocument(
+            (p, pw) =>
+                ProtectScreen(pdfPath: p, password: pw, isEncrypted: true),
+            requireEncrypted: true,
           ),
           needsDocument: true,
         ),
@@ -322,8 +317,7 @@ class _ToolsScreenState extends State<ToolsScreen>
           Icons.menu_book_rounded,
           const Color(0xFFE94560),
           () => _runOnDocument(
-            (p, pw) =>
-                PdfViewerScreen(pdfPath: p, title: _name, password: pw),
+            (p, pw) => PdfViewerScreen(pdfPath: p, title: _name, password: pw),
           ),
           needsDocument: true,
         ),
@@ -419,6 +413,7 @@ class _ToolsScreenState extends State<ToolsScreen>
   }
 
   Widget _buildToolRow(_Tool tool, int count, int index) {
+    final enabled = !tool.needsDocument || !_isLoading;
     // Round only the outer corners so the ripple stays inside the card.
     const radius = Radius.circular(16);
     final shape = BorderRadius.only(
@@ -431,10 +426,10 @@ class _ToolsScreenState extends State<ToolsScreen>
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        onTap: tool.enabled ? tool.onTap : null,
+        onTap: enabled ? tool.onTap : null,
         borderRadius: shape,
         child: Opacity(
-          opacity: tool.enabled ? 1 : 0.45,
+          opacity: enabled ? 1 : 0.45,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
             child: Row(
@@ -720,7 +715,6 @@ class _Tool {
     this.color,
     this.onTap, {
     this.needsDocument = false,
-    this.enabled = true,
   });
 
   final String title;
@@ -732,6 +726,4 @@ class _Tool {
   /// Whether the tool acts on a single chosen document, which changes the
   /// trailing affordance from a chevron to a "will ask for a file" folder.
   final bool needsDocument;
-
-  final bool enabled;
 }

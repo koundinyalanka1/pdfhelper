@@ -311,8 +311,8 @@ class _MergePdfScreenState extends State<MergePdfScreen>
         if (!mounted) return;
         await AdsService.instance.operationCompleted(
           PdfOperation.merge,
-          canPresent: () => mounted &&
-              (ModalRoute.of(context)?.isCurrent ?? false),
+          canPresent: () =>
+              mounted && (ModalRoute.of(context)?.isCurrent ?? false),
         );
         if (!mounted) return;
         if (themeProvider.skipPreview && themeProvider.autoSave) {
@@ -326,7 +326,8 @@ class _MergePdfScreenState extends State<MergePdfScreen>
           );
           if (!mounted) return;
           _showSnackBar(
-            'Merged ${outputPaths.length} PDF${outputPaths.length > 1 ? "s" : ""}',
+            'Saved ${outputPaths.length} PDF${outputPaths.length > 1 ? "s" : ""} '
+            'to ${themeProvider.saveLocationDescription}',
           );
           setState(() => _batches = [[]]);
         } else {

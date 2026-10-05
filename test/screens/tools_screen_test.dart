@@ -10,21 +10,16 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   late List<(DocHandoff, String?)> sent;
-  late List<int> tabs;
 
   setUp(() {
     sent = [];
-    tabs = [];
   });
 
-  Widget app({bool wired = true}) {
+  Widget app() {
     return ChangeNotifierProvider<ThemeProvider>(
       create: (_) => ThemeProvider(),
       child: MaterialApp(
-        home: ToolsScreen(
-          onSendTo: wired ? (action, path) => sent.add((action, path)) : null,
-          onGoToTab: wired ? tabs.add : null,
-        ),
+        home: ToolsScreen(onSendTo: (action, path) => sent.add((action, path))),
       ),
     );
   }
@@ -63,17 +58,21 @@ void main() {
     await pumpTall(tester);
 
     for (final tool in [
-      'Scan to PDF',
       'Merge PDFs',
       'Split PDF',
       'Organize pages',
       'Document details',
       'Protect with a password',
+      'Remove password',
       'Open in viewer',
       'Extract text',
     ]) {
       expect(find.text(tool), findsOneWidget, reason: '$tool is missing');
     }
+
+    // Scanning has its own tab in the bar; an entry here that only switched
+    // to it was a second door to the same room.
+    expect(find.text('Scan to PDF'), findsNothing);
 
     // The AI tools are built but not shipped yet; they are hidden behind
     // Features.ai. Asserted against the flag rather than simply dropped, so
@@ -91,7 +90,6 @@ void main() {
     await pumpTall(tester);
 
     for (final section in [
-      'Create',
       'Combine & split',
       'Edit document',
       'Read & extract',
@@ -127,23 +125,5 @@ void main() {
     await tapTool(tester, 'Split PDF');
 
     expect(sent, [(DocHandoff.split, null)]);
-  });
-
-  testWidgets('Scan to PDF switches to the Scan tab', (tester) async {
-    await tester.pumpWidget(app());
-    await tester.pump();
-    await tapTool(tester, 'Scan to PDF');
-
-    expect(tabs, [HomeTabs.scan]);
-  });
-
-  testWidgets('Scan to PDF is disabled when there is no tab bar to drive', (
-    tester,
-  ) async {
-    await tester.pumpWidget(app(wired: false));
-    await tester.pump();
-    await tapTool(tester, 'Scan to PDF');
-
-    expect(tabs, isEmpty);
   });
 }

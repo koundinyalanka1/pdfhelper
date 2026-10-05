@@ -117,7 +117,6 @@ class _ProtectScreenState extends State<ProtectScreen> {
     try {
       final output = await operation();
       if (!mounted) return;
-      setState(() => _isWorking = false);
       await showPdfResultDialog(
         context: context,
         filePaths: [output],
@@ -256,8 +255,9 @@ class _ProtectScreenState extends State<ProtectScreen> {
     _field(_ownerController, 'Owner password (optional)', obscure: _obscure),
     const SizedBox(height: 6),
     Text(
-      'The owner password controls permissions. Leave it blank to reuse the '
-      'password above.',
+      'An optional second password that can also unlock the PDF. Leave it '
+      'blank to reuse the password above. Printing, copying and editing '
+      'are allowed; this app does not set permission restrictions.',
       style: TextStyle(color: _colors.textTertiary, fontSize: 12),
     ),
   ];

@@ -8,8 +8,8 @@ questions of a document — fully offline.
 [`flutter_pdf_core`](https://github.com/koundinyalanka1/flutter_pdf_core), a
 from-scratch PDF implementation in Rust, vendored here as a git submodule and
 reached over `dart:ffi`. Parsing, rewriting, rendering, composition and text
-extraction all come from the same object model, so what the viewer draws is
-exactly the document that was written.
+extraction all come from the same object model. The viewer reports unsupported
+or approximate rendering instead of assuming every PDF feature is supported.
 
 ## Quick start
 
@@ -98,17 +98,20 @@ ask for one when tapped.
 
 **Also**
 - Continuous-scroll viewer with pinch-zoom that re-renders sharper as you zoom
-- In the viewer, tap **Select text**, long-press a word, adjust the handles,
+- In the viewer, long-press a word directly, adjust the handles,
   then **Copy** (or **Select all** for that page). Selection follows the PDF's
   text layer; image-only scans need OCR first.
 - Android "Open with" integration: **one** entry, because opening a PDF from
   another app means one thing — read it. Every tool is then a tap away in the
   viewer's own menu, chosen once the document is actually on screen
 - External PDF launches go directly to the viewer, skipping the app splash
-- One compact banner on the main app screen; PDF viewing is ad-free. An
+- One compact banner on the main app screen and at the bottom of the PDF viewer. An
   available interstitial appears after every fourth successful document
   operation in a session
 - Auto-save, output quality, dark/light theme, completion notifications
+- Android saves publish a durable copy in `Download/PDFHelper` or
+  `Documents/PDFHelper`, visible to the system Files app and retained after
+  uninstall. A private working copy remains available for viewing and tools.
 - Just-in-time permission requests with rationale dialogs
 
 ## Architecture
@@ -280,16 +283,17 @@ and a mounted SD/USB drive. The list must refresh without restarting the app.
 | Platform | Status |
 |----------|--------|
 | Android  | supported (API 24+); scoped storage; one VIEW intent alias |
-| iOS      | supported; required `NS*UsageDescription` keys are in `Info.plist` |
+| iOS      | deferred for this release; permission, document routing and service configuration work remains |
 | macOS    | the core builds, the app is not wired up |
 | Windows / Linux / web | not supported — the app uses `dart:io` throughout |
 
 ## Before publishing
 
-The Android app and native library have been audited and repaired. See
-[Play Store readiness](docs/PLAY_STORE_READINESS.md) for changes, validation,
-remaining compatibility limits, and the device test checklist. AI features and
-signing configuration were excluded from this audit.
+The Android app and native library are undergoing the production repair pass.
+See the [current repair tracker](docs/PRODUCTION_FIX_PLAN.md) for fixes and
+validation, the [original audit](docs/PRODUCTION_AUDIT_2026-10-04.md) for findings,
+and [Play Store readiness](docs/PLAY_STORE_READINESS.md) for account and device
+checks. AI features remain disabled; iOS is deferred.
 
 - [x] Android debug/profile builds use test ad units; release uses the configured
       production units. UMP consent gates ad requests and Settings exposes ad
@@ -297,17 +301,19 @@ signing configuration were excluded from this audit.
 - [x] Rate App points to the application’s Play listing. Firebase/Crashlytics
       Gradle integration is connected for production; debug skips production
       Firebase. Crashlytics upload tasks require `-PuploadCrashlytics=true`.
-- [x] Removed unused broad photo/video, microphone, and legacy write permissions.
+- [x] Removed unused broad photo/video and microphone permissions. Legacy write
+      permission is limited to Android 9 and earlier for public PDF saves.
       Gallery import uses the system picker. PDF sharing uses the sharing plugin;
       the unused app FileProvider with broad storage exposure was removed.
-- [x] Flutter analysis and 222 Flutter tests passed; the Rust workspace passed.
-      Android/macOS native libraries were rebuilt. A release app bundle built,
-      and native artifact checks verified all three PDF ABIs and all 14 packaged
-      ELF64 libraries for 16 KB LOAD alignment and RELRO/writable-data overlap.
-- [ ] Update the privacy policy. The URL loads, but the policy describes
-      Firebase Analytics, which the app does not use, and omits Crashlytics,
-      the AdMob consent choice and how to change it (Settings → Ad privacy
-      choices), and GDPR rights.
+- [x] Native fixes pass 274 Rust unit tests and 1 documentation test, including
+      PDF layer preservation and dashed strokes. Android/macOS libraries were
+      rebuilt; current full-suite and artifact results are in the repair tracker.
+- [x] Release signing now fails when credentials are missing instead of using
+      the debug key. Debug builds remain available without release credentials.
+- [x] Publish the corrected [privacy policy](docs/privacy-policy.html), covering
+      Crashlytics, AdMob privacy choices, document handling and deletion. The
+      previous live policy incorrectly described Firebase Analytics. User merged
+      and deployed the website update; the live page was verified on 5 October.
 - [x] Configure and publish the required privacy messages in AdMob, then test
       consent acceptance, refusal and changes on a registered test device.
       Verified on a Motorola edge 70 fusion (Android 16) in EEA preview: the

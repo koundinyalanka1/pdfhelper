@@ -81,6 +81,23 @@ class PdfRaster {
     String password = '',
     bool useCache = true,
     bool throwOnError = false,
+  }) async => (await renderPageWithWarnings(
+    path,
+    pageIndex,
+    longEdge: longEdge,
+    password: password,
+    useCache: useCache,
+    throwOnError: throwOnError,
+  ))?.bytes;
+
+  /// Warnings travel with each result even when its bitmap is not cached.
+  static Future<PdfRenderedPng?> renderPageWithWarnings(
+    String path,
+    int pageIndex, {
+    int longEdge = thumbnailSize,
+    String password = '',
+    bool useCache = true,
+    bool throwOnError = false,
   }) async {
     final key = (
       path: path,
@@ -92,7 +109,7 @@ class PdfRaster {
       final hit = _cache.remove(key);
       if (hit != null) {
         _cache[key] = hit; // refresh LRU position
-        return hit;
+        return PdfRenderedPng(hit, _warnings[key] ?? const []);
       }
     }
     await _acquire();
@@ -115,7 +132,7 @@ class PdfRaster {
         }
         _store(key, rendered.bytes);
       }
-      return rendered.bytes;
+      return rendered;
     } on PdfException catch (e) {
       logError('PdfRaster.renderPage', '${e.code}: ${e.message}');
       if (throwOnError) rethrow;

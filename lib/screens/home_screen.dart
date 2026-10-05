@@ -94,7 +94,6 @@ class _HomeScreenState extends State<HomeScreen> {
           key: ValueKey('tools-$_toolsEpoch'),
           initialPdfPath: _toolsPath,
           onSendTo: _openHandoff,
-          onGoToTab: _goToTab,
         );
       case HomeTabs.scan:
         return ConvertScreen(isActive: _currentIndex == HomeTabs.scan);

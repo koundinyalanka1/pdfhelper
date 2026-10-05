@@ -5,7 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
 
-import 'package:path_provider/path_provider.dart';
+import '../services/scan_image_store.dart';
 import '../providers/theme_provider.dart';
 import 'crop_screen.dart';
 
@@ -349,7 +349,7 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
   bool _isProcessing = false;
   Uint8List? _processedImageBytes;
   Uint8List? _originalImageBytes;
-  String _currentImagePath = '';
+  final ScanImageStore _images = ScanImageStore();
 
   // Undo/redo history (capped). Each entry snapshots the post-edit state.
   static const int _maxHistory = 10;
@@ -364,7 +364,6 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
   _EditSnapshot _currentSnapshot() => _EditSnapshot(
     originalBytes: _originalImageBytes,
     processedBytes: _processedImageBytes,
-    imagePath: _currentImagePath,
     filter: _selectedFilter,
   );
 
@@ -384,7 +383,6 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
     setState(() {
       _originalImageBytes = snapshot.originalBytes;
       _processedImageBytes = snapshot.processedBytes;
-      _currentImagePath = snapshot.imagePath;
       _selectedFilter = snapshot.filter;
     });
   }
@@ -396,7 +394,6 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
     setState(() {
       _originalImageBytes = snapshot.originalBytes;
       _processedImageBytes = snapshot.processedBytes;
-      _currentImagePath = snapshot.imagePath;
       _selectedFilter = snapshot.filter;
     });
   }
@@ -408,21 +405,34 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
   @override
   void initState() {
     super.initState();
-    _currentImagePath = widget.imagePath;
     _loadOriginalImage();
   }
 
+  @override
+  void dispose() {
+    unawaited(_images.dispose());
+    super.dispose();
+  }
+
   Future<void> _loadOriginalImage() async {
-    final bytes = await File(_currentImagePath).readAsBytes();
-    setState(() {
-      _originalImageBytes = bytes;
-      _processedImageBytes = bytes;
-    });
+    try {
+      // The source belongs to the parent scan. Editing never mutates it.
+      final bytes = await File(widget.imagePath).readAsBytes();
+      if (!mounted) return;
+      setState(() {
+        _originalImageBytes = bytes;
+        _processedImageBytes = bytes;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to read this scan image.')),
+      );
+    }
   }
 
   Future<void> _cropImage() async {
-    if (_originalImageBytes == null) return;
-
+    if (_originalImageBytes == null || _isProcessing) return;
     final result = await Navigator.push<Uint8List>(
       context,
       MaterialPageRoute(
@@ -432,38 +442,15 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
         ),
       ),
     );
-
-    if (result != null) {
-      try {
-        // Save cropped image
-        final Directory appDir = await getApplicationDocumentsDirectory();
-        final String fileName =
-            'cropped_${DateTime.now().millisecondsSinceEpoch}.jpg';
-        final String savedPath = '${appDir.path}/$fileName';
-        await File(savedPath).writeAsBytes(result);
-
-        // Snapshot the pre-crop state so the user can undo.
-        _pushUndo();
-
-        // Update state (do NOT delete the previous file: undo may need it)
-        setState(() {
-          _currentImagePath = savedPath;
-          _originalImageBytes = result;
-          _processedImageBytes = result;
-          _selectedFilter = ScanFilter.original;
-        });
-      } catch (e) {
-        debugPrint('Error saving cropped image: $e');
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Error cropping: $e'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
-      }
-    }
+    if (result == null || !mounted) return;
+    _pushUndo();
+    // Undo snapshots already retain these bytes; no intermediate disk files
+    // are necessary, including when a crop is undone or the edit is cancelled.
+    setState(() {
+      _originalImageBytes = result;
+      _processedImageBytes = result;
+      _selectedFilter = ScanFilter.original;
+    });
   }
 
   Future<void> _applyFilter(ScanFilter filter) async {
@@ -518,48 +505,24 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
   }
 
   Future<void> _saveAndReturn() async {
-    if (_processedImageBytes == null) return;
-
+    if (_processedImageBytes == null || _isProcessing) return;
     setState(() => _isProcessing = true);
-
+    String? savedPath;
     try {
-      // Save the processed image
-      final Directory appDir = await getApplicationDocumentsDirectory();
-      final String fileName =
-          'processed_${DateTime.now().millisecondsSinceEpoch}.jpg';
-      final String savedPath = '${appDir.path}/$fileName';
-
-      await File(savedPath).writeAsBytes(_processedImageBytes!);
-
-      // Delete temporary files
-      if (_currentImagePath != widget.imagePath) {
-        try {
-          await File(_currentImagePath).delete();
-        } catch (e) {
-          debugPrint('Could not delete temp file: $e');
-        }
-      }
-      try {
-        await File(widget.imagePath).delete();
-      } catch (e) {
-        debugPrint('Could not delete original: $e');
-      }
-
+      savedPath = await _images.write(_processedImageBytes!);
+      if (!mounted) return;
+      // Only transfer the completed replacement after the owner accepts it.
+      // A failed save or cancelled edit leaves the source image intact.
       widget.onSave(savedPath);
-      if (mounted) {
-        Navigator.pop(context);
-      }
-    } catch (e) {
-      debugPrint('Error saving: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error saving image: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-        setState(() => _isProcessing = false);
-      }
+      _images.release(savedPath);
+      Navigator.pop(context);
+    } catch (error) {
+      if (savedPath != null) await _images.delete(savedPath);
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error saving image: $error')));
+      setState(() => _isProcessing = false);
     }
   }
 
@@ -572,26 +535,8 @@ class _ScanEditScreenState extends State<ScanEditScreen> {
         backgroundColor: _colors.cardBackground,
         leading: IconButton(
           icon: Icon(Icons.close, color: _colors.textPrimary),
-          onPressed: () {
-            // Delete the captured image asynchronously and go back.
-            final originalPath = widget.imagePath;
-            final currentPath = _currentImagePath;
-            unawaited(
-              File(originalPath).delete().catchError((Object e) {
-                debugPrint('Error deleting: $e');
-                return File(originalPath);
-              }),
-            );
-            if (currentPath != originalPath) {
-              unawaited(
-                File(currentPath).delete().catchError((Object e) {
-                  debugPrint('Error deleting: $e');
-                  return File(currentPath);
-                }),
-              );
-            }
-            Navigator.pop(context);
-          },
+          tooltip: 'Cancel edit',
+          onPressed: () => Navigator.pop(context),
         ),
         title: Text(
           'Edit Scan',
@@ -862,12 +807,10 @@ class _EditSnapshot {
   const _EditSnapshot({
     required this.originalBytes,
     required this.processedBytes,
-    required this.imagePath,
     required this.filter,
   });
 
   final Uint8List? originalBytes;
   final Uint8List? processedBytes;
-  final String imagePath;
   final ScanFilter filter;
 }

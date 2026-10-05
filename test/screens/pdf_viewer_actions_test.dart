@@ -125,7 +125,7 @@ void main() {
 
   for (final asRoot in [true, false]) {
     testWidgets(
-      'viewing ${asRoot ? 'an external' : 'an in-app'} PDF has no banner ads',
+      'viewing ${asRoot ? 'an external' : 'an in-app'} PDF has one bottom banner',
       (tester) async {
         await tester.pumpWidget(app(asRoot: asRoot));
         await settle(tester);
@@ -140,7 +140,7 @@ void main() {
             of: find.byType(PdfViewerScreen, skipOffstage: false),
             matching: find.byType(BannerAdWidget, skipOffstage: false),
           ),
-          findsNothing,
+          findsOneWidget,
         );
       },
     );

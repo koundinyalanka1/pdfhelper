@@ -160,7 +160,6 @@ class _OrganizePagesScreenState extends State<OrganizePagesScreen> {
 
       result = current;
       if (!mounted) return;
-      setState(() => _isApplying = false);
       final removed = _pages.length - kept.length;
       await showPdfResultDialog(
         context: context,

@@ -210,7 +210,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 children: [
                   _buildSwitchTile(
                     'Auto Save',
-                    'Save to app storage (PDFHelper/$_saveLocation)',
+                    'Save to ${_settings.saveLocationDescription}',
                     Icons.save_rounded,
                     _autoSave,
                     (value) => context.read<ThemeProvider>().setAutoSave(value),
