@@ -1,342 +1,155 @@
 # PDF Helper
 
-An end-to-end Flutter PDF app for Android & iOS. Browse every PDF on the
-device, then read, merge, split, organize, scan, protect, extract text and ask
-questions of a document — fully offline.
+A Flutter PDF reader and toolkit with a Rust engine. The current release scope
+is **Android**. Read, merge, split, organize, scan, protect and extract text from
+PDFs locally. Ads and release crash reporting use network services; Ask AI is
+hidden and is not a shipped feature. iOS is deferred.
 
-**One PDF engine, no third-party PDF library.** Everything goes through
-[`flutter_pdf_core`](https://github.com/koundinyalanka1/flutter_pdf_core), a
-from-scratch PDF implementation in Rust, vendored here as a git submodule and
-reached over `dart:ffi`. Parsing, rewriting, rendering, composition and text
-extraction all come from the same object model. The viewer reports unsupported
-or approximate rendering instead of assuming every PDF feature is supported.
+Start with the [documentation index](docs/README.md):
 
-## Quick start
-
-```bash
-git clone --recurse-submodules <this repo>
-cd pdfhelper
-
-./scripts/build_pdf_core.sh          # build the native core (once, per platform)
-flutter pub get
-flutter run
-```
-
-Already cloned without submodules? `git submodule update --init --recursive`.
-
-The native build needs [Rust](https://rustup.rs). Android additionally needs
-`cargo install cargo-ndk` plus an NDK; the script finds one under
-`$ANDROID_HOME/ndk` automatically. Without this step the app still launches,
-but every PDF screen reports that the core is missing — see
-`PdfCoreService.isAvailable`.
-
-## Getting around
-
-Four tabs, one per *place* in the app:
-
-| Tab | What lives there |
-| --- | --- |
-| **Files** | Every PDF on the device — search, sort, star, and per-file actions |
-| **Tools** | The whole catalogue of operations, grouped by intent |
-| **Scan** | Camera and gallery capture |
-| **Settings** | Appearance, output, permissions, about |
-
-Anything you *do* to a document is a route pushed over the tabs, not a tab of
-its own — merge and split included. That is what keeps the bar at four
-readable destinations while leaving every operation one or two taps away, and
-it is why back from a tool returns you to where you launched it.
-
-The Tools tab holds an optional **working document**: pick a PDF once and every
-single-document tool uses it, so a run of tools on the same file costs one pick
-rather than one per tool. Tools that need a document and do not have one simply
-ask for one when tapped.
+- [Application baseline](docs/APP_BASELINE_2026-10-06.md): current features, architecture, storage and configuration.
+- [Production audit](docs/PRODUCTION_AUDIT_2026-10-06.md): verification, release artifacts and outstanding release checks.
+- [Renderer capabilities](docs/RENDERER_CAPABILITIES_2026-10-06.md): supported PDF features and concrete compatibility limits.
+- [Improvements](IMPROVEMENTS.md): work beyond the current baseline.
 
 ## Features
 
-**Files** — the landing tab
-- Every PDF on the phone on one screen, the way a document reader works: a
-  background sweep of shared storage, not a file picker you have to drive
-- **All / Recent / Starred / Created**, search, sort by date, name or size,
-  and a grid or list view that is remembered
-- Covers are rendered by the native core and cached; long-press any file for
-  Open, Share, Star, Rename, Delete, Merge with…, Split, or Open in Tools
-- Results are cached to disk, so reopening the tab is instant while a fresh
-  sweep runs behind it
-- Temporary copies opened from other apps appear in Recent or Starred;
-  All PDFs lists unique files discovered in accessible device storage
+| Area | Available now |
+| --- | --- |
+| Files | All/Recent/Starred/Created, filename/folder search, sorting, list/grid, covers, share, rename and linked-copy deletion |
+| Viewer | Continuous scrolling, pinch/double-tap zoom, document-wide scrolling while zoomed, sharper rerendering, page jump, text selection/copy and tool shortcuts |
+| Assemble | Ordered merge and output batches; split by range, selection or individual pages |
+| Edit | Page rotation/reordering/deletion, metadata, AES-256 protection and password removal |
+| Extract | Content-stream text extraction for copying or saving as text |
+| Scan | Camera/gallery input, perspective crop/straighten, six filters, undo/redo and multipage image-to-PDF |
+| Output | Named PDFs, collision handling, preview, explicit Save and optional Auto Save |
+| Settings | Dark/light theme, output quality/location, notifications and applicable ad privacy choices |
 
-**Assemble**
-- **Merge** — combine PDFs, with batches for producing several outputs in one run
-- **Split** — by page range, several ranges at once, page thumbnails, or every page
-- **Scan to PDF** — camera or gallery → crop → 6 filters → multi-page PDF.
-  JPEGs are embedded as `DCTDecode` streams without being decoded, so at
-  Maximum quality the camera's own bytes land in the PDF untouched.
-- **Crop & straighten** — four corner handles plus a handle per edge, so the
-  crop follows a page that is not square to the camera, and a homography
-  flattens it back to a rectangle. The page edges are found automatically on
-  open (gradient-steered Hough transform, pure Dart, no OpenCV); a rectangle
-  mode with paper-size ratios is one tap away for photos that are already flat.
-- Every tool **names its output** before it runs — the title reaches the file
-  itself, not just the auto-saved copy, and collisions are numbered rather
-  than overwritten.
+Four tabs—Files, Tools, Scan and Settings—provide the main navigation. Tools
+reuse a selected working document. Android offers one PDF **Open with** entry;
+external launches go directly to the viewer.
 
-**Edit** (the Tools tab)
-- **Organize pages** — rotate, reorder and delete in one staged pass
-- **Document details** — read and rewrite `/Info` metadata
-- **Protect** — AES-256 (PDF 2.0) passwords; opens and removes RC4 / AES-128 / AES-256
-- **Extract text** — real content-stream extraction (encodings, ToUnicode CMaps, CID fonts), copy or save as `.txt`
+Files search matches names and folders, not PDF contents. Viewer text search,
+last-read restoration, interactive form editing, OCR and redaction remain
+future work. Image-only scans have no selectable text without an existing text
+layer. Password protection does not expose printing/copying/editing restrictions.
+The app supports different merge-input passwords through temporary decryption.
 
-**Ask** (on-device AI) — *built, not yet shipped; planned for a future update*
-- Summarize a document or ask questions about it, with **page citations**
-- Retrieval-augmented: the native core chunks the document, BM25 retrieval picks
-  the passages that matter, and only those reach the model — which is what
-  makes a small on-device model viable
-- Ships with a zero-weights extractive fallback so the whole pipeline works
-  before any model is installed. See [On-device AI](#on-device-ai).
-- The entry points are hidden behind `Features.ai` (`lib/config/features.dart`)
-  until the model line-up and first-run experience are settled.
+## PDF engine
 
-**Also**
-- Continuous-scroll viewer with pinch-zoom that re-renders sharper as you zoom
-- In the viewer, long-press a word directly, adjust the handles,
-  then **Copy** (or **Select all** for that page). Selection follows the PDF's
-  text layer; image-only scans need OCR first.
-- Android "Open with" integration: **one** entry, because opening a PDF from
-  another app means one thing — read it. Every tool is then a tap away in the
-  viewer's own menu, chosen once the document is actually on screen
-- External PDF launches go directly to the viewer, skipping the app splash
-- One compact banner on the main app screen and at the bottom of the PDF viewer. An
-  available interstitial appears after every fourth successful document
-  operation in a session
-- Auto-save, output quality, dark/light theme, completion notifications
-- Android saves publish a durable copy in `Download/PDFHelper` or
-  `Documents/PDFHelper`, visible to the system Files app and retained after
-  uninstall. A private working copy remains available for viewing and tools.
-- Just-in-time permission requests with rationale dialogs
+[`flutter_pdf_core`](https://github.com/koundinyalanka1/flutter_pdf_core) is a
+Git submodule under `packages/`. Its Rust parser, object model, document
+operations, text extraction and page renderer are exposed through `dart:ffi`.
+Standalone image codecs are dependencies of that engine; there is no second PDF
+parser or viewer fallback.
 
-## Architecture
+The renderer includes paths/dashes, text painting and clipping, common embedded
+font outlines, inline/XObject images, JPEG 2000/JBIG2, shadings and patterns,
+blend modes, Form transparency groups, masks, default layer visibility and
+annotation/widget appearances with common fallbacks.
 
-```
-lib/
-  ai/            # LocalAiModel interface, model store, BM25 index, orchestration
-  models/        # SelectedPdfFile, LibraryQuery (Files tab filter/sort rules),
-                 # HomeTabs + DocHandoff (the navigation model)
-  providers/     # ThemeProvider + AppColors
-  screens/       # splash, home, library, merge, convert, split, tools, organize,
-                 # metadata, protect, extract-text, ai, ai-models, scan-edit,
-                 # preview, viewer, settings
-  services/      # PdfCoreService (FFI wrapper), PdfService (operations),
-                 # PdfRaster (page pixels + cache), PdfLibraryService (device
-                 # sweep), RecentFilesService, notifications, intents, ads
-  utils/         # format_utils, error_logger
-  widgets/       # LazyIndexedStack, PdfIntentListener, result dialog, settings
+Compatibility is bounded. Vertical writing, arbitrary composite-font CMaps,
+Type3 glyph programs, advanced colour management/overprint, page transparency
+groups and some annotation details remain limited. Warnings report many
+unsupported or approximate cases, but warning coverage is incomplete:
+**no warning does not establish exact rendering**. Displayed signature artwork
+does not verify a signature, and rewriting signed PDFs invalidates signatures.
+See the renderer document before making compatibility claims.
 
-packages/
-  flutter_pdf_core/   # git submodule — the Rust PDF core
-```
+## Development setup
 
-Three services sit between the app and the native core:
-
-| Service | Owns |
-|---|---|
-| `PdfCoreService` | the FFI surface, availability probing, error message mapping |
-| `PdfService` | document operations — merge, split, extract, image→PDF |
-| `PdfRaster` | page pixels, with one bounded LRU cache shared by every screen |
-| `PdfLibraryService` | finding every readable PDF on the device, and caching the result |
-
-Screens never call `PdfCore` directly, so the engine stays swappable.
-
-### The Rust core
-
-Crates inside the submodule (`packages/flutter_pdf_core/rust/crates`):
-
-| Crate | Purpose |
-|---|---|
-| `pdf_core` | lexer, parser, object model, xref (+ streams), filters, writer, crypto |
-| `pdf_ops` | page tree, split/delete/reorder, merge, rotate/crop, metadata, **image→PDF composition** |
-| `pdf_text` | content streams, fonts, text extraction |
-| `pdf_render` | **page rasterizer** — scanline AA fills, clipping, images, TrueType text |
-| `pdf_ai` | chunking + JSON/NDJSON export for local models |
-| `pdf_ffi` | the C ABI consumed by `dart:ffi` |
-
-Run the native test suite with `./scripts/build_pdf_core.sh test`.
-
-**Renderer coverage.** The graphics state stack, path construction and painting
-(fill/stroke, non-zero and even-odd), arbitrary clipping paths,
-DeviceGray/RGB/CMYK plus ICCBased/Indexed/Separation colour, constant alpha
-from `/ExtGState`, image XObjects (JPEG, CCITT G3/G4, Flate, LZW, stencil
-masks, soft masks), form XObjects, and glyph outlines from both TrueType
-(including composite glyphs) and CFF/Type1C.
-
-Text whose font the document never embedded — the standard 14, or a program in
-a format the renderer cannot parse — is drawn in a substitute face (Roboto,
-bundled) rather than skipped, because a page of invisible text is
-indistinguishable from a broken file. Advances still come from the document's
-own `/Widths` wherever it supplies them.
-
-Deliberately skipped rather than failed — pages using these still render, minus
-that element: shading and tiling patterns, inline images (`BI…EI`), blend
-modes, and the JPXDecode / JBIG2Decode image codecs. A render that had to leave
-something out reports it, so the viewer can say the page is approximate instead
-of presenting it as exact.
-
-## On-device AI
-
-> **Not shipped yet.** `Features.ai` in `lib/config/features.dart` is `false`,
-> so the "Ask AI" entries and the model manager are hidden from the UI. The
-> layer below them is complete and still builds and tests — what is unsettled
-> is which models to offer, how large a download to ask for, and how first run
-> should read. Setting the flag to `true` is the whole of what it takes to put
-> it back in front of users.
-
-The AI layer is built so that adding a model is one class and one line, not a
-rewrite. Everything routes through `LocalAiModel` (`lib/ai/ai_model.dart`):
-
-```dart
-abstract class LocalAiModel {
-  AiModelDescriptor get descriptor;
-  bool get isLoaded;
-  Future<void> load();
-  Stream<String> generate(String prompt, {int maxTokens, double temperature, Future<void>? cancelled});
-  Future<List<double>?> embed(String text);   // null => retrieval stays on BM25
-  Future<void> dispose();
-}
-```
-
-To embed a real model:
-
-1. Implement `LocalAiModel` over your runtime (llama.cpp via FFI, MediaPipe LLM
-   Inference, or ONNX Runtime — `AiRuntime` already names all three).
-2. Register it at startup:
-   ```dart
-   AiRuntimeRegistry.register(AiRuntime.gguf, (d) => GgufModel(d));
-   ```
-3. Import the weights in-app: **Tools → Ask AI → model chip → Import a model file**.
-   Accepted extensions come from `AiRuntime.extensions` (`.gguf`, `.task`, `.onnx`).
-
-Nothing else changes. `AiService` already handles chunking, retrieval, prompt
-assembly against the model's declared `contextTokens`, streaming, cancellation
-and citations. Returning vectors from `embed()` automatically upgrades
-retrieval from BM25 to a blended dense/lexical search.
-
-Until a model is registered, `ExtractiveModel` answers by selecting sentences
-from the document itself. It cannot hallucinate — and it cannot paraphrase. The
-AI screen says which of the two is running.
-
-Weights live in app-private storage (`<app support>/ai_models/`) and are never
-uploaded.
-
-## Build
+Use Flutter with Dart **3.12.1 or later, below 4.0**: the engine dependency sets
+this effective minimum. Native builds need Rust 1.92 or later; Android needs its SDK,
+NDK, `cargo-ndk` and the Rust Android targets. macOS host tests need a macOS
+native library and Apple build tools.
 
 ```bash
-./scripts/build_pdf_core.sh            # all platforms this host can build
-./scripts/build_pdf_core.sh android    # or one at a time
-./scripts/build_pdf_core.sh test       # cargo test --workspace
-
-flutter run                            # debug
-flutter build apk --release            # Android
-flutter build ipa                      # iOS (requires signing)
+git clone --recurse-submodules <repository-url>
+cd pdfhelper
+flutter pub get
+cargo install cargo-ndk
+rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+bash scripts/build_pdf_core.sh android
+bash scripts/build_pdf_core.sh macos
+flutter run
 ```
 
-Rebuild the native core whenever the submodule moves; `flutter clean` first so
-the new binaries are picked up.
+For an existing clone, initialize the engine with
+`git submodule update --init --recursive`. The build script locates an installed
+NDK or accepts `ANDROID_NDK_HOME`. Run `macos` only on a Mac when its host
+library is needed. Explicit targets avoid the script's macOS default also
+attempting the deferred iOS build.
 
-## Finding files on the device
+Rebuild native libraries after engine changes, then rebuild the Flutter app;
+hot reload cannot replace native binaries. Missing native libraries fail the
+Android build preflight. Runtime availability checks also give the app a
+readable error if its engine cannot load.
 
-The Files tab walks all accessible shared-storage volumes on a background
-isolate. It uses Android's volume paths for the current user, including mounted
-SD/USB drives, and scans to completion without a file-count, depth, or time
-cutoff. Hidden files/folders and folders named `cache` or `node_modules` are
-included if they contain PDFs. Root aliases are deduplicated and nested symbolic
-links are not followed, preventing loops. An unreadable branch does not stop
-other folders or volumes from being scanned.
+## Source layout
 
-Android 11+ still protects other apps' private directories (`Android/data` and
-`Android/obb`); the scan skips branches the OS denies access to. Readable folders
-on older Android versions remain included. PDF Helper's own document directories
-are scanned separately. `Android/media`, including messaging-app folders, is
-included. Cloud-only files need to be downloaded or imported first.
+| Path | Responsibility |
+| --- | --- |
+| `lib/screens`, `lib/widgets` | App routes, document workflows, viewer and controls |
+| `lib/services/pdf_core_service.dart` | Engine availability and path-based native operations |
+| `lib/services/pdf_service.dart`, `pdf_raster.dart` | Operation workflows, raster scheduling and bounded caches |
+| `lib/services/pdf_library_service.dart`, `public_pdf_save_service.dart` | Discovery, linked document records and public-copy lifecycle |
+| `lib/services/scan_image_store.dart` | Owned scan temporary files and cleanup |
+| `lib/providers`, `lib/models` | Preferences, themes and UI/document models |
+| `lib/ai`, `lib/config/features.dart` | Hidden AI implementation and feature gate |
+| `android/app/src/main/kotlin` | Incoming PDF URI handling, storage access and public exports |
+| `packages/flutter_pdf_core/rust/crates` | `pdf_core`, `pdf_ops`, `pdf_text`, `pdf_render`, `pdf_ai`, `pdf_ffi` |
 
-What it can see depends on the grant:
+## Storage, privacy and advertising
 
-| | Android ≤10 | Android 11+ | iOS |
-|---|---|---|---|
-| Default | app's own directories | app's own directories | app's own documents |
-| After the grant | `READ_EXTERNAL_STORAGE` → all shared storage | All files access (`MANAGE_EXTERNAL_STORAGE`) → all shared storage | n/a — sandboxed; use Import |
+The Files tab scans readable storage in the background. Broad discovery access
+is optional; without it, app documents and individual imports still work.
+Android storage protections continue to apply. The first scan after a new grant
+shows progress; routine refreshes reuse cached results while discovery runs.
 
-Access is checked with `Environment.isExternalStorageManager()` on Android 11+
-and the storage permission/legacy-storage state on older versions. Listing a
-root is not proof of full access: scoped storage can return a filtered view.
-Android 10 uses `requestLegacyExternalStorage`; Android 11+ uses the All files
-access Settings screen. The Files tab rechecks on every app resume and queues
-another scan if a refresh arrives during a sweep. Without the grant, the tab
-shows app documents and offers **Allow access**. On iOS it offers Import.
+Android Save retains a private working PDF and publishes a durable copy under
+`Download/PDFHelper` or `Documents/PDFHelper`. Public copies survive uninstall.
+Linked rename/delete operations cover tracked working and public copies, with
+partial failures reported. Scan sessions clean files they own and preserve
+borrowed originals when an edit is cancelled.
 
-Regression checks: `flutter test test/services/android_storage_service_test.dart
-test/services/pdf_library_service_test.dart test/screens/library_screen_test.dart`.
-On a phone, test granting/revoking access and returning immediately, then verify
-PDFs in Download, Documents, Android/media, hidden folders, deeply nested folders,
-and a mounted SD/USB drive. The list must refresh without restarting the app.
+A consent-aware bottom banner appears on the home screen and viewer. Reading
+does not trigger interstitials. An available interstitial may appear after every
+fourth successful document-producing operation in a session. Debug/profile use
+test ad units; Android release uses configured production units. UMP gates ad
+requests, and Settings exposes privacy choices when required.
 
-## Platform support
+Firebase Crashlytics initializes only in release mode. Firebase Analytics is
+not a dependency. The app disables backup/cleartext traffic and does not require
+broad photo/video or microphone permissions. See the
+[privacy policy](https://yourmateapps.github.io/pdfhelper/privacy-policy.html)
+and current audit for configuration and release-account checks.
 
-| Platform | Status |
-|----------|--------|
-| Android  | supported (API 24+); scoped storage; one VIEW intent alias |
-| iOS      | deferred for this release; permission, document routing and service configuration work remains |
-| macOS    | the core builds, the app is not wired up |
-| Windows / Linux / web | not supported — the app uses `dart:io` throughout |
+## Validation and release
 
-## Before publishing
+Run host checks against rebuilt native libraries:
 
-The Android app and native library are undergoing the production repair pass.
-See the [current repair tracker](docs/PRODUCTION_FIX_PLAN.md) for fixes and
-validation, the [original audit](docs/PRODUCTION_AUDIT_2026-10-04.md) for findings,
-and [Play Store readiness](docs/PLAY_STORE_READINESS.md) for account and device
-checks. AI features remain disabled; iOS is deferred.
+```bash
+bash scripts/build_pdf_core.sh test
+flutter analyze
+PDF_CORE_LIB_PATH="$PWD/packages/flutter_pdf_core/macos/Frameworks/libpdf_ffi.dylib" flutter test
+flutter test integration_test/pdf_workflows_test.dart -d <android-device-id>
+flutter build appbundle --release
+python3 scripts/check_android_native.py build/app/outputs/bundle/release/app-release.aab
+```
 
-- [x] Android debug/profile builds use test ad units; release uses the configured
-      production units. UMP consent gates ad requests and Settings exposes ad
-      privacy choices when required.
-- [x] Rate App points to the application’s Play listing. Firebase/Crashlytics
-      Gradle integration is connected for production; debug skips production
-      Firebase. Crashlytics upload tasks require `-PuploadCrashlytics=true`.
-- [x] Removed unused broad photo/video and microphone permissions. Legacy write
-      permission is limited to Android 9 and earlier for public PDF saves.
-      Gallery import uses the system picker. PDF sharing uses the sharing plugin;
-      the unused app FileProvider with broad storage exposure was removed.
-- [x] Native fixes pass 274 Rust unit tests and 1 documentation test, including
-      PDF layer preservation and dashed strokes. Android/macOS libraries were
-      rebuilt; current full-suite and artifact results are in the repair tracker.
-- [x] Release signing now fails when credentials are missing instead of using
-      the debug key. Debug builds remain available without release credentials.
-- [x] Publish the corrected [privacy policy](docs/privacy-policy.html), covering
-      Crashlytics, AdMob privacy choices, document handling and deletion. The
-      previous live policy incorrectly described Firebase Analytics. User merged
-      and deployed the website update; the live page was verified on 5 October.
-- [x] Configure and publish the required privacy messages in AdMob, then test
-      consent acceptance, refusal and changes on a registered test device.
-      Verified on a Motorola edge 70 fusion (Android 16) in EEA preview: the
-      form shows at launch; Consent and Do not consent both record a TCF
-      string and ads resume (limited ads after refusal); Settings → Ad privacy
-      choices reopens the form, hiding ads while it is open.
-      Debug builds preview the EEA message from anywhere with
-      `flutter run --dart-define=UMP_DEBUG_GEOGRAPHY=eea --dart-define=UMP_TEST_DEVICE_IDS=<hashed id>`
-      (`us` for a regulated US state); see `AdsService`.
-- [ ] Complete Play Console **Permissions Declaration** and obtain approval for
-      `MANAGE_EXTERNAL_STORAGE`, with a document-management justification for
-      full-device discovery. Access remains optional in the app; approval is a
-      separate Play review requirement.
-- [ ] Complete Data safety, ads/content-rating declarations and store listing.
-      Confirm the production ad units and Firebase project belong to the release.
-- [ ] Complete physical-device and 16 KB runtime checks in the readiness document,
-      including camera, gallery, external intents, share and permission changes.
-- [ ] Commit the native library changes in `packages/flutter_pdf_core` separately,
-      then update this repository’s submodule reference so clean builds include
-      the repaired engine.
+Release builds require `android/key.properties`, or an external signing file
+selected through `ORG_GRADLE_PROJECT_signingPropertiesFile`. Missing signing
+credentials fail the release build; there is no debug-key fallback. Debug uses
+the separate `com.yourmateapps.pdfhelper.debug` application ID. Keep signing
+credentials outside version control.
 
-For an iOS release, separately supply production AdMob identifiers and Firebase
-configuration (`GoogleService-Info.plist`) and validate that platform; this audit
-focused on Android/Google Play.
+Local builds skip Crashlytics mapping uploads. The intended production pipeline
+opts in with `ORG_GRADLE_PROJECT_uploadCrashlytics=true`. For an APK, also run
+Android Build Tools `zipalign -c -P 16 4 <apk-path>`. Static native alignment
+checks do not replace runtime testing on a genuine 16 KiB-page Android system.
 
-See `IMPROVEMENTS.md` for the enhancement backlog.
+Record engine changes in the submodule and its matching revision in this
+repository, including corresponding native artifacts or reproducible builds.
+The production audit records the current snapshot, evidence and remaining
+phone/account/store work. Passing automated checks alone does not imply Play
+approval or a published release.
