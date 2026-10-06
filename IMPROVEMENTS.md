@@ -78,7 +78,7 @@ continues to warn.
   a signature appearance does not verify it.
 - Core API: open-once document handles, operation progress/cancellation,
   per-input merge passwords, permission settings, and additional page APIs.
-- Viewer: search, last-read page, bookmarks/links, thumbnails, display modes,
+- Viewer: last-read page, bookmarks/links, thumbnails, display modes,
   printing and keep-screen-on.
 - Tools: compression, PDF-to-images, watermark/page numbers, interactive form
   filling, annotation editing, OCR and redaction.
