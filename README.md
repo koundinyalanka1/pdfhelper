@@ -17,7 +17,7 @@ Start with the [documentation index](docs/README.md):
 | Area | Available now |
 | --- | --- |
 | Files | All/Recent/Starred/Created, filename/folder search, sorting, list/grid, covers, share, rename and linked-copy deletion |
-| Viewer | Continuous scrolling, pinch/double-tap zoom, document-wide scrolling while zoomed, sharper rerendering, page jump, text selection/copy and tool shortcuts |
+| Viewer | Continuous scrolling, pinch/double-tap zoom, document-wide scrolling while zoomed, sharper rerendering, page jump, find in document, text selection/copy and tool shortcuts |
 | Assemble | Ordered merge and output batches; split by range, selection or individual pages |
 | Edit | Page rotation/reordering/deletion, metadata, AES-256 protection and password removal |
 | Extract | Content-stream text extraction for copying or saving as text |
@@ -29,10 +29,10 @@ Four tabs—Files, Tools, Scan and Settings—provide the main navigation. Tools
 reuse a selected working document. Android offers one PDF **Open with** entry;
 external launches go directly to the viewer.
 
-Files search matches names and folders, not PDF contents. Viewer text search,
-last-read restoration, interactive form editing, OCR and redaction remain
-future work. Image-only scans have no selectable text without an existing text
-layer. Password protection does not expose printing/copying/editing restrictions.
+Files search matches names and folders, not PDF contents; the viewer's find
+searches the open document's text. Last-read restoration, interactive form
+editing, OCR and redaction remain future work. Image-only scans have no
+selectable or searchable text without an existing text layer. Password protection does not expose printing/copying/editing restrictions.
 The app supports different merge-input passwords through temporary decryption.
 
 ## PDF engine

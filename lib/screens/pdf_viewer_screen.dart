@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
@@ -13,6 +14,7 @@ import '../providers/theme_provider.dart';
 import '../services/pdf_core_service.dart';
 import '../services/pdf_raster.dart';
 import '../services/pdf_service.dart';
+import '../services/pdf_text_search.dart';
 import '../services/pdf_text_selection_service.dart';
 import '../services/recent_files_service.dart';
 import '../utils/error_logger.dart';
@@ -55,6 +57,18 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
   final PdfTextSelectionController _textSelectionController =
       PdfTextSelectionController();
   double _lastScrollOffset = 0;
+
+  /// Find in document. Created once the page count is known; the find bar
+  /// replaces the app bar while [_finding].
+  PdfDocumentSearch? _search;
+  bool _finding = false;
+  final TextEditingController _findText = TextEditingController();
+  final FocusNode _findFocus = FocusNode();
+  Timer? _findDebounce;
+
+  /// Whether this find session has already explained that the document has
+  /// no text to search, so each new query doesn't repeat it.
+  bool _explainedNoText = false;
 
   /// Every page's width/height as it becomes known — all of them shortly
   /// after opening (see [_loadPageRatios]), or from the page itself if it
@@ -151,6 +165,10 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
 
   @override
   void dispose() {
+    _findDebounce?.cancel();
+    _search?.dispose();
+    _findText.dispose();
+    _findFocus.dispose();
     _textSelectionController.removeListener(_onSelectionChanged);
     _textSelectionController.dispose();
     _zoomAnimation?.dispose();
@@ -342,6 +360,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
           _needsPassword = false;
           if (count == 0) _error = 'This PDF has no pages to display.';
         });
+        _createSearch(count);
         unawaited(_loadPageRatios());
         return;
       } on PdfException catch (e) {
@@ -443,20 +462,26 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
   }
 
   void _updateCurrentPage() {
-    if (!_scrollController.hasClients) return;
-    if (_totalPages == 0) return;
+    final page = _pageIndexAt(100);
+    if (page != null && _currentPage != page + 1) {
+      setState(() => _currentPage = page + 1);
+    }
+  }
+
+  /// Index of the page drawn [y] pixels down the viewport, scroll and zoom
+  /// included; null before there is a page list or past its end.
+  int? _pageIndexAt(double y) {
+    if (!_scrollController.hasClients) return null;
     final transform = _zoomController.value;
     final offset =
         _scrollController.offset +
-        (100 - transform.storage[13]) / transform.getMaxScaleOnAxis();
+        (y - transform.storage[13]) / transform.getMaxScaleOnAxis();
     double running = 0;
     for (int i = 0; i < _totalPages; i++) {
       running += _pageExtent(i);
-      if (running > offset) {
-        if (_currentPage != i + 1) setState(() => _currentPage = i + 1);
-        return;
-      }
+      if (running > offset) return i;
     }
+    return null;
   }
 
   /// Pop back if there is somewhere to return to, otherwise land on Home —
@@ -494,6 +519,178 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
     }
     _scrollController.jumpTo(
       offset.clamp(0.0, _scrollController.position.maxScrollExtent),
+    );
+  }
+
+  /// The document's search, reading text with the same password as the
+  /// pages. Nothing is read until the reader searches.
+  void _createSearch(int pageCount) {
+    _search?.dispose();
+    final path = widget.pdfPath;
+    final password = _password;
+    _search = PdfDocumentSearch(
+      pageCount: pageCount,
+      loadLayout: (index) =>
+          PdfTextSelectionService.load(path, index, password: password),
+      loadIndex: () => PdfTextSearch.loadIndex(
+        path,
+        password: password,
+        pageCount: pageCount,
+      ),
+      onMatch: _revealMatch,
+    )..addListener(_onSearchChanged);
+  }
+
+  void _openFind() {
+    _textSelectionController.clear();
+    _explainedNoText = false;
+    // A reopened find bar keeps its last query, selected so that typing
+    // replaces it.
+    _findText.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: _findText.text.length,
+    );
+    setState(() => _finding = true);
+    if (_findText.text.trim().isNotEmpty) _runFind();
+  }
+
+  void _closeFind() {
+    _findDebounce?.cancel();
+    _findFocus.unfocus();
+    _search?.clear();
+    setState(() => _finding = false);
+  }
+
+  /// Search as the reader types, once they pause.
+  void _onFindChanged(String _) {
+    _findDebounce?.cancel();
+    _findDebounce = Timer(const Duration(milliseconds: 250), _runFind);
+  }
+
+  /// Search from the page in the middle of the screen: the current match's
+  /// page once one is centred, or wherever the reader has scrolled to since.
+  void _runFind() {
+    _findDebounce?.cancel();
+    final middle = _scrollController.hasClients
+        ? _pageIndexAt(_scrollController.position.viewportDimension / 2)
+        : null;
+    _search?.search(_findText.text, startPage: middle ?? _currentPage - 1);
+  }
+
+  /// The keyboard's search key runs a query that hasn't run yet. Stepping is
+  /// left to the arrows, so putting the keyboard away never skips past the
+  /// match just found.
+  void _submitFind() {
+    final search = _search;
+    if (search == null) return;
+    if ((_findDebounce?.isActive ?? false) || _findText.text != search.query) {
+      _runFind();
+    }
+  }
+
+  void _clearFind() {
+    _findText.clear();
+    _runFind();
+    _findFocus.requestFocus();
+  }
+
+  /// An image-only scan has nothing to find. Say so once, rather than leave
+  /// "0/0" looking as though the query were wrong.
+  void _onSearchChanged() {
+    final search = _search;
+    if (search == null || !_finding || _explainedNoText) return;
+    if (search.isSearching || search.query.isEmpty) return;
+    if (search.documentHasText != false) return;
+    _explainedNoText = true;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        const SnackBar(
+          content: Text(
+            'This PDF has no searchable text. Scanned pages need OCR.',
+          ),
+        ),
+      );
+  }
+
+  /// Bring a match into view without changing the zoom.
+  ///
+  /// A match already comfortably on screen stays where it is, so stepping
+  /// through one paragraph doesn't jolt the page. Otherwise it is centred:
+  /// the list scrolls to it and, when zoomed in, the transform pans to it.
+  void _revealMatch(PdfSearchMatch match) {
+    if (!mounted || !_scrollController.hasClients) return;
+    _textSelectionController.clear();
+    _verticalPanAnimation.stop();
+    _zoomAnimation?.stop();
+    final position = _scrollController.position;
+    final viewport = Size(
+      MediaQuery.sizeOf(context).width,
+      position.viewportDimension,
+    );
+    final target = _matchRectInList(match);
+    final transform = _zoomController.value;
+    final scale = transform.getMaxScaleOnAxis();
+    var offset = position.pixels;
+    var dx = transform.storage[12];
+    var dy = transform.storage[13];
+    // Where the match is drawn now: the list scrolls it, then the zoom
+    // scales and pans the whole viewport.
+    final shown = Rect.fromLTRB(
+      target.left * scale + dx,
+      (target.top - offset) * scale + dy,
+      target.right * scale + dx,
+      (target.bottom - offset) * scale + dy,
+    );
+    final comfortable = (Offset.zero & viewport).deflate(24);
+    if (shown.top < comfortable.top || shown.bottom > comfortable.bottom) {
+      final centre = viewport.height / 2;
+      offset = (target.center.dy - (centre - dy) / scale).clamp(
+        position.minScrollExtent,
+        position.maxScrollExtent,
+      );
+      // Near either end the list cannot scroll far enough. While zoomed the
+      // transform makes up the rest, as it does for a vertical pan.
+      dy = (centre - (target.center.dy - offset) * scale).clamp(
+        math.min(0.0, viewport.height * (1 - scale)),
+        0.0,
+      );
+    }
+    if (shown.left < comfortable.left || shown.right > comfortable.right) {
+      dx = (viewport.width / 2 - target.center.dx * scale).clamp(
+        math.min(0.0, viewport.width * (1 - scale)),
+        0.0,
+      );
+    }
+    if (offset != position.pixels) _scrollController.jumpTo(offset);
+    if (dx != transform.storage[12] || dy != transform.storage[13]) {
+      _zoomController.value = Matrix4.copy(transform)
+        ..setEntry(0, 3, dx)
+        ..setEntry(1, 3, dy);
+    }
+  }
+
+  /// [match] in the page list's own coordinates, before scrolling and zoom.
+  Rect _matchRectInList(PdfSearchMatch match) {
+    final width = _pageWidth;
+    final height = pageHeight(
+      width,
+      pageAspectRatio(_pageRatios, match.pageIndex, _aspectRatio),
+    );
+    // The list's top padding, every page above with its margins, then this
+    // page's own top margin.
+    var top = 6.0;
+    for (int i = 0; i < match.pageIndex; i++) {
+      top += _pageExtent(i);
+    }
+    top += 6;
+    final scaleX = width / match.pageSize.width;
+    final scaleY = height / match.pageSize.height;
+    return Rect.fromLTRB(
+      12 + match.bounds.left * scaleX,
+      top + match.bounds.top * scaleY,
+      12 + match.bounds.right * scaleX,
+      top + match.bounds.bottom * scaleY,
     );
   }
 
@@ -670,60 +867,22 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
   @override
   Widget build(BuildContext context) {
     _colors = AppColors.of(context);
+    final search = _finding ? _search : null;
     return PopScope(
-      canPop: !_textSelectionController.hasSelection,
+      canPop: !_textSelectionController.hasSelection && !_finding,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) _textSelectionController.clear();
+        if (didPop) return;
+        if (_textSelectionController.hasSelection) {
+          _textSelectionController.clear();
+        } else if (_finding) {
+          _closeFind();
+        }
       },
       child: Scaffold(
         backgroundColor: _colors.isDark
             ? const Color(0xFF12121C)
             : Colors.grey.shade300,
-        appBar: AppBar(
-          title: Text(
-            _fileName,
-            style: TextStyle(color: _colors.textPrimary, fontSize: 16),
-            overflow: TextOverflow.ellipsis,
-          ),
-          backgroundColor: _colors.cardBackground,
-          elevation: 0,
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back),
-            onPressed: _onBack,
-            color: _colors.textPrimary,
-          ),
-          actions: [
-            if (_isZoomed)
-              IconButton(
-                icon: const Icon(Icons.zoom_out_map_rounded),
-                tooltip: 'Fit to width',
-                onPressed: _resetZoom,
-                color: _colors.textPrimary,
-              ),
-            if (_totalPages > 0)
-              TextButton(
-                onPressed: _jumpToPage,
-                child: Text(
-                  '$_currentPage / $_totalPages',
-                  style: TextStyle(color: _colors.textSecondary, fontSize: 14),
-                ),
-              ),
-            IconButton(
-              icon: const Icon(Icons.share),
-              tooltip: 'Share',
-              onPressed: () => SharePlus.instance.share(
-                ShareParams(files: [XFile(widget.pdfPath)], text: 'PDF'),
-              ),
-              color: _colors.textPrimary,
-            ),
-            IconButton(
-              icon: const Icon(Icons.more_vert),
-              tooltip: 'More actions',
-              onPressed: _showActions,
-              color: _colors.textPrimary,
-            ),
-          ],
-        ),
+        appBar: search != null ? _findBar(search) : _viewerBar(),
         body: SafeArea(
           top: false,
           left: false,
@@ -731,7 +890,20 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
           child: Column(
             children: [
               _approximateBanner(),
-              Expanded(child: _buildBody()),
+              Expanded(
+                child: Stack(
+                  children: [
+                    Positioned.fill(child: _buildBody()),
+                    if (search != null)
+                      Positioned(
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        child: _findProgress(search),
+                      ),
+                  ],
+                ),
+              ),
               const BannerAdWidget(),
             ],
           ),
@@ -739,6 +911,186 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
       ),
     );
   }
+
+  PreferredSizeWidget _viewerBar() {
+    return AppBar(
+      title: Text(
+        _fileName,
+        style: TextStyle(color: _colors.textPrimary, fontSize: 16),
+        overflow: TextOverflow.ellipsis,
+      ),
+      backgroundColor: _colors.cardBackground,
+      elevation: 0,
+      leading: IconButton(
+        icon: const Icon(Icons.arrow_back),
+        onPressed: _onBack,
+        color: _colors.textPrimary,
+      ),
+      actions: [
+        if (_isZoomed)
+          IconButton(
+            icon: const Icon(Icons.zoom_out_map_rounded),
+            tooltip: 'Fit to width',
+            onPressed: _resetZoom,
+            color: _colors.textPrimary,
+          ),
+        if (_totalPages > 0)
+          TextButton(
+            onPressed: _jumpToPage,
+            child: Text(
+              '$_currentPage / $_totalPages',
+              style: TextStyle(color: _colors.textSecondary, fontSize: 14),
+            ),
+          ),
+        if (_totalPages > 0)
+          IconButton(
+            icon: const Icon(Icons.search),
+            tooltip: 'Find in document',
+            onPressed: _openFind,
+            color: _colors.textPrimary,
+          ),
+        IconButton(
+          icon: const Icon(Icons.share),
+          tooltip: 'Share',
+          onPressed: () => SharePlus.instance.share(
+            ShareParams(files: [XFile(widget.pdfPath)], text: 'PDF'),
+          ),
+          color: _colors.textPrimary,
+        ),
+        IconButton(
+          icon: const Icon(Icons.more_vert),
+          tooltip: 'More actions',
+          onPressed: _showActions,
+          color: _colors.textPrimary,
+        ),
+      ],
+    );
+  }
+
+  /// The app bar while finding: the query, where the current match falls
+  /// among all of them, and arrows to step between them.
+  PreferredSizeWidget _findBar(PdfDocumentSearch search) {
+    return AppBar(
+      backgroundColor: _colors.cardBackground,
+      elevation: 0,
+      centerTitle: false,
+      titleSpacing: 0,
+      leading: IconButton(
+        icon: const Icon(Icons.arrow_back),
+        tooltip: 'Close find',
+        onPressed: _closeFind,
+        color: _colors.textPrimary,
+      ),
+      title: ListenableBuilder(
+        listenable: _findText,
+        builder: (context, _) => TextField(
+          controller: _findText,
+          focusNode: _findFocus,
+          autofocus: true,
+          textInputAction: TextInputAction.search,
+          textAlignVertical: TextAlignVertical.center,
+          style: TextStyle(color: _colors.textPrimary, fontSize: 16),
+          cursorColor: _colors.accent,
+          decoration: InputDecoration(
+            hintText: 'Find in document',
+            hintStyle: TextStyle(color: _colors.textTertiary),
+            border: InputBorder.none,
+            filled: false,
+            suffixIcon: _findText.text.isEmpty
+                ? null
+                : IconButton(
+                    icon: const Icon(Icons.close, size: 20),
+                    tooltip: 'Clear',
+                    onPressed: _clearFind,
+                    color: _colors.textSecondary,
+                  ),
+          ),
+          onChanged: _onFindChanged,
+          onSubmitted: (_) => _submitFind(),
+          // Touching the page puts the keyboard away so the matches can be
+          // read. The arrows keep it: they share the field's tap region.
+          onTapOutside: (_) => _findFocus.unfocus(),
+        ),
+      ),
+      actions: [
+        TextFieldTapRegion(
+          child: ListenableBuilder(
+            listenable: search,
+            builder: (context, _) {
+              final canStep = search.matchCount > 0;
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _findStatus(search),
+                  IconButton(
+                    icon: const Icon(Icons.keyboard_arrow_up),
+                    tooltip: 'Previous match',
+                    onPressed: canStep ? search.previous : null,
+                    color: _colors.textPrimary,
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.keyboard_arrow_down),
+                    tooltip: 'Next match',
+                    onPressed: canStep ? search.next : null,
+                    color: _colors.textPrimary,
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// "3/17", a spinner until the first match turns up, or "0/0".
+  Widget _findStatus(PdfDocumentSearch search) {
+    if (search.query.isEmpty) return const SizedBox.shrink();
+    final number = search.currentNumber;
+    if (number == null && search.isSearching) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: SizedBox.square(
+          dimension: 16,
+          child: CircularProgressIndicator(
+            strokeWidth: 2,
+            color: _colors.textTertiary,
+          ),
+        ),
+      );
+    }
+    final total = '${search.matchCount}${search.isCapped ? '+' : ''}';
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Semantics(
+        label: number == null ? 'No matches' : 'Match $number of $total',
+        excludeSemantics: true,
+        child: Text(
+          number == null ? '0/0' : '$number/$total',
+          style: TextStyle(
+            color: number == null ? _colors.accent : _colors.textSecondary,
+            fontSize: 14,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// A hairline under the find bar while pages are still being read, so a
+  /// count that is still growing doesn't pass for the total.
+  Widget _findProgress(PdfDocumentSearch search) => IgnorePointer(
+    child: ListenableBuilder(
+      listenable: search,
+      builder: (context, _) => search.isSearching
+          ? LinearProgressIndicator(
+              value: search.progress,
+              minHeight: 2,
+              color: _colors.accent,
+              backgroundColor: Colors.transparent,
+            )
+          : const SizedBox.shrink(),
+    ),
+  );
 
   /// Remember the first page warning so the reader can be told once.
   void _noteWarnings(List<String> warnings) {
@@ -881,6 +1233,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
               isDark: _colors.isDark,
               zoom: _zoom,
               textSelectionController: _textSelectionController,
+              search: _search,
               // Recorded without a rebuild: the page resizes itself, and the
               // counter and Go to page read the map when they need it.
               onAspectRatio: (ratio) => _pageRatios[index] = ratio,
@@ -907,6 +1260,7 @@ class _PageView extends StatefulWidget {
     required this.onAspectRatio,
     required this.onWarnings,
     required this.textSelectionController,
+    this.search,
   });
 
   final String path;
@@ -927,6 +1281,10 @@ class _PageView extends StatefulWidget {
   final ValueChanged<List<String>> onWarnings;
   final PdfTextSelectionController textSelectionController;
 
+  /// Matches to highlight on this page. The page finds its own in the text
+  /// layout it already holds for selection.
+  final PdfDocumentSearch? search;
+
   @override
   State<_PageView> createState() => _PageViewState();
 }
@@ -940,6 +1298,11 @@ class _PageViewState extends State<_PageView> {
   PdfPageTextLayout? _textLayout;
   bool _loadingText = false;
   String? _textError;
+
+  /// This page's find highlights and the query and layout they came from.
+  String _highlightQuery = '';
+  PdfPageTextLayout? _highlightLayout;
+  List<List<Rect>> _highlights = const [];
 
   @override
   void initState() {
@@ -1016,6 +1379,38 @@ class _PageViewState extends State<_PageView> {
       ),
     );
   }
+
+  List<List<Rect>> _highlightsFor(String query) {
+    final layout = _textLayout;
+    if (layout == null || query.isEmpty) return const [];
+    if (query != _highlightQuery || !identical(layout, _highlightLayout)) {
+      _highlightQuery = query;
+      _highlightLayout = layout;
+      _highlights = PdfTextSearch.highlights(layout, query);
+    }
+    return _highlights;
+  }
+
+  /// Every match on this page tinted, the current one more strongly. Drawn
+  /// over the page and the text selection, and never in the way of touches.
+  Widget _findHighlights(PdfDocumentSearch search) => ListenableBuilder(
+    listenable: search,
+    builder: (context, _) {
+      final layout = _textLayout;
+      final matches = _highlightsFor(search.query);
+      if (layout == null || matches.isEmpty) return const SizedBox.shrink();
+      return IgnorePointer(
+        key: const ValueKey('pdf-find-highlights'),
+        child: CustomPaint(
+          painter: _FindHighlightPainter(
+            matches,
+            search.currentIndexOn(widget.pageIndex),
+            Size(layout.width, layout.height),
+          ),
+        ),
+      );
+    },
+  );
 
   @override
   void dispose() {
@@ -1142,20 +1537,63 @@ class _PageViewState extends State<_PageView> {
                   ),
                 ),
               )
-            : _withTextSelection(
-                Image.memory(
-                  _bytes!,
-                  fit: BoxFit.contain,
-                  gaplessPlayback: true,
-                  // The whole document is magnified by one InteractiveViewer
-                  // above the list, so the page itself just draws at its
-                  // natural size — and re-rasterizes when the zoom changes.
-                  filterQuality: FilterQuality.medium,
-                ),
+            : Stack(
+                fit: StackFit.expand,
+                children: [
+                  _withTextSelection(
+                    Image.memory(
+                      _bytes!,
+                      fit: BoxFit.contain,
+                      gaplessPlayback: true,
+                      // The whole document is magnified by one
+                      // InteractiveViewer above the list, so the page itself
+                      // just draws at its natural size — and re-rasterizes
+                      // when the zoom changes.
+                      filterQuality: FilterQuality.medium,
+                    ),
+                  ),
+                  if (widget.search case final search?) _findHighlights(search),
+                ],
               ),
       ),
     );
   }
+}
+
+/// Find matches over a page, in page points scaled to the page as drawn.
+class _FindHighlightPainter extends CustomPainter {
+  const _FindHighlightPainter(this.matches, this.current, this.pageSize);
+
+  final List<List<Rect>> matches;
+  final int? current;
+  final Size pageSize;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final scaleX = size.width / pageSize.width;
+    final scaleY = size.height / pageSize.height;
+    final match = Paint()..color = const Color(0x66FFC107);
+    final currentMatch = Paint()..color = const Color(0x99FF6D00);
+    for (int i = 0; i < matches.length; i++) {
+      for (final rect in matches[i]) {
+        canvas.drawRect(
+          Rect.fromLTRB(
+            rect.left * scaleX,
+            rect.top * scaleY,
+            rect.right * scaleX,
+            rect.bottom * scaleY,
+          ),
+          i == current ? currentMatch : match,
+        );
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_FindHighlightPainter oldDelegate) =>
+      !identical(matches, oldDelegate.matches) ||
+      current != oldDelegate.current ||
+      pageSize != oldDelegate.pageSize;
 }
 
 class _PageNumberDialog extends StatefulWidget {
