@@ -3,7 +3,15 @@ import 'package:flutter/material.dart';
 import '../providers/theme_provider.dart';
 import '../services/pdf_core_service.dart';
 import '../services/ads_service.dart';
+import '../utils/file_naming.dart';
+import '../utils/format_utils.dart';
+import '../widgets/pdf_name_dialog.dart';
 import '../widgets/pdf_result_dialog.dart';
+
+/// Whether [password] has characters outside printable ASCII, which some PDF
+/// apps (Apple's among them) cannot use to open a file.
+bool usesNonAsciiPassword(String password) =>
+    password.runes.any((rune) => rune < 0x20 || rune > 0x7E);
 
 /// Add or remove a PDF password.
 ///
@@ -73,12 +81,16 @@ class _ProtectScreenState extends State<ProtectScreen> {
       setState(() => _error = problem);
       return;
     }
+    if (!_engineReady()) return;
+    final fileName = await _askCopyName('protected', confirmLabel: 'Protect');
+    if (fileName == null || !mounted) return;
     await _run(
       () => PdfCoreService.protect(
         widget.pdfPath,
         _userController.text,
         ownerPassword: _ownerController.text,
         password: widget.password,
+        fileName: fileName,
       ),
       'Password added. Keep it somewhere safe — it cannot be recovered.',
       PdfOperation.protect,
@@ -90,11 +102,42 @@ class _ProtectScreenState extends State<ProtectScreen> {
       setState(() => _error = 'Enter the current password.');
       return;
     }
+    if (!_engineReady()) return;
+    final fileName = await _askCopyName('unlocked', confirmLabel: 'Save copy');
+    if (fileName == null || !mounted) return;
     await _run(
-      () => PdfCoreService.unlock(widget.pdfPath, _unlockController.text),
+      () => PdfCoreService.unlock(
+        widget.pdfPath,
+        _unlockController.text,
+        fileName: fileName,
+      ),
       'Password removed. The new file opens without one.',
       PdfOperation.unlock,
     );
+  }
+
+  /// Ask what to call the new copy, as the other tools do, starting from the
+  /// document's own name. Null when the user backs out.
+  Future<String?> _askCopyName(String state, {required String confirmLabel}) {
+    final title = stripPdfExtension(getPdfDisplayTitle(widget.pdfPath));
+    // An opened file whose provider gave no name is titled generically.
+    final base = title == 'View PDF' ? 'Document' : title;
+    return askPdfName(
+      context: context,
+      initialName: '$base ($state)',
+      confirmLabel: confirmLabel,
+      accent: _accent,
+    );
+  }
+
+  bool _engineReady() {
+    if (PdfCoreService.isAvailable) return true;
+    setState(() {
+      _error =
+          'The native PDF core is not built, so encryption is '
+          'unavailable. Run ./scripts/build_pdf_core.sh.';
+    });
+    return false;
   }
 
   Future<void> _run(
@@ -102,14 +145,6 @@ class _ProtectScreenState extends State<ProtectScreen> {
     String message,
     PdfOperation completedOperation,
   ) async {
-    if (!PdfCoreService.isAvailable) {
-      setState(() {
-        _error =
-            'The native PDF core is not built, so encryption is '
-            'unavailable. Run ./scripts/build_pdf_core.sh.';
-      });
-      return;
-    }
     setState(() {
       _isWorking = true;
       _error = null;
@@ -251,6 +286,14 @@ class _ProtectScreenState extends State<ProtectScreen> {
     ),
     const SizedBox(height: 14),
     _field(_confirmController, 'Confirm password', obscure: _obscure),
+    ListenableBuilder(
+      listenable: Listenable.merge([_userController, _ownerController]),
+      builder: (context, _) =>
+          usesNonAsciiPassword(_userController.text) ||
+              usesNonAsciiPassword(_ownerController.text)
+          ? _buildCompatibilityNotice()
+          : const SizedBox.shrink(),
+    ),
     const SizedBox(height: 14),
     _field(_ownerController, 'Owner password (optional)', obscure: _obscure),
     const SizedBox(height: 6),
@@ -261,6 +304,30 @@ class _ProtectScreenState extends State<ProtectScreen> {
       style: TextStyle(color: _colors.textTertiary, fontSize: 12),
     ),
   ];
+
+  /// Shown while a new password has accented or non-English characters. The
+  /// file is encrypted to the standard and opens in most PDF apps, but Apple's
+  /// PDF engine rejects any non-ASCII password.
+  Widget _buildCompatibilityNotice() => Padding(
+    key: const ValueKey('non-ascii-password-notice'),
+    padding: const EdgeInsets.only(top: 10),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(Icons.info_outline_rounded, color: Colors.amber.shade700, size: 18),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            'This password has accented or non-English characters. Most PDF '
+            'apps open the file, but Apple Preview and other apps built on '
+            "Apple's PDF engine cannot. For a password that works everywhere, "
+            'use only A–Z, 0–9 and common symbols.',
+            style: TextStyle(color: _colors.textSecondary, fontSize: 12),
+          ),
+        ),
+      ],
+    ),
+  );
 
   List<Widget> _buildUnlockFields() => [
     _field(

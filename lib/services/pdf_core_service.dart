@@ -213,8 +213,9 @@ class PdfCoreService {
     String userPassword, {
     String ownerPassword = '',
     String password = '',
+    String? fileName,
   }) async {
-    final out = await _outputPath('protected');
+    final out = await _outputPath('protected', fileName: fileName);
     await PdfCore.encryptAsync(
       path,
       userPassword,
@@ -226,8 +227,12 @@ class PdfCoreService {
   }
 
   /// Remove encryption (needs the correct [password]).
-  static Future<String> unlock(String path, String password) async {
-    final out = await _outputPath('unlocked');
+  static Future<String> unlock(
+    String path,
+    String password, {
+    String? fileName,
+  }) async {
+    final out = await _outputPath('unlocked', fileName: fileName);
     await PdfCore.decryptAsync(path, password, out);
     return out;
   }

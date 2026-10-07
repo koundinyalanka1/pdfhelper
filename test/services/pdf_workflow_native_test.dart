@@ -157,4 +157,34 @@ void main() {
       expect(paths.temporary.listSync(), isEmpty);
     },
   );
+
+  test('protect and unlock write copies under the name the user chose', () async {
+    final locked = await PdfCoreService.protect(
+      simple,
+      'secret',
+      fileName: 'Invoice (protected)',
+    );
+    expect(locked, endsWith('/Invoice (protected).pdf'));
+    await expectLater(
+      PdfRaster.pageCountOf(locked),
+      throwsA(isA<PdfException>().having((e) => e.code, 'code', 'ENCRYPTED')),
+    );
+    expect(await PdfService.getPageCount(locked, password: 'secret'), 1);
+
+    // Saving under a name already used never overwrites the first copy.
+    final again = await PdfCoreService.protect(
+      simple,
+      'secret',
+      fileName: 'Invoice (protected)',
+    );
+    expect(again, endsWith('/Invoice (protected) (2).pdf'));
+
+    final unlocked = await PdfCoreService.unlock(
+      locked,
+      'secret',
+      fileName: 'Invoice (unlocked)',
+    );
+    expect(unlocked, endsWith('/Invoice (unlocked).pdf'));
+    expect(await PdfService.getPageCount(unlocked), 1);
+  });
 }
