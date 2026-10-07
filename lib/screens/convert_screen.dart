@@ -12,6 +12,7 @@ import '../services/scan_image_store.dart';
 import '../services/scan_route_observer.dart';
 import '../providers/theme_provider.dart';
 import '../utils/file_naming.dart';
+import '../utils/photo_import.dart';
 import '../widgets/pdf_name_dialog.dart';
 import 'pdf_preview_screen.dart';
 import 'scan_edit_screen.dart';
@@ -270,7 +271,12 @@ class _ConvertScreenState extends State<ConvertScreen>
       }
       controller = CameraController(
         cameras.first,
-        ResolutionPreset.high,
+        // The preset sets the still-capture size too. `high` is 1280×720,
+        // about 85 dpi across an A4 page, which blurs small print. `ultraHigh`
+        // asks for 3840×2160 (or the closest a camera offers), which covers
+        // the 2400–3000 px the crop and filters keep (see filterMaxSide).
+        // `max` would hand those steps 50 MP images on some phones.
+        ResolutionPreset.ultraHigh,
         enableAudio: false,
         imageFormatGroup: ImageFormatGroup.jpeg,
       );
@@ -421,7 +427,7 @@ class _ConvertScreenState extends State<ConvertScreen>
       );
       if (!mounted || !widget.isActive || !_routeVisible) return;
       for (final image in selected) {
-        imported.add(await _images.importFile(image.path));
+        imported.add(await _importPicked(image.path, quality));
       }
       if (mounted && widget.isActive && _routeVisible && imported.isNotEmpty) {
         await _editNewImages(imported);
@@ -437,6 +443,21 @@ class _ConvertScreenState extends State<ConvertScreen>
       _isPicking = false;
       if (mounted) _syncCameraOwnership();
     }
+  }
+
+  /// Copy a picked photo into this scan. Photos the scan tools cannot read
+  /// (HEIC and HEIF, which many phones save, or AVIF) become JPEG first.
+  /// The picker only converts them itself below Maximum quality.
+  Future<String> _importPicked(String path, int quality) async {
+    if (!isHeifFamily(readFileHeader(path))) return _images.importFile(path);
+    final jpeg = await transcodeWithPlatformCodec(
+      await File(path).readAsBytes(),
+      quality: quality,
+    );
+    if (jpeg == null) {
+      throw const FormatException('this photo format is not supported');
+    }
+    return _images.write(jpeg);
   }
 
   Future<void> _editNewImages(List<String> sources) async {

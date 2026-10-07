@@ -31,10 +31,24 @@ class ImageFilterRequest {
   });
 }
 
+/// Longest side, in pixels, that the filters work at and return.
+///
+/// Camera scans arrive at up to 3840 px and gallery photos can be far larger;
+/// filtering those in full took several seconds per tap. 2400 px is about
+/// 200 dpi across an A4 page, the crop step's own limit, and Maximum quality
+/// keeps up to 3000 px, as cropping does.
+int filterMaxSide(int imageQuality) => imageQuality >= 95 ? 3000 : 2400;
+
 /// Top-level function for isolate processing
 Uint8List processImageInBackground(ImageFilterRequest request) {
-  final img.Image? image = img.decodeImage(request.imageBytes);
-  if (image == null) return request.imageBytes;
+  final img.Image? decoded = img.decodeImage(request.imageBytes);
+  if (decoded == null) return request.imageBytes;
+  // Cameras usually store a portrait shot sideways with an EXIF rotation.
+  // Bake it in, so every filter works on (and returns) an upright page.
+  final image = fitWithin(
+    img.bakeOrientation(decoded),
+    filterMaxSide(request.imageQuality),
+  );
 
   img.Image processed;
 
@@ -81,30 +95,29 @@ img.Image applyAutoEnhance(img.Image image) {
   return result;
 }
 
+/// [image] scaled down, keeping its aspect ratio, so that neither side
+/// exceeds [maxSide]; unchanged if it already fits.
+img.Image fitWithin(img.Image image, int maxSide) {
+  if (image.width <= maxSide && image.height <= maxSide) return image;
+  return image.width >= image.height
+      ? img.copyResize(image, width: maxSide)
+      : img.copyResize(image, height: maxSide);
+}
+
 /// CamScanner-style document filter
 /// Creates clean white background with crisp dark text.
 ///
 /// Performance: the previous implementation iterated a 31x31 (step-3) window
 /// per pixel — ~120 random reads per pixel, freezing the isolate for many
-/// seconds on large photos. This version:
-///   1. Downscales the input to a max dimension of 1500 px (still enough for
-///      sharp document text in the final JPEG/PDF).
-///   2. Builds integral images (summed-area tables) of the grayscale values
-///      and their squares, so each window's mean and variance are O(1).
+/// seconds on large photos. This version builds integral images
+/// (summed-area tables) of the grayscale values and their squares, so each
+/// window's mean and variance are O(1). Callers bound the size first; see
+/// [filterMaxSide].
 /// Local contrast is approximated by std-deviation/50 instead of (max-min)/255
 /// — a close enough proxy that retains the original "low-contrast = background"
 /// behaviour without an O(window^2) min/max scan.
 img.Image applyDocumentFilter(img.Image image) {
-  const int maxDim = 1500;
-  img.Image src = image;
-  if (image.width > maxDim || image.height > maxDim) {
-    if (image.width >= image.height) {
-      src = img.copyResize(image, width: maxDim);
-    } else {
-      src = img.copyResize(image, height: maxDim);
-    }
-  }
-
+  final img.Image src = image;
   final int width = src.width;
   final int height = src.height;
   final int n = width * height;
@@ -142,7 +155,10 @@ img.Image applyDocumentFilter(img.Image image) {
     return total;
   }
 
-  const int block = 15;
+  // The window was tuned at 1500 px, when the filter worked at that size.
+  // Grow it with larger pages so it spans the same share of the page and the
+  // filter looks the same at the sharper sizes.
+  final int block = math.max(15, (15 * math.max(width, height) / 1500).round());
   final result = img.Image(width: width, height: height);
 
   for (int y = 0; y < height; y++) {
