@@ -4,6 +4,8 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:flutter/foundation.dart';
 
+import '../utils/error_logger.dart';
+
 /// Initializes Firebase + Crashlytics defensively.
 ///
 /// If `google-services.json` (Android) or `GoogleService-Info.plist` (iOS)
@@ -39,25 +41,32 @@ class FirebaseService {
       collectionEnabled,
     );
 
-    // Capture all uncaught Flutter framework errors.
+    // Uncaught framework and async errors are reported as non-fatal: the app
+    // keeps running after both (a failed build shows an error box, and
+    // returning true below marks the error handled). Counting them as
+    // crashes made the crash-free rate say the app crashed when it had not.
     FlutterError.onError = (details) {
       FlutterError.presentError(details);
       unawaited(
         FirebaseCrashlytics.instance
-            .recordFlutterFatalError(details)
+            .recordFlutterError(details)
             .catchError((Object _) {}),
       );
     };
 
-    // Capture errors that escape the Flutter framework (async / isolate).
     PlatformDispatcher.instance.onError = (error, stack) {
       unawaited(
         FirebaseCrashlytics.instance
-            .recordError(error, stack, fatal: true)
+            .recordError(error, stack, fatal: false)
             .catchError((Object _) {}),
       );
       return true;
     };
+
+    // Errors the app catches and logs (see logError) arrive as non-fatal
+    // events naming only where they happened and their kind.
+    handledErrorReporter = (error, stack) =>
+        unawaited(recordError(error, stack));
   }
 
   /// Records a non-fatal exception. No-op if Firebase isn't initialized.
