@@ -8,7 +8,7 @@ hidden and is not a shipped feature. iOS is deferred.
 Start with the [documentation index](docs/README.md):
 
 - [Application baseline](docs/APP_BASELINE_2026-10-06.md): current features, architecture, storage and configuration.
-- [Production audit](docs/PRODUCTION_AUDIT_2026-10-06.md): verification, release artifacts and outstanding release checks.
+- [Production audit](docs/PRODUCTION_AUDIT_2026-10-07.md): verification evidence, defects fixed for release and outstanding release checks.
 - [Renderer capabilities](docs/RENDERER_CAPABILITIES_2026-10-06.md): supported PDF features and concrete compatibility limits.
 - [Improvements](IMPROVEMENTS.md): work beyond the current baseline.
 
@@ -132,7 +132,7 @@ Run host checks against rebuilt native libraries:
 bash scripts/build_pdf_core.sh test
 flutter analyze
 PDF_CORE_LIB_PATH="$PWD/packages/flutter_pdf_core/macos/Frameworks/libpdf_ffi.dylib" flutter test
-flutter test integration_test/pdf_workflows_test.dart -d <android-device-id>
+flutter test integration_test -d <android-device-id>
 flutter build appbundle --release
 python3 scripts/check_android_native.py build/app/outputs/bundle/release/app-release.aab
 ```

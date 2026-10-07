@@ -57,18 +57,48 @@ rename it at that point. Tests remove only their own fixture PDFs.
   horizontal panning/pinching after scrolling.
 - Validation: all 321 Flutter tests pass, analysis is clean, and the Android
   release bundle builds and passes the packaged native alignment checks.
-- The broader [production audit](docs/PRODUCTION_AUDIT_2026-10-04.md) records
+- The production audit of that date (since replaced by the
+  [7 October audit](docs/PRODUCTION_AUDIT_2026-10-07.md)) recorded the
   remaining scan, export, PDF-fidelity, iOS and release-readiness issues.
 
 ## Renderer expansion (2026-10-05)
 
-The [completion tracker](docs/RENDERER_COMPLETION_PLAN.md) records the expanded
-work and current verification. Implemented JPEG 2000/JBIG2 decoding, shading
+A completion tracker (since folded into the
+[renderer capabilities](docs/RENDERER_CAPABILITIES_2026-10-06.md)) recorded the
+expanded work and its verification. Implemented JPEG 2000/JBIG2 decoding, shading
 functions/meshes, blend modes/groups/masks, annotation/widget fallbacks, text
 painting/clipping and stroke joins/miter limits. Fixed the reported receipt's
 spacing by resolving nested indirect CID width arrays. New codec allocations
 and recursive graphics states are bounded; unsupported or approximate output
 continues to warn.
+
+## Production audit fixes (2026-10-07)
+
+The [production audit](docs/PRODUCTION_AUDIT_2026-10-07.md) records the
+evidence for each of these.
+
+1. **Large PDFs:** the engine pins a parsed document
+   (`pdf_document_open`/`close`, `PdfCore.openDocument`/`closeDocument`).
+   Read-only calls share it while the file is unchanged, instead of each
+   reading and parsing the whole file. The viewer and tool previews pin their
+   document; text-layout loads run two at a time, and work for pages scrolled
+   past is skipped. A ~185 MB scan no longer gets the app killed on a 2.5 GB
+   phone.
+2. **False "damaged" warnings:** index entries in use at offset 0, `endobj`
+   omitted before a clean boundary, and overflowing object numbers no longer
+   send valid files (mostly Apple-written) through recovery.
+3. **Passwords:** RC4/AES-128 files take PDFDocEncoding passwords, AES-256 uses
+   SASLprep, and raw UTF-8 remains a fallback.
+4. **Scans:** the camera captures at 3840×2160 instead of 1280×720; filters
+   work at up to 2400 px (3000 px at Maximum), with the Document filter's
+   window scaled to match.
+5. **HEIC/HEIF/AVIF gallery photos** are converted to JPEG at import, so
+   Maximum quality no longer fails to create the PDF.
+6. Documentation links point at existing documents again.
+7. Protect warns that non-ASCII passwords do not open in Apple Preview.
+8. Protect and Remove password ask for an output name, like the other tools.
+9. Handled errors reach Crashlytics as non-fatal events with no document
+   names or paths, and errors the app survives are no longer counted as crashes.
 
 ## Remaining backlog (outside this repair pass)
 
@@ -76,8 +106,8 @@ continues to warn.
   display-dependent NoZoom and exact advanced colour-space conversion remain
   limited. Generated missing-appearance artwork remains approximate. Displaying
   a signature appearance does not verify it.
-- Core API: open-once document handles, operation progress/cancellation,
-  per-input merge passwords, permission settings, and additional page APIs.
+- Core API: operation progress/cancellation, per-input merge passwords,
+  permission settings, and additional page APIs.
 - Viewer: last-read page, bookmarks/links, thumbnails, display modes,
   printing and keep-screen-on.
 - Tools: compression, PDF-to-images, watermark/page numbers, interactive form

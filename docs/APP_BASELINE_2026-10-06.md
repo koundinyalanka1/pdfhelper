@@ -5,7 +5,7 @@
 This document describes the application that exists in the current source tree.
 It is the starting point for future development, rather than a list of defects
 from earlier implementations. Validation results, artifact identities and
-publication gates belong in the [current production audit](PRODUCTION_AUDIT_2026-10-06.md).
+publication gates belong in the [current production audit](PRODUCTION_AUDIT_2026-10-07.md).
 Detailed PDF support and its limits belong in [renderer capabilities](RENDERER_CAPABILITIES_2026-10-06.md).
 
 ## 1. Snapshot identity and scope
@@ -102,6 +102,13 @@ allows up to 6× zoom; higher-resolution requests scale to at most 4× the base
 render size. Page rendering is lazy, rather than rasterizing the complete
 document at once.
 
+While open, the viewer pins its document in the engine
+(`PdfRaster.openDocument`): page renders, page sizes, text layout and find
+share one parse instead of each reading the whole file. Renders run three at
+a time and text-layout loads two at a time; pages that scroll away before
+their turn are skipped. A pinned parse takes memory comparable to the file
+itself and is released when the viewer closes.
+
 Long-press selects a word from the PDF text layer; selection handles, Copy and
 page-level Select all are available. Image-only scans have no selectable text
 unless the document already contains a text layer. OCR is not implemented.
@@ -116,9 +123,11 @@ A consent-aware banner occupies the bottom of the viewer, outside the page
 viewport. Opening, reading, zooming, sharing and saving a preview do not trigger
 interstitial advertising.
 
-In-document text search, last-read restoration, outline/bookmark navigation,
-clickable PDF links, a viewer thumbnail strip, alternate reading modes,
-printing and keep-screen-on are not current viewer capabilities.
+Find in document searches the open document's text layer from the top bar,
+highlighting matches and stepping between them. Last-read restoration,
+outline/bookmark navigation, clickable PDF links, a viewer thumbnail strip,
+alternate reading modes, printing and keep-screen-on are not current viewer
+capabilities.
 
 Source: [pdf_viewer_screen.dart](../lib/screens/pdf_viewer_screen.dart),
 [pdf_text_selection_service.dart](../lib/services/pdf_text_selection_service.dart),
@@ -145,6 +154,11 @@ scratch files are removed after the operation. A direct native per-input
 password merge API would simplify this implementation but is not required for
 the current user flow.
 
+Passwords are encoded as each encryption revision requires: PDFDocEncoding for
+RC4 and AES-128 files, UTF-8 after SASLprep for AES-256, with raw UTF-8 tried
+as a fallback. Apple Preview rejects non-ASCII passwords whatever the revision,
+so Protect warns when one is typed.
+
 The password tool does not expose permission restrictions: printing, copying
 and editing remain allowed. Rewriting a digitally signed document invalidates
 its existing signature; the app does not offer signature-preserving incremental
@@ -168,6 +182,12 @@ the app is in the foreground. Controller disposal coordinates with in-flight
 capture. Torch state is handled without turning it off before taking the
 requested photograph. Camera hardware is optional for installation, and gallery
 import remains available without it.
+
+The camera captures at 3840×2160 where available (`ResolutionPreset.ultraHigh`,
+falling back to the closest size a camera offers). Crop and all filters keep at
+most 2400 px on the long side, or 3000 px at Maximum quality, and bake EXIF
+rotation in. Gallery photos in HEIC/HEIF/AVIF, which the Dart image library
+cannot read, are converted to JPEG with Android's decoder when imported.
 
 JPEG output quality options map to 50, 70, 85 and 100. Image conversion preserves
 suitable original JPEG data when transcoding is unnecessary and handles EXIF
@@ -401,11 +421,11 @@ fixed defects have returned:
   warnings is not necessarily faithful. See the renderer capabilities document.
 - Interactive form editing, annotation editing, OCR, redaction, compression,
   watermark/page-number tools and PDF-to-image export are not shipped tools.
-- Native open-once document handles, fine-grained operation progress and
-  cancellation remain engine/API enhancements. Existing app-level batch status
-  does not imply cancellable native operations.
-- In-document search, reading-position restoration and advanced viewer
-  navigation remain separate from implemented Files search and page jumps.
+- Fine-grained operation progress and cancellation remain engine/API
+  enhancements. Existing app-level batch status does not imply cancellable
+  native operations.
+- Reading-position restoration and advanced viewer navigation remain separate
+  from the implemented Files search, find in document and page jumps.
 - File multi-selection/folders, reverse sort, scan capture reordering and
   destination-chooser Save As are future work.
 - Follow-system theme, localization and an in-app licenses/feedback experience
@@ -413,7 +433,7 @@ fixed defects have returned:
 - AI remains hidden, iOS deferred and desktop/web unsupported as release apps.
 
 Publication still requires the external decisions and confirmations recorded in
-the [production audit](PRODUCTION_AUDIT_2026-10-06.md), including account/store
+the [production audit](PRODUCTION_AUDIT_2026-10-07.md), including account/store
 declarations, intended service ownership and remaining user-owned phone checks.
 This source inventory itself does not assert store approval or a completed
 production rollout.

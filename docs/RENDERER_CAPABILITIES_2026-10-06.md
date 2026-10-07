@@ -2,7 +2,7 @@
 
 This is a fresh baseline of the renderer in the current working tree. The targeted renderer expansion and receipt-layout repair are implemented. The engine does not support every PDF feature, and an absence of render warnings does not prove that a page is reproduced faithfully.
 
-Use the [application baseline](APP_BASELINE_2026-10-06.md) for the app's current scope and the [production audit](PRODUCTION_AUDIT_2026-10-06.md) for release evidence, artifact identity and outstanding release checks. This document describes capabilities and compatibility boundaries; it does not replace release approval or device testing.
+Use the [application baseline](APP_BASELINE_2026-10-06.md) for the app's current scope and the [production audit](PRODUCTION_AUDIT_2026-10-07.md) for release evidence, artifact identity and outstanding release checks. This document describes capabilities and compatibility boundaries; it does not replace release approval or device testing.
 
 ## Rendering architecture
 
@@ -137,7 +137,9 @@ The final validation snapshot supplied for this baseline is **351 passing Rust t
 
 The native coverage includes the synthetic receipt widths/layout fixture, text knockout and text clipping, transparency groups and masks, DeviceGray groups, retained-mask accounting, annotation/widget fallbacks, shadings/functions/meshes, codecs and codec resource-limit regressions. Passing these tests demonstrates the covered cases; it does not certify every PDF feature or file.
 
-There is **no fresh physical-phone or 16 KiB-page Android runtime verification of the final native revision** in this snapshot. Earlier device or emulator observations must not be presented as verification of later library changes. The user elected to perform the phone checks personally. See the [production audit](PRODUCTION_AUDIT_2026-10-06.md) for the release decision and remaining operational checks.
+This snapshot had no physical-phone or 16 KiB-page runtime verification of its native revision. The [production audit](PRODUCTION_AUDIT_2026-10-07.md) of 7 October adds it for the revision that followed: the integration tests pass on a Motorola edge 70 fusion and on a 16 KiB-page Android 16 emulator with the rebuilt libraries. Device observations still apply only to the library revision they ran against.
+
+That revision also reads common writer quirks as intact files rather than recovering them as damaged: index entries marked in use at offset 0, `endobj` omitted before the next object or the index, and object numbers too large for 64 bits (references to them read as null). Across 295 real PDFs, the number reported as recovered fell from 134 to 0 without any failed operation. Genuinely damaged files still recover with a warning.
 
 ## How to use this baseline
 
