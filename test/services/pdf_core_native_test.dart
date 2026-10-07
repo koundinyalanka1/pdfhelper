@@ -101,4 +101,28 @@ void main() {
     await expectLater(PdfRaster.pageCountOf(junk.path), throwsA(isA<Object>()));
     expect(await PdfRaster.pageCountOrZero(junk.path), 0);
   });
+
+  test('accented passwords open PDFs from other writers', () async {
+    // Written by pypdf: RC4 and AES-128 store the password in
+    // PDFDocEncoding, AES-256 as UTF-8 after SASLprep. The app passes what
+    // the reader typed as UTF-8, which used to fail for the first two.
+    const fixtures = 'packages/flutter_pdf_core/rust/fixtures';
+    for (final name in [
+      'rc4_128_latin1_password.pdf',
+      'aes128_latin1_password.pdf',
+    ]) {
+      expect(
+        await PdfRaster.pageCountOf('$fixtures/$name', password: 'Pässwörd1'),
+        1,
+        reason: name,
+      );
+    }
+    expect(
+      await PdfRaster.pageCountOf(
+        '$fixtures/aes256_saslprep_password.pdf',
+        password: 'Päss wörd1',
+      ),
+      1,
+    );
+  });
 }
