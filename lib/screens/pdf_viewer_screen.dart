@@ -128,6 +128,13 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
   /// document turns out to be locked.
   late String _password = widget.password;
 
+  /// The password the engine keeps this document parsed under (see
+  /// [PdfRaster.openDocument]), released when the viewer closes. Pages, page
+  /// sizes, text and find all read the document at once; without the pin
+  /// each of them parsed the whole file again, which for a large scan used
+  /// enough memory for Android to kill the app.
+  String? _pinnedPassword;
+
   /// Set when the document is locked and we have no working password, so the
   /// error view can offer another attempt instead of being a dead end.
   bool _needsPassword = false;
@@ -165,6 +172,10 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
 
   @override
   void dispose() {
+    final pinned = _pinnedPassword;
+    if (pinned != null) {
+      unawaited(PdfRaster.closeDocument(widget.pdfPath, password: pinned));
+    }
     _findDebounce?.cancel();
     _search?.dispose();
     _findText.dispose();
@@ -343,10 +354,8 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
     bool isRetry = false;
     while (true) {
       try {
-        final count = await PdfRaster.pageCountOf(
-          widget.pdfPath,
-          password: _password,
-        );
+        final count = await _pinDocument();
+        if (count == null) return;
         final ratio = await PdfRaster.aspectRatio(
           widget.pdfPath,
           password: _password,
@@ -401,6 +410,29 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
         return;
       }
     }
+  }
+
+  /// Open the document for the life of this viewer and return its page
+  /// count, or null when the viewer closed meanwhile. Throws like
+  /// [PdfRaster.pageCountOf], so a locked document still asks for its
+  /// password.
+  Future<int?> _pinDocument() async {
+    final password = _password;
+    final count = await PdfRaster.openDocument(
+      widget.pdfPath,
+      password: password,
+    );
+    if (!mounted) {
+      // dispose() already ran and found nothing to release.
+      unawaited(PdfRaster.closeDocument(widget.pdfPath, password: password));
+      return null;
+    }
+    final previous = _pinnedPassword;
+    _pinnedPassword = password;
+    if (previous != null) {
+      unawaited(PdfRaster.closeDocument(widget.pdfPath, password: previous));
+    }
+    return count;
   }
 
   /// Learn every page's shape, a batch at a time, so pages are laid out at
@@ -1326,6 +1358,7 @@ class _PageViewState extends State<_PageView> {
         widget.path,
         widget.pageIndex,
         password: widget.password,
+        isWanted: () => mounted,
       );
       if (!mounted) return;
       setState(() => _textLayout = layout);
@@ -1459,6 +1492,7 @@ class _PageViewState extends State<_PageView> {
         // High-resolution zoom renders are one-offs; keeping them would
         // evict every thumbnail in the cache.
         useCache: useCache,
+        isWanted: () => mounted,
       );
       final bytes = rendered?.bytes;
       if (rendered != null) widget.onWarnings(rendered.warnings);

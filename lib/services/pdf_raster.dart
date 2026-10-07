@@ -3,8 +3,10 @@ import 'dart:collection';
 import 'dart:isolate';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter_pdf_core/flutter_pdf_core.dart';
 
+import '../utils/async_limiter.dart';
 import '../utils/error_logger.dart';
 
 /// Page rasterization, backed entirely by `flutter_pdf_core`'s Rust renderer.
@@ -57,15 +59,13 @@ class PdfRaster {
   >
   _libraryCache = LinkedHashMap();
 
-  /// Renders are serialized to [_maxConcurrentRenders] at a time.
+  /// Renders are serialized to three at a time.
   ///
   /// Every render hands off to `Isolate.run`, so an unthrottled grid would
   /// spawn one isolate per visible tile — dozens at once during a fling, each
   /// holding a decoded page. Three keeps the queue saturated without the
   /// memory spike.
-  static const int _maxConcurrentRenders = 3;
-  static int _activeRenders = 0;
-  static final Queue<Completer<void>> _renderQueue = Queue();
+  static final AsyncLimiter _renders = AsyncLimiter(3);
 
   /// Render page [pageIndex] (0-based) to PNG, fitted inside a
   /// [longEdge]-pixel box.
@@ -91,6 +91,10 @@ class PdfRaster {
   ))?.bytes;
 
   /// Warnings travel with each result even when its bitmap is not cached.
+  ///
+  /// [isWanted] is asked when the render's turn comes: a page that has
+  /// scrolled away by then is skipped (null), so a fling does not leave the
+  /// pages now on screen waiting behind every page it passed.
   static Future<PdfRenderedPng?> renderPageWithWarnings(
     String path,
     int pageIndex, {
@@ -98,6 +102,7 @@ class PdfRaster {
     String password = '',
     bool useCache = true,
     bool throwOnError = false,
+    bool Function()? isWanted,
   }) async {
     final key = (
       path: path,
@@ -112,15 +117,18 @@ class PdfRaster {
         return PdfRenderedPng(hit, _warnings[key] ?? const []);
       }
     }
-    await _acquire();
     try {
-      final rendered = await PdfCore.renderPagePngWithWarningsAsync(
-        path,
-        pageIndex,
-        width: longEdge,
-        height: longEdge,
-        password: password,
-      );
+      final rendered = await _renders.run(() async {
+        if (isWanted != null && !isWanted()) return null;
+        return PdfCore.renderPagePngWithWarningsAsync(
+          path,
+          pageIndex,
+          width: longEdge,
+          height: longEdge,
+          password: password,
+        );
+      });
+      if (rendered == null) return null;
       // Warnings are held only for cached renders, so that they are evicted
       // with the bitmap they describe. Uncached renders — every library cover,
       // and one-off zoom renders — would otherwise accumulate forever.
@@ -141,8 +149,6 @@ class PdfRaster {
       logError('PdfRaster.renderPage', e);
       if (throwOnError) rethrow;
       return null;
-    } finally {
-      _release();
     }
   }
 
@@ -273,6 +279,9 @@ class PdfRaster {
   /// Pages are rendered one at a time on a background isolate rather than
   /// with `Future.wait`: a 200-page document would otherwise try to hold 200
   /// decoded bitmaps at once.
+  ///
+  /// The document stays parsed for the whole loop (see [openDocument]);
+  /// otherwise every page would read and parse the entire file again.
   static Future<List<Uint8List?>> renderAllPages(
     String path, {
     int longEdge = thumbnailSize,
@@ -281,17 +290,72 @@ class PdfRaster {
     void Function(int done, int total)? onProgress,
     bool Function()? isCancelled,
   }) async {
-    final total = pageCount ?? await pageCountOrZero(path, password: password);
-    final pages = <Uint8List?>[];
-    for (int i = 0; i < total; i++) {
-      if (isCancelled?.call() ?? false) break;
-      pages.add(
-        await renderPage(path, i, longEdge: longEdge, password: password),
-      );
-      onProgress?.call(i + 1, total);
+    int? openedCount;
+    try {
+      openedCount = await openDocument(path, password: password);
+    } catch (e) {
+      // Each page reports its own failure below.
+      logError('PdfRaster.renderAllPages', e);
     }
-    return pages;
+    try {
+      final total = pageCount ?? openedCount ?? 0;
+      final pages = <Uint8List?>[];
+      for (int i = 0; i < total; i++) {
+        if (isCancelled?.call() ?? false) break;
+        pages.add(
+          await renderPage(path, i, longEdge: longEdge, password: password),
+        );
+        onProgress?.call(i + 1, total);
+      }
+      return pages;
+    } finally {
+      if (openedCount != null) {
+        unawaited(closeDocument(path, password: password));
+      }
+    }
   }
+
+  /// Keep [path] parsed in the engine while a screen reads it page by page,
+  /// so renders, page sizes and text share one parse instead of each reading
+  /// the whole file again. That repetition is what let a large scan use
+  /// enough memory for Android to kill the app. Returns the page count, and
+  /// throws [PdfException] (for example `ENCRYPTED`) like [pageCountOf].
+  ///
+  /// Pair every successful call with [closeDocument].
+  static Future<int> openDocument(String path, {String password = ''}) async {
+    final count = await PdfCore.openDocument(path, password: password);
+    final key = (path: path, password: password);
+    _openDocuments[key] = (_openDocuments[key] ?? 0) + 1;
+    return count;
+  }
+
+  /// Release one [openDocument]. Never throws: a failure only means the
+  /// engine frees the parse later than it could have.
+  static Future<void> closeDocument(
+    String path, {
+    String password = '',
+  }) async {
+    final key = (path: path, password: password);
+    final open = _openDocuments[key] ?? 0;
+    if (open <= 1) {
+      _openDocuments.remove(key);
+    } else {
+      _openDocuments[key] = open - 1;
+    }
+    try {
+      await PdfCore.closeDocument(path, password: password);
+    } catch (e) {
+      logError('PdfRaster.closeDocument', e);
+    }
+  }
+
+  static final Map<({String path, String password}), int> _openDocuments = {};
+
+  /// Outstanding [openDocument] calls for [path], so tests can prove every
+  /// screen releases the documents it opens.
+  @visibleForTesting
+  static int openDocumentCount(String path, {String password = ''}) =>
+      _openDocuments[(path: path, password: password)] ?? 0;
 
   /// Page count straight from the xref — no rendering involved.
   ///
@@ -387,28 +451,6 @@ class PdfRaster {
     }
   }
 
-  /// Wait for a render slot. FIFO, so the first tile asked for is the first
-  /// one drawn — out-of-order completion makes a grid look like it is
-  /// filling in at random.
-  static Future<void> _acquire() {
-    if (_activeRenders < _maxConcurrentRenders) {
-      _activeRenders++;
-      return Future.value();
-    }
-    final completer = Completer<void>();
-    _renderQueue.add(completer);
-    return completer.future;
-  }
-
-  static void _release() {
-    if (_renderQueue.isNotEmpty) {
-      // Hand the slot straight to the next waiter rather than decrementing;
-      // otherwise a burst of new callers could jump the queue.
-      _renderQueue.removeFirst().complete();
-      return;
-    }
-    if (_activeRenders > 0) _activeRenders--;
-  }
 }
 
 double? _aspectRatioOrNull(String path, int page, String password) {
