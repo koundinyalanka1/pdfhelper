@@ -26,6 +26,7 @@ import 'extract_text_screen.dart';
 import 'home_screen.dart';
 import 'merge_pdf_screen.dart';
 import 'metadata_screen.dart';
+import 'ocr_screen.dart';
 import 'organize_pages_screen.dart';
 import 'protect_screen.dart';
 import 'split_pdf_screen.dart';
@@ -637,12 +638,21 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
-        const SnackBar(
-          content: Text(
+        SnackBar(
+          content: const Text(
             'This PDF has no searchable text. Scanned pages need OCR.',
           ),
+          action: PdfCoreService.isAvailable
+              ? SnackBarAction(label: 'Recognize text', onPressed: _openOcr)
+              : null,
         ),
       );
+  }
+
+  /// Make this document searchable. The copy opens from the result dialog;
+  /// this viewer stays on the original underneath.
+  void _openOcr() {
+    _push(OcrScreen(pdfPath: widget.pdfPath, password: _password));
   }
 
   /// Bring a match into view without changing the zoom.
@@ -816,6 +826,13 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
                     password: _password,
                   ),
                 ),
+              ),
+              _action(
+                ctx,
+                colors,
+                Icons.manage_search_rounded,
+                'Recognize text (OCR)',
+                _openOcr,
               ),
               _action(
                 ctx,
@@ -1406,9 +1423,21 @@ class _PageViewState extends State<_PageView> {
               : _textError ??
                     'No selectable text on this page. Scanned images need OCR.',
         ),
-        action: _textError == null
-            ? null
-            : SnackBarAction(label: 'Retry', onPressed: _loadText),
+        action: _textError != null
+            ? SnackBarAction(label: 'Retry', onPressed: _loadText)
+            : !_loadingText && PdfCoreService.isAvailable
+            ? SnackBarAction(label: 'Recognize text', onPressed: _openOcr)
+            : null,
+      ),
+    );
+  }
+
+  void _openOcr() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) =>
+            OcrScreen(pdfPath: widget.path, password: widget.password),
       ),
     );
   }

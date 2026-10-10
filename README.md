@@ -1,8 +1,8 @@
 # PDF Helper
 
 A Flutter PDF reader and toolkit with a Rust engine. The current release scope
-is **Android**. Read, merge, split, organize, scan, protect and extract text from
-PDFs locally. Ads and release crash reporting use network services; Ask AI is
+is **Android**. Read, merge, split, organize, scan, protect, extract text from
+and recognize text in PDFs locally. Ads and release crash reporting use network services; Ask AI is
 hidden and is not a shipped feature. iOS is deferred.
 
 Start with the [documentation index](docs/README.md):
@@ -20,10 +20,11 @@ Start with the [documentation index](docs/README.md):
 | Viewer | Continuous scrolling, pinch/double-tap zoom, document-wide scrolling while zoomed, sharper rerendering, page jump, find in document, text selection/copy and tool shortcuts |
 | Assemble | Ordered merge and output batches; split by range, selection or individual pages |
 | Edit | Page rotation/reordering/deletion, metadata, AES-256 protection and password removal |
-| Extract | Content-stream text extraction for copying or saving as text |
-| Scan | Camera/gallery input, perspective crop/straighten, six filters, undo/redo and multipage image-to-PDF |
+| Extract | Content-stream text extraction for copying or saving as text; OCR for pages with no text layer |
+| Recognize text | On-device OCR of printed Latin-script text; saves a searchable copy with an invisible text layer |
+| Scan | Camera/gallery input, perspective crop/straighten, six filters, undo/redo, multipage image-to-PDF and searchable scans (OCR, on by default) |
 | Output | Named PDFs, collision handling, preview, explicit Save and optional Auto Save |
-| Settings | Dark/light theme, output quality/location, notifications and applicable ad privacy choices |
+| Settings | Dark/light theme, output quality/location, searchable scans, notifications and applicable ad privacy choices |
 
 Four tabs—Files, Tools, Scan and Settings—provide the main navigation. Tools
 reuse a selected working document. Android offers one PDF **Open with** entry;
@@ -31,8 +32,10 @@ external launches go directly to the viewer.
 
 Files search matches names and folders, not PDF contents; the viewer's find
 searches the open document's text. Last-read restoration, interactive form
-editing, OCR and redaction remain future work. Image-only scans have no
-selectable or searchable text without an existing text layer. Password protection does not expose printing/copying/editing restrictions.
+editing and redaction remain future work. Image-only PDFs have no selectable
+or searchable text until **Recognize text (OCR)** adds a text layer; the
+viewer offers it when find or selection comes up empty. OCR reads printed
+Latin-script text only, not handwriting or other scripts. Password protection does not expose printing/copying/editing restrictions.
 The app supports different merge-input passwords through temporary decryption.
 
 ## PDF engine

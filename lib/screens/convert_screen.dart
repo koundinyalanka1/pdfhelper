@@ -6,11 +6,13 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 import 'package:image_picker/image_picker.dart';
 import '../services/ads_service.dart';
+import '../services/pdf_core_service.dart';
 import '../services/pdf_service.dart';
 import '../services/permission_service.dart';
 import '../services/scan_image_store.dart';
 import '../services/scan_route_observer.dart';
 import '../providers/theme_provider.dart';
+import '../utils/error_logger.dart';
 import '../utils/file_naming.dart';
 import '../utils/photo_import.dart';
 import '../widgets/pdf_name_dialog.dart';
@@ -48,6 +50,10 @@ class _ConvertScreenState extends State<ConvertScreen>
   bool _cameraPermissionPermanentlyDenied = false;
   bool _isFlashOn = false;
   bool _isProcessing = false;
+
+  /// Pages read and the total while a new scan's text is being recognized.
+  (int, int)? _ocrProgress;
+  bool _skipOcr = false;
   bool _isCapturing = false;
   final List<String> _capturedImages = [];
   final ImagePicker _imagePicker = ImagePicker();
@@ -521,6 +527,10 @@ class _ConvertScreenState extends State<ConvertScreen>
 
       if (outputPath != null) {
         if (!mounted) return;
+        if (themeProvider.searchableScans) {
+          await _recognizeText(outputPath, pages.length);
+          if (!mounted) return;
+        }
         await AdsService.instance.operationCompleted(
           PdfOperation.create,
           canPresent: () =>
@@ -567,6 +577,32 @@ class _ConvertScreenState extends State<ConvertScreen>
       _showSnackBar('Error: $e', isError: true);
     } finally {
       if (mounted) setState(() => _isProcessing = false);
+    }
+  }
+
+  /// Make a new scan searchable. Best effort: the scan is already a complete
+  /// PDF, so a failure, or the user skipping, keeps it as it is, without a
+  /// text layer.
+  Future<void> _recognizeText(String path, int pageCount) async {
+    if (!PdfCoreService.isAvailable) return;
+    setState(() {
+      _skipOcr = false;
+      _ocrProgress = (0, pageCount);
+    });
+    try {
+      await PdfCoreService.addTextLayer(
+        path,
+        onProgress: (done, total) {
+          if (mounted) setState(() => _ocrProgress = (done, total));
+        },
+        isCancelled: () => _skipOcr || !mounted,
+      );
+    } on OcrCancelled {
+      // Skipped.
+    } catch (e) {
+      logError('ConvertScreen.recognizeText', e);
+    } finally {
+      if (mounted) setState(() => _ocrProgress = null);
     }
   }
 
@@ -1181,27 +1217,58 @@ class _ConvertScreenState extends State<ConvertScreen>
             Positioned.fill(
               child: Container(
                 color: Colors.black.withValues(alpha: 0.7),
-                child: const Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      CircularProgressIndicator(color: Color(0xFF00D9FF)),
-                      SizedBox(height: 20),
-                      Text(
-                        'Creating PDF...',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+                child: Center(child: _buildProcessing()),
               ),
             ),
         ],
       ),
+    );
+  }
+
+  Widget _buildProcessing() {
+    const titleStyle = TextStyle(
+      color: Colors.white,
+      fontSize: 18,
+      fontWeight: FontWeight.w500,
+    );
+    final progress = _ocrProgress;
+    if (progress == null) {
+      return const Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          CircularProgressIndicator(color: Color(0xFF00D9FF)),
+          SizedBox(height: 20),
+          Text('Creating PDF...', style: titleStyle),
+        ],
+      );
+    }
+    final (done, total) = progress;
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        const CircularProgressIndicator(color: Color(0xFF00D9FF)),
+        const SizedBox(height: 20),
+        const Text('Recognizing text...', style: titleStyle),
+        const SizedBox(height: 6),
+        Text(
+          _skipOcr
+              ? 'Skipping after this page'
+              : 'Page ${done < total ? done + 1 : total} of $total, so the '
+                    'scan can be searched',
+          style: const TextStyle(color: Colors.white70, fontSize: 13),
+        ),
+        const SizedBox(height: 12),
+        TextButton(
+          onPressed: _skipOcr ? null : () => setState(() => _skipOcr = true),
+          child: Text(
+            'Skip',
+            style: TextStyle(
+              color: _skipOcr ? Colors.white38 : Colors.white,
+              fontSize: 15,
+            ),
+          ),
+        ),
+      ],
     );
   }
 

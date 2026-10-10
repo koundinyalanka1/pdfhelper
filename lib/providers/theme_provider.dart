@@ -21,6 +21,7 @@ class ThemeProvider extends ChangeNotifier {
   static const String _notificationsKey = 'notifications';
   static const String _outputQualityKey = 'outputQuality';
   static const String _skipPreviewKey = 'skipPreview';
+  static const String _searchableScansKey = 'searchableScans';
 
   bool _isDarkMode = true;
   bool _isInitialized = false;
@@ -30,6 +31,7 @@ class ThemeProvider extends ChangeNotifier {
   String _saveLocation = 'Downloads';
   String _outputQuality = 'Maximum';
   bool _skipPreview = false;
+  bool _searchableScans = true;
 
   bool get isDarkMode => _isDarkMode;
   bool get isInitialized => _isInitialized;
@@ -45,6 +47,11 @@ class ThemeProvider extends ChangeNotifier {
   /// When true and [autoSave] is on, merge/convert skip the preview screen
   /// and save immediately. Default: false (preview shown).
   bool get skipPreview => _skipPreview;
+
+  /// When true, text in new scans is recognized (OCR) and added to the PDF
+  /// as an invisible layer, so the scan can be searched and copied from.
+  /// Default: true.
+  bool get searchableScans => _searchableScans;
 
   /// JPEG quality (1-100) for scan-to-PDF image encoding
   int get outputQualityAsImageQuality {
@@ -73,6 +80,7 @@ class ThemeProvider extends ChangeNotifier {
     _saveLocation = prefs.getString(_saveLocationKey) ?? 'Downloads';
     _outputQuality = prefs.getString(_outputQualityKey) ?? 'Maximum';
     _skipPreview = prefs.getBool(_skipPreviewKey) ?? false;
+    _searchableScans = prefs.getBool(_searchableScansKey) ?? true;
 
     // Check if notification permission is granted
     // Only enable notifications setting if user has granted permission
@@ -133,6 +141,14 @@ class ThemeProvider extends ChangeNotifier {
     _skipPreview = value;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_skipPreviewKey, value);
+    notifyListeners();
+  }
+
+  Future<void> setSearchableScans(bool value) async {
+    if (_searchableScans == value) return;
+    _searchableScans = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_searchableScansKey, value);
     notifyListeners();
   }
 

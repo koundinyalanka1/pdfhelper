@@ -1,6 +1,15 @@
 /// Only completed document-producing actions count toward fullscreen ads.
 /// Opening, reading, sharing, and saving a preview are intentionally absent.
-enum PdfOperation { merge, split, create, organize, protect, unlock, metadata }
+enum PdfOperation {
+  merge,
+  split,
+  create,
+  organize,
+  protect,
+  unlock,
+  metadata,
+  ocr,
+}
 
 /// Counts successful actions independently of which result button is used.
 class OperationAdPolicy {

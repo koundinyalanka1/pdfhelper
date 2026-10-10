@@ -12,6 +12,7 @@ import 'ai_screen.dart';
 import 'extract_text_screen.dart';
 import 'merge_pdf_screen.dart';
 import 'metadata_screen.dart';
+import 'ocr_screen.dart';
 import 'organize_pages_screen.dart';
 import 'pdf_viewer_screen.dart';
 import 'protect_screen.dart';
@@ -329,6 +330,14 @@ class _ToolsScreenState extends State<ToolsScreen>
           () => _runOnDocument(
             (p, pw) => ExtractTextScreen(pdfPath: p, password: pw),
           ),
+          needsDocument: true,
+        ),
+        _Tool(
+          'Recognize text (OCR)',
+          'Make a scanned PDF searchable and copyable',
+          Icons.manage_search_rounded,
+          const Color(0xFFE94560),
+          () => _runOnDocument((p, pw) => OcrScreen(pdfPath: p, password: pw)),
           needsDocument: true,
         ),
         if (Features.ai)

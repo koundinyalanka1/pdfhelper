@@ -19,7 +19,9 @@ void main() {
     () async {
       final root = Directory.systemTemp.createTempSync('raster-warnings-');
       addTearDown(() => root.deleteSync(recursive: true));
-      final pdf = writeTextPdfFixture(root, ['Font substitution warning']);
+      final pdf = writeTextPdfFixture(root, [
+        'Font substitution warning',
+      ], baseFont: 'UnembeddedSans');
       final rendered = await PdfRaster.renderPageWithWarnings(
         pdf.path,
         0,

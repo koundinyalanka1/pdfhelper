@@ -66,6 +66,7 @@ void main() {
       'Remove password',
       'Open in viewer',
       'Extract text',
+      'Recognize text (OCR)',
     ]) {
       expect(find.text(tool), findsOneWidget, reason: '$tool is missing');
     }

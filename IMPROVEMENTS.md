@@ -111,7 +111,8 @@ evidence for each of these.
 - Viewer: last-read page, bookmarks/links, thumbnails, display modes,
   printing and keep-screen-on.
 - Tools: compression, PDF-to-images, watermark/page numbers, interactive form
-  filling, annotation editing, OCR and redaction.
+  filling, annotation editing, redaction, and OCR for scripts beyond Latin
+  (Devanagari, CJK, Cyrillic).
 - Files/scan: multi-selection, folders, reverse sorting, capture reordering,
   paper sizes/margins and explicit Save As.
 - Platform/app: Android share-in, follow-system theme, licenses/feedback,

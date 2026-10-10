@@ -1,7 +1,15 @@
 import 'dart:io';
 
 /// A real PDF with a distinct text layer on each page, or a shape for empty text.
-File writeTextPdfFixture(Directory root, List<String> pages) {
+///
+/// The text is set in [baseFont], which is not embedded. Courier, like the
+/// other standard fonts, is drawn without a substitution warning; any other
+/// name gets one.
+File writeTextPdfFixture(
+  Directory root,
+  List<String> pages, {
+  String baseFont = 'Courier',
+}) {
   final fontId = 3 + pages.length;
   final objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
@@ -10,7 +18,7 @@ File writeTextPdfFixture(Directory root, List<String> pages) {
       '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] '
           '/Resources << /Font << /F1 $fontId 0 R >> >> '
           '/Contents ${fontId + 1 + i} 0 R >>',
-    '<< /Type /Font /Subtype /Type1 /BaseFont /Courier '
+    '<< /Type /Font /Subtype /Type1 /BaseFont /$baseFont '
         '/FirstChar 32 /LastChar 126 /Widths [${List.filled(95, '600').join(' ')}] >>',
   ];
   for (final text in pages) {

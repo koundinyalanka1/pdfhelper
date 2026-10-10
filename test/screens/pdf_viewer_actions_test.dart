@@ -91,6 +91,7 @@ void main() {
       'Split',
       'Organize pages',
       'Extract text',
+      'Recognize text (OCR)',
       'Protect',
       'Document details',
       'Open in another app',

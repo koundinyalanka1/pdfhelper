@@ -31,6 +31,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String get _saveLocation => _settings.saveLocation;
   String get _outputQuality => _settings.outputQuality;
   bool get _skipPreview => _settings.skipPreview;
+  bool get _searchableScans => _settings.searchableScans;
 
   String _appVersion = '';
 
@@ -254,6 +255,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ['Low', 'Medium', 'High', 'Maximum'],
                     (value) =>
                         context.read<ThemeProvider>().setOutputQuality(value!),
+                  ),
+                  SettingsDivider(colors: _colors),
+                  _buildSwitchTile(
+                    'Searchable Scans',
+                    _searchableScans
+                        ? 'Recognize the text in new scans (OCR)'
+                        : 'Save scans as images only',
+                    Icons.manage_search_rounded,
+                    _searchableScans,
+                    (value) =>
+                        context.read<ThemeProvider>().setSearchableScans(value),
                   ),
                   SettingsDivider(colors: _colors),
                   _buildDropdownTile(

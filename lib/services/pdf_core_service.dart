@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
@@ -8,9 +9,10 @@ import 'package:path_provider/path_provider.dart';
 
 import '../utils/error_logger.dart';
 import '../utils/file_naming.dart';
+import 'pdf_raster.dart';
 
 export 'package:flutter_pdf_core/flutter_pdf_core.dart'
-    show PdfException, PdfInfo, PdfMetadata;
+    show PdfException, PdfInfo, PdfMetadata, PdfOcrPage, PdfOcrStatus;
 
 /// Availability of the `flutter_pdf_core` native (Rust) library.
 ///
@@ -296,6 +298,127 @@ class PdfCoreService {
     return AiExport.fromJson(jsonDecode(raw) as Map<String, dynamic>);
   }
 
+  // -------------------------------------------------------------------- OCR
+
+  /// Read the text on [pages] (1-based; null means every page) with the
+  /// engine's on-device OCR, one page at a time, so that [onProgress] can
+  /// report each page and [isCancelled] can stop between them.
+  ///
+  /// Pages that already carry text come back as [PdfOcrStatus.hasText] or
+  /// [PdfOcrStatus.hasOcrLayer] without being read. The document stays
+  /// parsed for the whole run instead of once per page.
+  ///
+  /// Throws [OcrCancelled], holding the pages read so far, once
+  /// [isCancelled] returns true. The page being read at that moment is
+  /// finished first: a native call cannot be interrupted.
+  static Future<List<PdfOcrPage>> recognizeText(
+    String path, {
+    String password = '',
+    List<int>? pages,
+    void Function(int done, int total)? onProgress,
+    bool Function()? isCancelled,
+  }) async {
+    final pageCount = await PdfRaster.openDocument(path, password: password);
+    try {
+      final selected =
+          pages ?? [for (var page = 1; page <= pageCount; page++) page];
+      final results = <PdfOcrPage>[];
+      onProgress?.call(0, selected.length);
+      for (final page in selected) {
+        if (isCancelled?.call() ?? false) throw OcrCancelled(results);
+        results.add(
+          await PdfCore.ocrPage(path, page: page, password: password),
+        );
+        onProgress?.call(results.length, selected.length);
+      }
+      return results;
+    } finally {
+      unawaited(PdfRaster.closeDocument(path, password: password));
+    }
+  }
+
+  /// Save a copy of [path] with an invisible layer of recognized text over
+  /// its scanned pages, so the text can be searched, selected and copied
+  /// while the pages look exactly as before.
+  ///
+  /// No file is written when no page gained text: every page had text
+  /// already, or none had any that could be read. [SearchableCopy.pages]
+  /// says which.
+  ///
+  /// The engine writes the copy without encryption, as it does for every
+  /// operation. A protected original is not quietly unlocked by being made
+  /// searchable: the copy is locked again with the same password.
+  static Future<SearchableCopy> makeSearchable(
+    String path, {
+    String password = '',
+    String? fileName,
+    void Function(int done, int total)? onProgress,
+    bool Function()? isCancelled,
+  }) async {
+    final pages = await recognizeText(
+      path,
+      password: password,
+      onProgress: onProgress,
+      isCancelled: isCancelled,
+    );
+    final read = _withText(pages);
+    if (read.isEmpty) return SearchableCopy(pages: pages);
+    if (isCancelled?.call() ?? false) throw OcrCancelled(pages);
+    final out = await _outputPath('searchable', fileName: fileName);
+    if (password.isEmpty) {
+      await PdfCore.applyOcrAsync(path, read, out);
+      return SearchableCopy(pages: pages, outputPath: out);
+    }
+    final scratch = await (await getTemporaryDirectory()).createTemp('ocr_');
+    try {
+      final unlocked = '${scratch.path}/searchable.pdf';
+      await PdfCore.applyOcrAsync(path, read, unlocked, password: password);
+      await PdfCore.encryptAsync(unlocked, password, out);
+    } finally {
+      try {
+        await scratch.delete(recursive: true);
+      } catch (_) {}
+    }
+    return SearchableCopy(pages: pages, outputPath: out);
+  }
+
+  /// [makeSearchable] for a PDF this app has just built from photos, writing
+  /// over [path] itself rather than a copy. Returns how many pages gained
+  /// text. The file is replaced only once the new one is complete, so a
+  /// failure or [OcrCancelled] leaves it as it was.
+  static Future<int> addTextLayer(
+    String path, {
+    void Function(int done, int total)? onProgress,
+    bool Function()? isCancelled,
+  }) async {
+    final pages = await recognizeText(
+      path,
+      onProgress: onProgress,
+      isCancelled: isCancelled,
+    );
+    final read = _withText(pages);
+    if (read.isEmpty) return 0;
+    if (isCancelled?.call() ?? false) throw OcrCancelled(pages);
+    // Beside the original, so the rename cannot cross filesystems; not
+    // ending in .pdf, so the library never lists it.
+    final layered = '$path.ocr';
+    try {
+      await PdfCore.applyOcrAsync(path, read, layered);
+      await File(layered).rename(path);
+    } catch (_) {
+      try {
+        await File(layered).delete();
+      } catch (_) {}
+      rethrow;
+    }
+    return read.length;
+  }
+
+  static List<PdfOcrPage> _withText(List<PdfOcrPage> pages) => [
+    for (final page in pages)
+      if (page.status == PdfOcrStatus.recognized && page.lines.isNotEmpty) page,
+  ];
+
   // ------------------------------------------------------------------ utils
 
   /// Turn a set of 0-based page indices into the 1-based range string the
@@ -433,6 +556,51 @@ class AiExport {
   bool get hasTextLayer => chunks.any((c) => c.text.trim().length > 20);
 
   int get totalChars => pages.fold(0, (sum, p) => sum + p.length);
+}
+
+// ---------------------------------------------------------------------------
+// OCR
+// ---------------------------------------------------------------------------
+
+/// What [PdfCoreService.makeSearchable] did.
+class SearchableCopy {
+  const SearchableCopy({required this.pages, this.outputPath});
+
+  /// Every page, in order, as OCR found it.
+  final List<PdfOcrPage> pages;
+
+  /// The searchable copy; null when no page gained text, so none was written.
+  final String? outputPath;
+
+  /// Pages that now carry recognized text.
+  int get recognized => _count(PdfOcrStatus.recognized);
+
+  /// Pages left alone because they had text already, born-digital or from an
+  /// earlier OCR pass.
+  int get hadText =>
+      _count(PdfOcrStatus.hasText) + _count(PdfOcrStatus.hasOcrLayer);
+
+  /// Pages read without finding anything legible.
+  int get blank => pages.length - recognized - hadText;
+
+  int _count(PdfOcrStatus status) => pages
+      .where(
+        (page) =>
+            page.status == status &&
+            (status != PdfOcrStatus.recognized || page.lines.isNotEmpty),
+      )
+      .length;
+}
+
+/// Thrown when OCR is stopped part way.
+class OcrCancelled implements Exception {
+  const OcrCancelled(this.pages);
+
+  /// The pages read before it stopped, in order.
+  final List<PdfOcrPage> pages;
+
+  @override
+  String toString() => 'OcrCancelled after ${pages.length} page(s)';
 }
 
 /// Convenience: write extracted text next to the PDF for sharing.

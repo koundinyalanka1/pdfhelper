@@ -42,7 +42,7 @@ void main() {
       '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] '
           '/Resources << /Font << /F1 5 0 R >> $extraResources >> /Contents 4 0 R >>',
       '<< /Length ${content.length} >>\nstream\n$content\nendstream',
-      '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+      '<< /Type /Font /Subtype /Type1 /BaseFont /UnembeddedSans >>',
     ];
     final out = StringBuffer('%PDF-1.7\n');
     final offsets = <int>[];
@@ -74,7 +74,7 @@ void main() {
     // PNG magic, so we know a real image came back.
     expect(bytes.sublist(0, 4), [0x89, 0x50, 0x4E, 0x47]);
 
-    // Helvetica is not embedded, so the page is drawn with a stand-in — and
+    // The font is not embedded, so the page is drawn with a stand-in — and
     // the renderer has to say so rather than passing it off as exact.
     final warnings = PdfRaster.warningsFor(pdf.path, 0, longEdge: 400);
     expect(warnings, isNotEmpty);
