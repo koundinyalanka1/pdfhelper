@@ -47,3 +47,8 @@ app.*.map.json
 # Signing — never commit keystore or key.properties
 *.jks
 *.keystore
+
+# Test corpus and PVS validation artifacts
+/test_corpus/
+/test_pvs_output/
+
