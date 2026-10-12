@@ -262,7 +262,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     _searchableScans
                         ? 'Recognize the text in new scans (OCR)'
                         : 'Save scans as images only',
-                    Icons.manage_search_rounded,
+                    Icons.document_scanner_rounded,
                     _searchableScans,
                     (value) =>
                         context.read<ThemeProvider>().setSearchableScans(value),

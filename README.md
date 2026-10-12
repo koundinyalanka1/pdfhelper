@@ -21,7 +21,7 @@ Start with the [documentation index](docs/README.md):
 | Assemble | Ordered merge and output batches; split by range, selection or individual pages |
 | Edit | Page rotation/reordering/deletion, metadata, AES-256 protection and password removal |
 | Extract | Content-stream text extraction for copying or saving as text; OCR for pages with no text layer |
-| Recognize text | On-device OCR of printed Latin-script text; saves a searchable copy with an invisible text layer |
+| Recognize text | On-device OCR of printed Latin-script text, from the viewer's top bar or Tools; keeps the text in the app or saves a searchable copy with an invisible text layer |
 | Scan | Camera/gallery input, perspective crop/straighten, six filters, undo/redo, multipage image-to-PDF and searchable scans (OCR, on by default) |
 | Output | Named PDFs, collision handling, preview, explicit Save and optional Auto Save |
 | Settings | Dark/light theme, output quality/location, searchable scans, notifications and applicable ad privacy choices |
@@ -33,8 +33,11 @@ external launches go directly to the viewer.
 Files search matches names and folders, not PDF contents; the viewer's find
 searches the open document's text. Last-read restoration, interactive form
 editing and redaction remain future work. Image-only PDFs have no selectable
-or searchable text until **Recognize text (OCR)** adds a text layer; the
-viewer offers it when find or selection comes up empty. OCR reads printed
+or searchable text until it is recognized. The viewer shows a **Recognize
+text (OCR)** button for pages without text and, once the text is read, asks
+whether to keep it in the app (selection and find use it whenever that file
+is opened here; the PDF is unchanged) or save a searchable copy. Text from
+password-protected PDFs is kept only until they are closed. OCR reads printed
 Latin-script text only, not handwriting or other scripts. Password protection does not expose printing/copying/editing restrictions.
 The app supports different merge-input passwords through temporary decryption.
 

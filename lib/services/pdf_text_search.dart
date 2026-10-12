@@ -103,10 +103,22 @@ class PdfTextSearch {
   ///
   /// Null when the pages do not line up with [pageCount] — a document whose
   /// own text contains a form feed — so that every page gets read instead.
-  static List<String>? buildIndex(String documentText, int pageCount) {
+  ///
+  /// [recognized] is text the app read from scanned pages, by 0-based page,
+  /// which the document itself does not contain.
+  static List<String>? buildIndex(
+    String documentText,
+    int pageCount, {
+    Map<int, String> recognized = const {},
+  }) {
     final pages = documentText.split('\f');
     if (pages.length != pageCount) return null;
-    return [for (final page in pages) _foldCompact(page)];
+    return [
+      for (var i = 0; i < pages.length; i++)
+        _foldCompact(
+          recognized[i] == null ? pages[i] : '${pages[i]} ${recognized[i]}',
+        ),
+    ];
   }
 
   /// [buildIndex] for a document, read on a background isolate. Null when the
@@ -115,12 +127,14 @@ class PdfTextSearch {
     String path, {
     String password = '',
     required int pageCount,
+    Map<int, String> recognized = const {},
   }) async {
     try {
       return await Isolate.run(
         () => buildIndex(
           PdfCore.extractText(path, password: password),
           pageCount,
+          recognized: recognized,
         ),
       );
     } catch (error) {

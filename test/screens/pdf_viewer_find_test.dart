@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pdfhelper/providers/theme_provider.dart';
 import 'package:pdfhelper/screens/pdf_viewer_screen.dart';
+import 'package:pdfhelper/services/pdf_core_service.dart';
 import 'package:pdfhelper/widgets/pdf_text_selection_overlay.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -237,16 +238,22 @@ void main() {
     await finish(tester);
   });
 
-  testWidgets('an image-only document says why nothing is found', (
+  testWidgets('an image-only document offers Recognize text while finding', (
     tester,
   ) async {
+    // Available, so the viewer can offer OCR.
+    await PdfCoreService.probe();
     await open(tester, ['', '']);
     await findText(tester, 'anything');
     expect(find.text('0/0'), findsOneWidget);
-    expect(
-      find.text('This PDF has no searchable text. Scanned pages need OCR.'),
-      findsOneWidget,
-    );
+    expect(find.byType(SnackBar), findsNothing);
+    // In the find bar, with its tooltip pointing at it for a moment.
+    expect(find.byTooltip('Recognize text (OCR)'), findsOneWidget);
+    expect(find.text('Recognize text (OCR)'), findsOneWidget);
+    for (var i = 0; i < 8; i++) {
+      await tester.pump(const Duration(milliseconds: 500));
+    }
+    expect(find.text('Recognize text (OCR)'), findsNothing);
     await finish(tester);
   });
 }

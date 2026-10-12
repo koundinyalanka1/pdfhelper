@@ -390,6 +390,8 @@ class _LibraryScreenState extends State<LibraryScreen>
           'storage access in Settings to find PDFs outside this app.',
         ),
         duration: const Duration(seconds: 6),
+        // A snack bar with an action otherwise ignores its duration.
+        persist: false,
         action: SnackBarAction(
           label: 'Settings',
           onPressed: PdfLibraryService.openSettings,

@@ -361,13 +361,32 @@ class PdfCoreService {
       onProgress: onProgress,
       isCancelled: isCancelled,
     );
-    final read = _withText(pages);
-    if (read.isEmpty) return SearchableCopy(pages: pages);
+    if (_withText(pages).isEmpty) return SearchableCopy(pages: pages);
     if (isCancelled?.call() ?? false) throw OcrCancelled(pages);
+    final out = await saveSearchableCopy(
+      path,
+      pages,
+      password: password,
+      fileName: fileName,
+    );
+    return SearchableCopy(pages: pages, outputPath: out);
+  }
+
+  /// [makeSearchable] for text already read with [recognizeText], so a
+  /// viewer that recognized a document can save it without reading it
+  /// again. Returns the copy's path; [pages] must include recognized text.
+  static Future<String> saveSearchableCopy(
+    String path,
+    List<PdfOcrPage> pages, {
+    String password = '',
+    String? fileName,
+  }) async {
+    final read = _withText(pages);
+    if (read.isEmpty) throw ArgumentError.value(pages, 'pages', 'no text');
     final out = await _outputPath('searchable', fileName: fileName);
     if (password.isEmpty) {
       await PdfCore.applyOcrAsync(path, read, out);
-      return SearchableCopy(pages: pages, outputPath: out);
+      return out;
     }
     final scratch = await (await getTemporaryDirectory()).createTemp('ocr_');
     try {
@@ -379,7 +398,7 @@ class PdfCoreService {
         await scratch.delete(recursive: true);
       } catch (_) {}
     }
-    return SearchableCopy(pages: pages, outputPath: out);
+    return out;
   }
 
   /// [makeSearchable] for a PDF this app has just built from photos, writing

@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pdfhelper/providers/theme_provider.dart';
 import 'package:pdfhelper/screens/pdf_viewer_screen.dart';
+import 'package:pdfhelper/services/pdf_core_service.dart';
 import 'package:pdfhelper/widgets/banner_ad_widget.dart';
 import 'package:pdfhelper/widgets/pdf_text_selection_overlay.dart';
 import 'package:provider/provider.dart';
@@ -50,6 +51,16 @@ void main() {
       );
       await tester.pump(const Duration(milliseconds: 30));
     }
+  }
+
+  /// While zoomed, the viewer redraws the part on screen sharp a moment after
+  /// the movement stops, on a background isolate. Let that finish inside the
+  /// test that started it: a render the test leaves running never hands back
+  /// its slot in the shared render queue, and three of those stall every
+  /// page in the tests that follow.
+  Future<void> flushZoomRender(WidgetTester tester) async {
+    await tester.pump(const Duration(milliseconds: 200));
+    await flush(tester);
   }
 
   Future<void> open(WidgetTester tester) async {
@@ -113,21 +124,36 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('an image-only page explains why text cannot be selected', (
+  testWidgets('an image-only page points at Recognize text, not a message', (
     tester,
   ) async {
+    // Available, so the viewer can offer OCR.
+    await PdfCoreService.probe();
     pdf = writeTextPdfFixture(root, ['']);
     await open(tester);
     expect(find.byType(PdfTextSelectionOverlay), findsNothing);
-    expect(find.textContaining('Scanned images need OCR'), findsNothing);
+    expect(find.byTooltip('Recognize text (OCR)'), findsOneWidget);
+    expect(find.text('Recognize text (OCR)'), findsNothing);
+
     await tester.longPress(find.byType(Image).first);
     await tester.pump();
-    expect(
-      find.text('No selectable text on this page. Scanned images need OCR.'),
-      findsOneWidget,
-    );
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byType(SnackBar), findsNothing);
+    // The button's own tooltip says what to do, then goes away by itself.
+    expect(find.text('Recognize text (OCR)'), findsOneWidget);
+    for (var i = 0; i < 8; i++) {
+      await tester.pump(const Duration(milliseconds: 500));
+    }
+    expect(find.text('Recognize text (OCR)'), findsNothing);
     expect(copied, isNull);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a page with text offers no Recognize text', (tester) async {
+    await PdfCoreService.probe();
+    await open(tester);
+    expect(find.byType(PdfTextSelectionOverlay), findsOneWidget);
+    expect(find.byTooltip('Recognize text (OCR)'), findsNothing);
   });
 
   testWidgets('More actions has no selection mode option', (tester) async {
@@ -221,6 +247,7 @@ void main() {
     await tester.tap(find.text('Copy'));
     await tester.pump();
     expect(copied, 'Hello');
+    await flushZoomRender(tester);
     expect(tester.takeException(), isNull);
   });
 
@@ -251,6 +278,7 @@ void main() {
     expect(viewer.transformationController!.value, isNot(before));
     expect(find.text('Copy'), findsNothing);
     expect(copied, isNull);
+    await flushZoomRender(tester);
     expect(tester.takeException(), isNull);
   });
 
@@ -281,6 +309,7 @@ void main() {
     await a.up();
     await b.up();
     await tester.pump(const Duration(milliseconds: 500));
+    await flushZoomRender(tester);
     expect(tester.takeException(), isNull);
   });
 }

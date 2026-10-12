@@ -356,7 +356,7 @@ class _ExtractTextScreenState extends State<ExtractTextScreen> {
               const SizedBox(height: 20),
               ElevatedButton.icon(
                 onPressed: _recognize,
-                icon: const Icon(Icons.manage_search_rounded),
+                icon: const Icon(Icons.document_scanner_rounded),
                 label: Text(
                   _pages.length == 1
                       ? 'Recognize text'
@@ -450,7 +450,7 @@ class _ExtractTextScreenState extends State<ExtractTextScreen> {
       color: _accent.withValues(alpha: 0.08),
       child: Row(
         children: [
-          const Icon(Icons.manage_search_rounded, color: _accent, size: 18),
+          const Icon(Icons.document_scanner_rounded, color: _accent, size: 18),
           const SizedBox(width: 10),
           Expanded(
             child: Text(

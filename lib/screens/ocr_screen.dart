@@ -206,7 +206,7 @@ class _OcrScreenState extends State<OcrScreen> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.manage_search_rounded, color: _accent, size: 20),
+          const Icon(Icons.document_scanner_rounded, color: _accent, size: 20),
           const SizedBox(width: 12),
           Expanded(
             child: Text(
@@ -348,7 +348,7 @@ class _OcrScreenState extends State<OcrScreen> {
       height: 52,
       child: ElevatedButton.icon(
         onPressed: _start,
-        icon: const Icon(Icons.manage_search_rounded),
+        icon: const Icon(Icons.document_scanner_rounded),
         label: const Text('Recognize text'),
         style: ElevatedButton.styleFrom(
           backgroundColor: _accent,

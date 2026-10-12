@@ -28,11 +28,7 @@ class PdfRaster {
   /// megabytes each even when there are only a few entries.
   static const int _maxCacheEntries = 40;
   static const int _maxCacheBytes = 24 * 1024 * 1024;
-  static final LinkedHashMap<
-    ({String path, int page, int size, String password}),
-    Uint8List
-  >
-  _cache = LinkedHashMap();
+  static final LinkedHashMap<_RenderKey, Uint8List> _cache = LinkedHashMap();
 
   /// Thumbnail long edge, in pixels. Sized for grid cells, which are never
   /// shown above ~180 logical px.
@@ -92,6 +88,13 @@ class PdfRaster {
 
   /// Warnings travel with each result even when its bitmap is not cached.
   ///
+  /// The page is fitted inside a [width] x [height] pixel box when both are
+  /// given, otherwise inside a [longEdge]-pixel square. A viewer passes the
+  /// page's size on screen in device pixels (see `pageRenderSize`): fitting
+  /// a portrait page into a square of its *width* rendered it at 70% of the
+  /// screen's resolution and stretched it, which is most of why pages looked
+  /// soft next to Drive.
+  ///
   /// [isWanted] is asked when the render's turn comes: a page that has
   /// scrolled away by then is skipped (null), so a fling does not leave the
   /// pages now on screen waiting behind every page it passed.
@@ -99,15 +102,20 @@ class PdfRaster {
     String path,
     int pageIndex, {
     int longEdge = thumbnailSize,
+    int? width,
+    int? height,
     String password = '',
     bool useCache = true,
     bool throwOnError = false,
     bool Function()? isWanted,
   }) async {
+    final boxWidth = width ?? longEdge;
+    final boxHeight = height ?? longEdge;
     final key = (
       path: path,
       page: pageIndex,
-      size: longEdge,
+      width: boxWidth,
+      height: boxHeight,
       password: password,
     );
     if (useCache) {
@@ -123,8 +131,8 @@ class PdfRaster {
         return PdfCore.renderPagePngWithWarningsAsync(
           path,
           pageIndex,
-          width: longEdge,
-          height: longEdge,
+          width: boxWidth,
+          height: boxHeight,
           password: password,
         );
       });
@@ -159,26 +167,77 @@ class PdfRaster {
   /// substituted font, an image in a codec this build cannot read. The viewer
   /// uses this to tell the reader so, instead of passing off an approximation
   /// as the real thing.
-  static final Map<
-    ({String path, int page, int size, String password}),
-    List<String>
-  >
-  _warnings = {};
+  static final Map<_RenderKey, List<String>> _warnings = {};
 
   /// Warnings recorded for a page already rendered, empty when there are none.
   static List<String> warningsFor(
     String path,
     int pageIndex, {
     int longEdge = thumbnailSize,
+    int? width,
+    int? height,
     String password = '',
   }) =>
       _warnings[(
         path: path,
         page: pageIndex,
-        size: longEdge,
+        width: width ?? longEdge,
+        height: height ?? longEdge,
         password: password,
       )] ??
       const [];
+
+  /// Whether the engine can render just part of a page ([renderRegion]).
+  static bool get canRenderRegions {
+    try {
+      return PdfCore.canRenderRegions;
+    } catch (_) {
+      // No native library at all (widget tests): nothing renders anyway.
+      return false;
+    }
+  }
+
+  /// Render only part of page [pageIndex] (0-based): the page laid out to fit
+  /// a [pageWidth] x [pageHeight] pixel box, and of that only the [width] x
+  /// [height] pixels at ([x], [y]), clipped to the page.
+  ///
+  /// This is what keeps a zoomed page sharp: the part on screen at the
+  /// screen's resolution, rather than the whole page at a size that runs to
+  /// hundreds of megabytes. Never cached — the next pan or zoom wants a
+  /// different region. Null when it cannot be rendered, or when [isWanted]
+  /// says the region is stale by the time its turn comes.
+  static Future<PdfRenderedPng?> renderRegion(
+    String path,
+    int pageIndex, {
+    required int pageWidth,
+    required int pageHeight,
+    required int x,
+    required int y,
+    required int width,
+    required int height,
+    String password = '',
+    bool Function()? isWanted,
+  }) async {
+    try {
+      return await _renders.run(() async {
+        if (isWanted != null && !isWanted()) return null;
+        return PdfCore.renderPageRegionPngWithWarningsAsync(
+          path,
+          pageIndex,
+          pageWidth: pageWidth,
+          pageHeight: pageHeight,
+          x: x,
+          y: y,
+          width: width,
+          height: height,
+          password: password,
+        );
+      });
+    } catch (e) {
+      logError('PdfRaster.renderRegion', e);
+      return null;
+    }
+  }
 
   /// First-page thumbnail — the one every file card shows.
   static Future<Uint8List?> thumbnail(String path, {String password = ''}) =>
@@ -434,10 +493,7 @@ class PdfRaster {
     _warnings.removeWhere((key, _) => key.path == path);
   }
 
-  static void _store(
-    ({String path, int page, int size, String password}) key,
-    Uint8List bytes,
-  ) {
+  static void _store(_RenderKey key, Uint8List bytes) {
     _cache.remove(key);
     _cache[key] = bytes;
     var cachedBytes = _cache.values.fold(
@@ -452,6 +508,15 @@ class PdfRaster {
   }
 
 }
+
+/// A cached render: the page and the pixel box it was fitted into.
+typedef _RenderKey = ({
+  String path,
+  int page,
+  int width,
+  int height,
+  String password,
+});
 
 double? _aspectRatioOrNull(String path, int page, String password) {
   try {

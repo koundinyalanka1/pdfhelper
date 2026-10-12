@@ -11,22 +11,26 @@ import 'package:share_plus/share_plus.dart';
 
 import '../config/features.dart';
 import '../providers/theme_provider.dart';
+import '../services/ads_service.dart';
 import '../services/pdf_core_service.dart';
 import '../services/pdf_raster.dart';
 import '../services/pdf_service.dart';
 import '../services/pdf_text_search.dart';
 import '../services/pdf_text_selection_service.dart';
 import '../services/recent_files_service.dart';
+import '../services/recognized_text_store.dart';
 import '../utils/error_logger.dart';
+import '../utils/file_naming.dart';
 import '../widgets/password_prompt.dart';
 import '../widgets/banner_ad_widget.dart';
+import '../widgets/pdf_name_dialog.dart';
+import '../widgets/pdf_result_dialog.dart';
 import '../widgets/pdf_text_selection_overlay.dart';
 import 'ai_screen.dart';
 import 'extract_text_screen.dart';
 import 'home_screen.dart';
 import 'merge_pdf_screen.dart';
 import 'metadata_screen.dart';
-import 'ocr_screen.dart';
 import 'organize_pages_screen.dart';
 import 'protect_screen.dart';
 import 'split_pdf_screen.dart';
@@ -67,9 +71,30 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
   final FocusNode _findFocus = FocusNode();
   Timer? _findDebounce;
 
-  /// Whether this find session has already explained that the document has
-  /// no text to search, so each new query doesn't repeat it.
+  /// Whether this find session has already pointed at Recognize text for a
+  /// document with no text to search, so each new query doesn't repeat it.
   bool _explainedNoText = false;
+
+  /// Text OCR found on this document's scanned pages: kept in the app on an
+  /// earlier visit, or read just now. Pages fall back on it for selection
+  /// and find where the PDF has no text of its own.
+  RecognizedText _recognized = RecognizedText.none;
+
+  /// Pages that loaded without any selectable text, and whether find came up
+  /// with no text anywhere. Either one brings up the Recognize text button.
+  final Set<int> _pagesWithoutText = {};
+  bool _documentWithoutText = false;
+
+  /// Pages read and the total while text is being recognized, or the
+  /// moment a searchable copy is being written ([_savingCopy]).
+  (int, int)? _ocrProgress;
+  bool _ocrCancelRequested = false;
+  bool _savingCopy = false;
+
+  /// The Recognize text button's tooltip, shown to point at the button when
+  /// the reader tries to select text that isn't there.
+  final GlobalKey<TooltipState> _ocrTooltip = GlobalKey();
+  Timer? _ocrTooltipTimer;
 
   /// Every page's width/height as it becomes known — all of them shortly
   /// after opening (see [_loadPageRatios]), or from the page itself if it
@@ -92,6 +117,23 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
   /// Current scale, watched by each visible page so it can re-rasterize
   /// sharper instead of showing a magnified thumbnail.
   final ValueNotifier<double> _zoom = ValueNotifier<double>(1.0);
+
+  /// Anything that moves what is on screen — zoom, pan or scroll — so each
+  /// page can redraw its visible part sharp once the movement stops.
+  late final Listenable _viewportChanges = Listenable.merge([
+    _zoomController,
+    _scrollController,
+  ]);
+
+  /// The document viewport, whose on-screen area pages measure themselves
+  /// against when deciding what of them to redraw while zoomed.
+  final GlobalKey _viewerKey = GlobalKey();
+
+  Rect? _viewportRect() {
+    final box = _viewerKey.currentContext?.findRenderObject();
+    if (box is! RenderBox || !box.hasSize || !box.attached) return null;
+    return box.localToGlobal(Offset.zero) & box.size;
+  }
 
   /// While zoomed, the scale recognizer owns dragging. Its vertical movement
   /// scrolls the page list; its horizontal movement pans the enlarged page.
@@ -178,6 +220,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
       unawaited(PdfRaster.closeDocument(widget.pdfPath, password: pinned));
     }
     _findDebounce?.cancel();
+    _ocrTooltipTimer?.cancel();
     _search?.dispose();
     _findText.dispose();
     _findFocus.dispose();
@@ -372,6 +415,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
         });
         _createSearch(count);
         unawaited(_loadPageRatios());
+        unawaited(_loadRecognizedText());
         return;
       } on PdfException catch (e) {
         if (!mounted) return;
@@ -473,6 +517,28 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
     }
   }
 
+  /// Text kept in the app when this document was recognized before.
+  /// Protected documents never have any (see [RecognizedTextStore]).
+  Future<void> _loadRecognizedText() async {
+    if (_password.isNotEmpty || !PdfCoreService.isAvailable) return;
+    final kept = await RecognizedTextStore.load(
+      widget.pdfPath,
+      pageCount: _totalPages,
+    );
+    if (!mounted || kept.isEmpty || _ocrProgress != null) return;
+    _useRecognizedText(kept);
+  }
+
+  /// Show [text] on the pages it was recognized on, and search it.
+  void _useRecognizedText(RecognizedText text) {
+    setState(() {
+      _recognized = text;
+      _documentWithoutText = false;
+    });
+    _createSearch(_totalPages);
+    if (_finding) _runFind();
+  }
+
   double get _pageWidth => MediaQuery.of(context).size.width - 24;
 
   /// Height page [index] occupies in the list, margins included.
@@ -556,19 +622,29 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
   }
 
   /// The document's search, reading text with the same password as the
-  /// pages. Nothing is read until the reader searches.
+  /// pages, and recognized text on scanned pages. Nothing is read until the
+  /// reader searches.
   void _createSearch(int pageCount) {
     _search?.dispose();
     final path = widget.pdfPath;
     final password = _password;
+    final recognized = {
+      for (final MapEntry(:key, :value) in _recognized.pages.entries)
+        key: ?value.layout,
+    };
     _search = PdfDocumentSearch(
       pageCount: pageCount,
-      loadLayout: (index) =>
-          PdfTextSelectionService.load(path, index, password: password),
+      loadLayout: (index) async =>
+          recognized[index] ??
+          await PdfTextSelectionService.load(path, index, password: password),
       loadIndex: () => PdfTextSearch.loadIndex(
         path,
         password: password,
         pageCount: pageCount,
+        recognized: {
+          for (final MapEntry(:key, :value) in recognized.entries)
+            key: value.text,
+        },
       ),
       onMatch: _revealMatch,
     )..addListener(_onSearchChanged);
@@ -627,32 +703,339 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
     _findFocus.requestFocus();
   }
 
-  /// An image-only scan has nothing to find. Say so once, rather than leave
-  /// "0/0" looking as though the query were wrong.
+  /// An image-only scan has nothing to find. Rather than leave "0/0" looking
+  /// as though the query were wrong, bring up Recognize text, once, and
+  /// point at it.
   void _onSearchChanged() {
     final search = _search;
     if (search == null || !_finding || _explainedNoText) return;
     if (search.isSearching || search.query.isEmpty) return;
     if (search.documentHasText != false) return;
     _explainedNoText = true;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: const Text(
-            'This PDF has no searchable text. Scanned pages need OCR.',
-          ),
-          action: PdfCoreService.isAvailable
-              ? SnackBarAction(label: 'Recognize text', onPressed: _openOcr)
-              : null,
-        ),
-      );
+    setState(() => _documentWithoutText = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _pointAtRecognizeButton('This PDF has no text to search.');
+    });
   }
 
-  /// Make this document searchable. The copy opens from the result dialog;
-  /// this viewer stays on the original underneath.
-  void _openOcr() {
-    _push(OcrScreen(pdfPath: widget.pdfPath, password: _password));
+  // ------------------------------------------------------- recognize text
+
+  /// Whether some page has no text to select or find, and OCR has not been
+  /// through it yet. Shows the Recognize text button.
+  bool get _needsRecognition {
+    if (!PdfCoreService.isAvailable || _totalPages == 0) return false;
+    bool unread(int page) => !_recognized.hasRead(page);
+    if (_pagesWithoutText.any(unread)) return true;
+    return _documentWithoutText &&
+        Iterable<int>.generate(_totalPages).any(unread);
+  }
+
+  void _notePageWithoutText(int index) {
+    if (!mounted || _pagesWithoutText.contains(index)) return;
+    final before = _needsRecognition;
+    _pagesWithoutText.add(index);
+    if (_needsRecognition != before) setState(() {});
+  }
+
+  /// Show what the Recognize text button does, right where it is, instead of
+  /// a message to dismiss. [otherwise] is said when there is no button.
+  void _pointAtRecognizeButton(String otherwise) {
+    _textSelectionController.clear();
+    final tooltip = _ocrTooltip.currentState;
+    if (tooltip == null) {
+      _snack(otherwise);
+      return;
+    }
+    tooltip.ensureTooltipVisible();
+    // A tooltip shown this way would otherwise stay until the next touch.
+    _ocrTooltipTimer?.cancel();
+    _ocrTooltipTimer = Timer(
+      const Duration(seconds: 3),
+      Tooltip.dismissAllToolTips,
+    );
+  }
+
+  /// Read the text on the pages that have none, here in the viewer, then
+  /// ask whether to keep it in the app or save it as a new PDF.
+  ///
+  /// Pages OCR has already been through are not read again, so asking from
+  /// More actions after keeping text in the app goes straight to the choice.
+  Future<void> _recognizeText() async {
+    if (_ocrProgress != null || _savingCopy) return;
+    if (!PdfCoreService.isAvailable) {
+      _snack('Text recognition is unavailable in this build.');
+      return;
+    }
+    _textSelectionController.clear();
+    _ocrTooltipTimer?.cancel();
+    Tooltip.dismissAllToolTips();
+    var before = _recognized;
+    var pages = [
+      for (var index = 0; index < _totalPages; index++)
+        if (!before.hasRead(index)) index + 1,
+    ];
+    if (pages.isEmpty && before.pages.isEmpty) {
+      // Read before, and nothing kept: read it all again, so that what is
+      // said afterwards is about this run.
+      before = RecognizedText.none;
+      pages = [for (var page = 1; page <= _totalPages; page++) page];
+    }
+    setState(() {
+      _ocrProgress = (0, pages.length);
+      _ocrCancelRequested = false;
+    });
+    final List<PdfOcrPage> results;
+    try {
+      results = pages.isEmpty
+          ? const []
+          : await PdfCoreService.recognizeText(
+              widget.pdfPath,
+              password: _password,
+              pages: pages,
+              onProgress: (done, total) {
+                if (mounted) setState(() => _ocrProgress = (done, total));
+              },
+              isCancelled: () => _ocrCancelRequested || !mounted,
+            );
+    } on OcrCancelled {
+      if (mounted) setState(() => _ocrProgress = null);
+      return;
+    } catch (error) {
+      logError('PdfViewer.recognizeText', error);
+      if (!mounted) return;
+      setState(() => _ocrProgress = null);
+      _snack(PdfCoreService.describeError(error));
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _ocrProgress = null);
+    bool hasText(PdfOcrPage page) =>
+        page.status == PdfOcrStatus.recognized &&
+        page.lines.isNotEmpty &&
+        (page.layout?.hasText ?? false);
+    final found = RecognizedText(
+      pages: {
+        ...before.pages,
+        for (final page in results)
+          if (hasText(page)) page.page - 1: page,
+      },
+      skipped: {
+        ...before.skipped,
+        for (final page in results)
+          if (!hasText(page)) page.page - 1,
+      },
+    );
+    if (found.pages.isEmpty) {
+      // Nothing to keep or save. Which pages OCR went through is remembered
+      // all the same, so the button doesn't offer them again.
+      _keepInApp(found);
+      final hadText = results.every(
+        (page) =>
+            page.status == PdfOcrStatus.hasText ||
+            page.status == PdfOcrStatus.hasOcrLayer,
+      );
+      _snack(
+        hadText
+            ? 'Every page already has text. Select and find work on this '
+                  'PDF as it is.'
+            : 'No readable text was found. Text recognition reads printed '
+                  'text; handwriting is not recognized.',
+      );
+      return;
+    }
+    while (mounted) {
+      switch (await _askWhereTextGoes(found)) {
+        case _TextDestination.app:
+          _keepInApp(found);
+          _snack('Text recognized. Select it or find it in this PDF.');
+          return;
+        case _TextDestination.newPdf:
+          // Backing out of the name goes back to the choice.
+          if (await _saveSearchableCopy(found)) return;
+        case null:
+          return;
+      }
+    }
+  }
+
+  void _cancelRecognition() {
+    if (_ocrProgress != null) setState(() => _ocrCancelRequested = true);
+  }
+
+  /// Use [text] on the pages from now on and, for an unprotected document,
+  /// the next time it is opened as well.
+  void _keepInApp(RecognizedText text) {
+    _useRecognizedText(text);
+    if (_password.isNotEmpty || text.isEmpty) return;
+    unawaited(
+      RecognizedTextStore.save(
+        widget.pdfPath,
+        pageCount: _totalPages,
+        text: text,
+      ).catchError((Object error) => logError('PdfViewer.keepText', error)),
+    );
+  }
+
+  /// Write [text] into a new, searchable PDF. False when the reader backed
+  /// out of naming it.
+  Future<bool> _saveSearchableCopy(RecognizedText text) async {
+    final title = stripPdfExtension(_fileName);
+    // An opened file whose provider gave no name is titled generically.
+    final base = title == 'View PDF' ? 'Document' : title;
+    final name = await askPdfName(
+      context: context,
+      initialName: '$base (searchable)',
+      confirmLabel: 'Save',
+      accent: _colors.accent,
+    );
+    if (name == null || !mounted) return false;
+    setState(() => _savingCopy = true);
+    try {
+      final output = await PdfCoreService.saveSearchableCopy(
+        widget.pdfPath,
+        text.pages.values.toList(),
+        password: _password,
+        fileName: name,
+      );
+      if (!mounted) return true;
+      setState(() => _savingCopy = false);
+      final pages = text.pages.length;
+      await showPdfResultDialog(
+        context: context,
+        filePaths: [output],
+        accent: _colors.accent,
+        operation: PdfOperation.ocr,
+        title: 'Searchable copy saved',
+        message: [
+          'Text on ${pages == 1 ? 'one page' : '$pages pages'} can be '
+              'searched, selected and copied in any PDF app.',
+          if (_password.isNotEmpty)
+            'The copy opens with the same password as the original.',
+        ].join(' '),
+      );
+    } catch (error) {
+      logError('PdfViewer.saveSearchableCopy', error);
+      if (!mounted) return true;
+      setState(() => _savingCopy = false);
+      _snack(PdfCoreService.describeError(error));
+    }
+    return true;
+  }
+
+  /// Where the text OCR found should go: kept in the app, or written into a
+  /// new PDF. Null when the reader discards it.
+  Future<_TextDestination?> _askWhereTextGoes(RecognizedText found) {
+    final colors = _colors;
+    final pages = found.pages.length;
+    Widget option(
+      BuildContext dialog,
+      _TextDestination destination,
+      IconData icon,
+      String title,
+      String detail,
+    ) => Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: () => Navigator.pop(dialog, destination),
+        child: Ink(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: colors.divider),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(icon, color: colors.accent, size: 22),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(
+                        color: colors.textPrimary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      detail,
+                      style: TextStyle(
+                        color: colors.textSecondary,
+                        fontSize: 12.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    return showDialog<_TextDestination>(
+      context: context,
+      // Reading took a while; a stray tap outside must not throw it away.
+      barrierDismissible: false,
+      builder: (dialog) => AlertDialog(
+        scrollable: true,
+        backgroundColor: colors.cardBackground,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(
+          'Text recognized',
+          style: TextStyle(color: colors.textPrimary),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Found text on ${pages == 1 ? 'one page' : '$pages pages'}. '
+              'Where should it go?',
+              style: TextStyle(color: colors.textSecondary),
+            ),
+            const SizedBox(height: 16),
+            option(
+              dialog,
+              _TextDestination.app,
+              Icons.smartphone_rounded,
+              'Keep in PDF Helper',
+              _password.isEmpty
+                  ? 'Select and find it whenever you open this PDF here. '
+                        'The file is not changed.'
+                  : 'Select and find it until you close this PDF. Text '
+                        'from password-protected PDFs is not stored.',
+            ),
+            const SizedBox(height: 10),
+            option(
+              dialog,
+              _TextDestination.newPdf,
+              Icons.note_add_rounded,
+              'Save as a new PDF',
+              'A searchable copy that works in any PDF app.',
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialog),
+            child: Text(
+              'Discard',
+              style: TextStyle(color: colors.textSecondary),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _snack(String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 
   /// Bring a match into view without changing the zoom.
@@ -830,9 +1213,9 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
               _action(
                 ctx,
                 colors,
-                Icons.manage_search_rounded,
+                Icons.document_scanner_rounded,
                 'Recognize text (OCR)',
-                _openOcr,
+                _recognizeText,
               ),
               _action(
                 ctx,
@@ -939,6 +1322,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
           child: Column(
             children: [
               _approximateBanner(),
+              _recognitionProgress(),
               Expanded(
                 child: Stack(
                   children: [
@@ -991,6 +1375,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
               style: TextStyle(color: _colors.textSecondary, fontSize: 14),
             ),
           ),
+        if (_needsRecognition || _ocrProgress != null) _recognizeButton(),
         if (_totalPages > 0)
           IconButton(
             icon: const Icon(Icons.search),
@@ -1062,6 +1447,9 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
         ),
       ),
       actions: [
+        // Outside the field's tap region, so reaching for it also puts the
+        // keyboard away and the pages come into view.
+        if (_needsRecognition || _ocrProgress != null) _recognizeButton(),
         TextFieldTapRegion(
           child: ListenableBuilder(
             listenable: search,
@@ -1140,6 +1528,91 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
           : const SizedBox.shrink(),
     ),
   );
+
+  /// Recognize text, offered while some page has no text to select. The icon
+  /// is the one for reading text off a scanned page: a page of text inside
+  /// a viewfinder.
+  Widget _recognizeButton() => Tooltip(
+    key: _ocrTooltip,
+    message: 'Recognize text (OCR)',
+    child: IconButton(
+      icon: const Icon(Icons.document_scanner_outlined),
+      // The strip below the bar shows the run and stops it.
+      onPressed: _ocrProgress == null && !_savingCopy ? _recognizeText : null,
+      color: _colors.textPrimary,
+    ),
+  );
+
+  /// Progress while text is recognized or a searchable copy is written,
+  /// with a way to stop reading. The pages stay readable meanwhile.
+  Widget _recognitionProgress() {
+    final progress = _ocrProgress;
+    if (progress == null && !_savingCopy) return const SizedBox.shrink();
+    final String label;
+    double? value;
+    if (progress == null) {
+      label = 'Saving the searchable copy…';
+    } else if (_ocrCancelRequested) {
+      label = 'Stopping after this page…';
+    } else {
+      final (done, total) = progress;
+      value = total == 0 ? null : done / total;
+      label = done < total
+          ? 'Recognizing text: page ${done + 1} of $total'
+          : 'Finishing…';
+    }
+    return Material(
+      key: const ValueKey('pdf-recognition-progress'),
+      color: _colors.cardBackground,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          LinearProgressIndicator(
+            value: value,
+            minHeight: 2,
+            color: _colors.accent,
+            backgroundColor: Colors.transparent,
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 2, 4, 2),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.document_scanner_outlined,
+                  size: 18,
+                  color: _colors.textTertiary,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    label,
+                    style: TextStyle(
+                      color: _colors.textSecondary,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+                if (progress != null)
+                  TextButton(
+                    onPressed: _ocrCancelRequested ? null : _cancelRecognition,
+                    child: Text(
+                      'Cancel',
+                      style: TextStyle(
+                        color: _ocrCancelRequested
+                            ? _colors.textTertiary
+                            : _colors.textSecondary,
+                      ),
+                    ),
+                  )
+                else
+                  const SizedBox(height: 48),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   /// Remember the first page warning so the reader can be told once.
   void _noteWarnings(List<String> warnings) {
@@ -1243,6 +1716,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
             ? null
             : () {},
         child: InteractiveViewer(
+          key: _viewerKey,
           transformationController: _zoomController,
           minScale: 1.0,
           maxScale: 6.0,
@@ -1281,18 +1755,36 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
               aspectRatioKnown: _pageRatios.containsKey(index),
               isDark: _colors.isDark,
               zoom: _zoom,
+              viewportChanges: _viewportChanges,
+              viewport: _viewportRect,
               textSelectionController: _textSelectionController,
               search: _search,
+              recognizedText: _recognized.pages[index]?.layout,
               // Recorded without a rebuild: the page resizes itself, and the
               // counter and Go to page read the map when they need it.
               onAspectRatio: (ratio) => _pageRatios[index] = ratio,
               onWarnings: _noteWarnings,
+              onNoText: () => _notePageWithoutText(index),
+              onSelectMissingText: () => _pointAtRecognizeButton(
+                _recognized.skipped.contains(index)
+                    ? 'No text could be recognized on this page.'
+                    : 'No selectable text on this page.',
+              ),
             ),
           ),
         ),
       ),
     );
   }
+}
+
+/// Where text recognized in the viewer goes.
+enum _TextDestination {
+  /// Kept by the app and used whenever the document is opened in it.
+  app,
+
+  /// Written into a new, searchable copy of the document.
+  newPdf,
 }
 
 /// One page: renders on first appearance, re-renders sharper when zoomed.
@@ -1306,10 +1798,15 @@ class _PageView extends StatefulWidget {
     required this.aspectRatioKnown,
     required this.isDark,
     required this.zoom,
+    required this.viewportChanges,
+    required this.viewport,
     required this.onAspectRatio,
     required this.onWarnings,
     required this.textSelectionController,
+    required this.onNoText,
+    required this.onSelectMissingText,
     this.search,
+    this.recognizedText,
   });
 
   final String path;
@@ -1325,6 +1822,14 @@ class _PageView extends StatefulWidget {
   final bool isDark;
   final ValueListenable<double> zoom;
 
+  /// Fires whenever what is on screen moves: a zoom, a pan, a scroll. While
+  /// zoomed, the page then redraws the part of itself on screen at the zoom
+  /// it is shown at.
+  final Listenable viewportChanges;
+
+  /// The viewer's visible area in global coordinates, or null before layout.
+  final Rect? Function() viewport;
+
   /// Reports the page's real shape when it had to look it up itself.
   final ValueChanged<double> onAspectRatio;
   final ValueChanged<List<String>> onWarnings;
@@ -1334,6 +1839,15 @@ class _PageView extends StatefulWidget {
   /// layout it already holds for selection.
   final PdfDocumentSearch? search;
 
+  /// Text OCR read on this page, used when the page has none of its own.
+  final PdfPageTextLayout? recognizedText;
+
+  /// Called once the page turns out to have no selectable text of its own.
+  final VoidCallback onNoText;
+
+  /// Called when the reader tries to select text on a page that has none.
+  final VoidCallback onSelectMissingText;
+
   @override
   State<_PageView> createState() => _PageViewState();
 }
@@ -1341,12 +1855,35 @@ class _PageView extends StatefulWidget {
 class _PageViewState extends State<_PageView> {
   Uint8List? _bytes;
   double? _aspectRatio;
-  int _renderedLongEdge = 0;
+  /// Pixel width the page bitmap was rendered at.
+  int _renderedWidth = 0;
   bool _isRendering = false;
   bool _renderFailed = false;
   PdfPageTextLayout? _textLayout;
   bool _loadingText = false;
   String? _textError;
+
+  /// The page box, measured against the viewport to find what is on screen.
+  final GlobalKey _pageKey = GlobalKey();
+
+  /// Whether the document is zoomed in, which magnifies the page bitmap and
+  /// so needs it filtered rather than copied pixel for pixel.
+  bool _zoomed = false;
+
+  /// While zoomed: the part of the page on screen, rendered at the zoom it
+  /// is shown at and laid over the page bitmap, so text stays sharp however
+  /// far the reader zooms in. Rendering the whole page that large instead
+  /// would take 120 MB at 4x for an A4 page. [rect] is in the page's own
+  /// logical pixels.
+  ({Uint8List bytes, Rect rect, double zoom})? _tile;
+
+  /// Whether [_tile] was rendered for the zoom now shown, so it lies pixel
+  /// for pixel on the screen.
+  bool _tileAtZoom = false;
+  Timer? _tileTimer;
+
+  /// Bumped for each tile request, so a slower, older one is dropped.
+  int _tileRequest = 0;
 
   /// This page's find highlights and the query and layout they came from.
   String _highlightQuery = '';
@@ -1356,12 +1893,37 @@ class _PageViewState extends State<_PageView> {
   @override
   void initState() {
     super.initState();
-    widget.zoom.addListener(_onZoom);
+    widget.viewportChanges.addListener(_onViewportChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _render();
       _loadText();
     });
+  }
+
+  @override
+  void didUpdateWidget(covariant _PageView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.viewportChanges != widget.viewportChanges) {
+      oldWidget.viewportChanges.removeListener(_onViewportChanged);
+      widget.viewportChanges.addListener(_onViewportChanged);
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // The page's width on screen changed (a rotation, split screen): redraw
+    // it for the new width rather than stretch a bitmap made for the old one.
+    if (_renderedWidth != 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _rerenderIfResized());
+    }
+  }
+
+  void _rerenderIfResized() {
+    if (!mounted || _zoomed || _isRendering || _renderedWidth == 0) return;
+    final target = _renderSize(_aspectRatio ?? widget.aspectRatio).width;
+    if (target != _renderedWidth) _render();
   }
 
   Future<void> _loadText() async {
@@ -1379,6 +1941,7 @@ class _PageViewState extends State<_PageView> {
       );
       if (!mounted) return;
       setState(() => _textLayout = layout);
+      if (!layout.hasText) widget.onNoText();
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -1392,8 +1955,16 @@ class _PageViewState extends State<_PageView> {
     }
   }
 
+  /// The text to select and find on this page: its own, or what OCR read on
+  /// it when it has none.
+  PdfPageTextLayout? get _layout {
+    final own = _textLayout;
+    if (own != null && own.hasText) return own;
+    return widget.recognizedText ?? own;
+  }
+
   Widget _withTextSelection(Widget page) {
-    final layout = _textLayout;
+    final layout = _layout;
     if (layout != null && layout.hasText) {
       return PdfTextSelectionOverlay(
         layout: layout,
@@ -1413,37 +1984,29 @@ class _PageViewState extends State<_PageView> {
 
   void _explainUnavailableText() {
     widget.textSelectionController.clear();
+    if (!_loadingText && _textError == null) {
+      // A scan: the Recognize text button says what to do about it.
+      widget.onSelectMissingText();
+      return;
+    }
     final messenger = ScaffoldMessenger.of(context);
     messenger.hideCurrentSnackBar();
     messenger.showSnackBar(
       SnackBar(
         content: Text(
-          _loadingText
-              ? 'Text is still loading. Try again in a moment.'
-              : _textError ??
-                    'No selectable text on this page. Scanned images need OCR.',
+          _textError ?? 'Text is still loading. Try again in a moment.',
         ),
+        // A snack bar with an action otherwise stays until it is tapped.
+        persist: false,
         action: _textError != null
             ? SnackBarAction(label: 'Retry', onPressed: _loadText)
-            : !_loadingText && PdfCoreService.isAvailable
-            ? SnackBarAction(label: 'Recognize text', onPressed: _openOcr)
             : null,
       ),
     );
   }
 
-  void _openOcr() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) =>
-            OcrScreen(pdfPath: widget.path, password: widget.password),
-      ),
-    );
-  }
-
   List<List<Rect>> _highlightsFor(String query) {
-    final layout = _textLayout;
+    final layout = _layout;
     if (layout == null || query.isEmpty) return const [];
     if (query != _highlightQuery || !identical(layout, _highlightLayout)) {
       _highlightQuery = query;
@@ -1458,7 +2021,7 @@ class _PageViewState extends State<_PageView> {
   Widget _findHighlights(PdfDocumentSearch search) => ListenableBuilder(
     listenable: search,
     builder: (context, _) {
-      final layout = _textLayout;
+      final layout = _layout;
       final matches = _highlightsFor(search.query);
       if (layout == null || matches.isEmpty) return const SizedBox.shrink();
       return IgnorePointer(
@@ -1476,31 +2039,127 @@ class _PageViewState extends State<_PageView> {
 
   @override
   void dispose() {
-    widget.zoom.removeListener(_onZoom);
+    widget.viewportChanges.removeListener(_onViewportChanged);
+    _tileTimer?.cancel();
     super.dispose();
   }
 
-  /// Past ~1.4x the rendered resolution starts to show, so ask for a sharper
-  /// raster at the zoomed size.
-  void _onZoom() {
-    final scale = widget.zoom.value;
-    if (scale < 1.4 || _isRendering || !mounted) return;
-    final wanted = (_baseLongEdge * scale.clamp(1.0, 4.0)).round();
-    if (wanted > _renderedLongEdge * 1.4) _render(longEdge: wanted);
+  /// A zoom, pan or scroll. Once it stops, the part of the page on screen is
+  /// redrawn at the zoom it is shown at.
+  void _onViewportChanged() {
+    if (!mounted) return;
+    final zoom = widget.zoom.value;
+    final zoomed = zoom > 1.02;
+    final tileAtZoom = _tile != null && (_tile!.zoom - zoom).abs() < 0.001;
+    if (zoomed != _zoomed || tileAtZoom != _tileAtZoom) {
+      setState(() {
+        _zoomed = zoomed;
+        _tileAtZoom = tileAtZoom;
+        if (!zoomed) _tile = null;
+      });
+    }
+    _tileTimer?.cancel();
+    if (zoomed) {
+      _tileTimer = Timer(const Duration(milliseconds: 150), _refreshTile);
+    } else {
+      _tileRequest++; // whatever is in flight is no longer wanted
+    }
   }
 
-  int get _baseLongEdge {
+  Future<void> _refreshTile() async {
+    final zoom = widget.zoom.value;
+    if (!mounted || zoom <= 1.02) return;
+    final ratio = _aspectRatio ?? widget.aspectRatio;
+    if (!PdfRaster.canRenderRegions) {
+      // An engine without region rendering: redraw the whole page at the
+      // zoomed size instead, within a memory budget.
+      final wanted = _renderSize(ratio, zoom: zoom).width;
+      if (!_isRendering && wanted > _renderedWidth * 1.15) _render(zoom: zoom);
+      return;
+    }
+    final page = _pageKey.currentContext?.findRenderObject();
+    final viewport = widget.viewport();
+    if (page is! RenderBox || !page.hasSize || !page.attached) return;
+    if (viewport == null) return;
+    final toScreen = page.getTransformTo(null);
+    final onScreen = MatrixUtils.transformRect(
+      toScreen,
+      Offset.zero & page.size,
+    ).intersect(viewport);
+    final fromScreen = Matrix4.tryInvert(toScreen);
+    if (onScreen.isEmpty || fromScreen == null) return;
+    final visible = MatrixUtils.transformRect(fromScreen, onScreen);
+    final current = _tile;
+    if (current != null &&
+        (current.zoom - zoom).abs() < 0.001 &&
+        _covers(current.rect, visible)) {
+      return;
+    }
+    final size = pageRenderSize(
+      displayWidth: page.size.width,
+      devicePixelRatio: MediaQuery.devicePixelRatioOf(context) * zoom,
+      aspectRatio: ratio,
+      // Only the region is drawn, so the page itself may be any size.
+      maxPixels: 1 << 40,
+    );
+    final region = zoomTileRegion(
+      visible: visible,
+      pageSize: page.size,
+      pixelWidth: size.width,
+      aspectRatio: ratio,
+    );
+    if (region == null) return;
+    final request = ++_tileRequest;
+    final rendered = await PdfRaster.renderRegion(
+      widget.path,
+      widget.pageIndex,
+      pageWidth: size.width,
+      pageHeight: size.height,
+      x: region.x,
+      y: region.y,
+      width: region.width,
+      height: region.height,
+      password: widget.password,
+      isWanted: () => mounted && request == _tileRequest,
+    );
+    if (!mounted || request != _tileRequest || rendered == null) return;
+    setState(() {
+      _tile = (
+        bytes: rendered.bytes,
+        rect: Rect.fromLTWH(
+          region.x / region.scale,
+          region.y / region.scale,
+          region.width / region.scale,
+          region.height / region.scale,
+        ),
+        zoom: zoom,
+      );
+      _tileAtZoom = (widget.zoom.value - zoom).abs() < 0.001;
+    });
+  }
+
+  static bool _covers(Rect outer, Rect inner) =>
+      outer.left <= inner.left + 0.5 &&
+      outer.top <= inner.top + 0.5 &&
+      outer.right >= inner.right - 0.5 &&
+      outer.bottom >= inner.bottom - 0.5;
+
+  /// The bitmap size for this page shown at [zoom]: one bitmap pixel per
+  /// device pixel of the page's width on screen.
+  ({int width, int height}) _renderSize(double ratio, {double zoom = 1}) {
     final media = MediaQuery.of(context);
-    // Render at real device pixels, capped so a tablet at 3x doesn't ask for
-    // a 4000px page on every scroll.
-    return ((media.size.width - 24) * media.devicePixelRatio)
-        .clamp(360.0, 2400.0)
-        .round();
+    return pageRenderSize(
+      displayWidth: media.size.width - 24,
+      devicePixelRatio: media.devicePixelRatio * zoom,
+      aspectRatio: ratio,
+      // A zoomed whole page (only without region rendering) may be larger,
+      // but not without limit.
+      maxPixels: zoom == 1 ? maxPageBitmapPixels : 16000000,
+    );
   }
 
-  Future<void> _render({int? longEdge}) async {
+  Future<void> _render({double zoom = 1}) async {
     if (_isRendering || !mounted) return;
-    final target = longEdge ?? _baseLongEdge;
     _isRendering = true;
     if (_renderFailed) setState(() => _renderFailed = false);
     try {
@@ -1512,15 +2171,20 @@ class _PageViewState extends State<_PageView> {
                   pageIndex: widget.pageIndex,
                   password: widget.password,
                 );
-      final useCache = target <= PdfRaster.thumbnailSize * 4;
+      if (!mounted) return;
+      // The page's real shape, so the bitmap is exactly as wide as the page
+      // on screen: fitting it into a square the width of the screen, as this
+      // used to, drew a portrait page at 70% of the screen's resolution.
+      final size = _renderSize(ratio ?? widget.aspectRatio, zoom: zoom);
       final rendered = await PdfRaster.renderPageWithWarnings(
         widget.path,
         widget.pageIndex,
-        longEdge: target,
+        width: size.width,
+        height: size.height,
         password: widget.password,
-        // High-resolution zoom renders are one-offs; keeping them would
-        // evict every thumbnail in the cache.
-        useCache: useCache,
+        // Zoomed whole-page renders are one-offs; keeping them would evict
+        // every page in the cache.
+        useCache: zoom == 1,
         isWanted: () => mounted,
       );
       final bytes = rendered?.bytes;
@@ -1531,8 +2195,14 @@ class _PageViewState extends State<_PageView> {
         _bytes = bytes ?? _bytes;
         _aspectRatio = ratio ?? _aspectRatio;
         _renderFailed = bytes == null && _bytes == null;
-        if (bytes != null) _renderedLongEdge = target;
+        if (bytes != null) _renderedWidth = size.width;
       });
+      // The width may have changed while this render ran.
+      if (zoom == 1 && bytes != null) {
+        WidgetsBinding.instance.addPostFrameCallback(
+          (_) => _rerenderIfResized(),
+        );
+      }
     } catch (e) {
       // One page failing is not the document failing: keep whatever was
       // already drawn and leave the placeholder for this one. The document
@@ -1549,12 +2219,19 @@ class _PageViewState extends State<_PageView> {
     final ratio = widget.aspectRatioKnown
         ? widget.aspectRatio
         : _aspectRatio ?? widget.aspectRatio;
-    final width = MediaQuery.of(context).size.width - 24;
+    final media = MediaQuery.of(context);
+    final width = media.size.width - 24;
     final height = pageHeight(width, ratio);
+    // Rendered for exactly this width: then the bitmap is drawn at its own
+    // size, one bitmap pixel per device pixel, and copied rather than
+    // filtered. Filtering a bitmap at a fractional screen position (and the
+    // page's position nearly always is fractional) softens every glyph edge.
+    final exact = _renderedWidth == (width * media.devicePixelRatio).floor();
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       child: Container(
+        key: _pageKey,
         width: width,
         height: height,
         decoration: BoxDecoration(
@@ -1604,15 +2281,43 @@ class _PageViewState extends State<_PageView> {
                 fit: StackFit.expand,
                 children: [
                   _withTextSelection(
-                    Image.memory(
-                      _bytes!,
-                      fit: BoxFit.contain,
-                      gaplessPlayback: true,
-                      // The whole document is magnified by one
-                      // InteractiveViewer above the list, so the page itself
-                      // just draws at its natural size — and re-rasterizes
-                      // when the zoom changes.
-                      filterQuality: FilterQuality.medium,
+                    Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        // The whole document is magnified by one
+                        // InteractiveViewer above the list, so the page itself
+                        // draws at its natural size, and while zoomed the part
+                        // on screen is redrawn sharp on top of it.
+                        Image.memory(
+                          _bytes!,
+                          scale: exact ? media.devicePixelRatio : 1,
+                          // A bitmap rendered for another width (mid-rotation,
+                          // or a page too long for full resolution) is
+                          // stretched over the page until it is redrawn.
+                          fit: exact ? BoxFit.none : BoxFit.fill,
+                          alignment: Alignment.topLeft,
+                          gaplessPlayback: true,
+                          filterQuality: exact && !_zoomed
+                              ? FilterQuality.none
+                              : FilterQuality.medium,
+                        ),
+                        if (_tile case final tile?)
+                          Positioned.fromRect(
+                            rect: tile.rect,
+                            child: Image.memory(
+                              tile.bytes,
+                              key: const ValueKey('pdf-zoom-tile'),
+                              fit: BoxFit.fill,
+                              gaplessPlayback: true,
+                              // At the zoom it was drawn for it lies pixel for
+                              // pixel on the screen; mid-pinch it is being
+                              // scaled, which filtering keeps smooth.
+                              filterQuality: _tileAtZoom
+                                  ? FilterQuality.none
+                                  : FilterQuality.medium,
+                            ),
+                          ),
+                      ],
                     ),
                   ),
                   if (widget.search case final search?) _findHighlights(search),
@@ -1745,6 +2450,68 @@ double pageAspectRatio(Map<int, double> known, int index, double fallback) {
 /// both size pages with this, so the two always agree.
 double pageHeight(double width, double aspectRatio) =>
     width / (aspectRatio.isFinite && aspectRatio > 0 ? aspectRatio : 0.7071);
+
+/// Most pixels a page bitmap is rendered with at normal size. A phone page
+/// is about two million; only very long pages (receipts, banners) and large
+/// tablets reach this, and they are drawn a little softer rather than as
+/// bitmaps of tens of megabytes each.
+const int maxPageBitmapPixels = 8000000;
+
+/// The pixel box to render a page into so it shows one bitmap pixel per
+/// device pixel: [displayWidth] logical pixels across at [devicePixelRatio],
+/// for a page whose width/height is [aspectRatio].
+///
+/// The width is exact and the height has room to spare, so the engine, which
+/// fits the page inside the box, is always limited by the width. A page that
+/// would need more than [maxPixels] keeps its shape at a lower resolution.
+({int width, int height}) pageRenderSize({
+  required double displayWidth,
+  required double devicePixelRatio,
+  required double aspectRatio,
+  int maxPixels = maxPageBitmapPixels,
+}) {
+  final ratio = aspectRatio.isFinite && aspectRatio > 0 ? aspectRatio : 0.7071;
+  final exact = displayWidth * devicePixelRatio;
+  var width = exact.isFinite && exact >= 1 ? exact.floor() : 1;
+  if (width * (width / ratio) > maxPixels) {
+    width = math.max(1, math.sqrt(maxPixels * ratio).floor());
+  }
+  return (width: width, height: (width / ratio).ceil() + 1);
+}
+
+/// What of a zoomed page to render sharp: the part on screen ([visible], in
+/// the page's logical pixels, laid out [pageSize]) plus [margin] device
+/// pixels around it, so a small pan does not uncover the magnified page
+/// bitmap underneath. In the pixels of the whole page rendered [pixelWidth]
+/// wide, with [scale] of those pixels to a logical pixel. Null when none of
+/// the page is on screen.
+({int x, int y, int width, int height, double scale})? zoomTileRegion({
+  required Rect visible,
+  required Size pageSize,
+  required int pixelWidth,
+  required double aspectRatio,
+  int margin = 96,
+}) {
+  if (visible.isEmpty || pageSize.width <= 0 || pixelWidth <= 0) return null;
+  final ratio = aspectRatio.isFinite && aspectRatio > 0 ? aspectRatio : 0.7071;
+  final scale = pixelWidth / pageSize.width;
+  final pixelHeight = (pixelWidth / ratio).round();
+  final left = math.max(0, (visible.left * scale).floor() - margin);
+  final top = math.max(0, (visible.top * scale).floor() - margin);
+  final right = math.min(pixelWidth, (visible.right * scale).ceil() + margin);
+  final bottom = math.min(
+    pixelHeight,
+    (visible.bottom * scale).ceil() + margin,
+  );
+  if (right <= left || bottom <= top) return null;
+  return (
+    x: left,
+    y: top,
+    width: right - left,
+    height: bottom - top,
+    scale: scale,
+  );
+}
 
 /// Transform a double-tap should settle on.
 ///

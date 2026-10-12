@@ -335,7 +335,7 @@ class _ToolsScreenState extends State<ToolsScreen>
         _Tool(
           'Recognize text (OCR)',
           'Make a scanned PDF searchable and copyable',
-          Icons.manage_search_rounded,
+          Icons.document_scanner_rounded,
           const Color(0xFFE94560),
           () => _runOnDocument((p, pw) => OcrScreen(pdfPath: p, password: pw)),
           needsDocument: true,
