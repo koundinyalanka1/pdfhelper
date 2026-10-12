@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -707,6 +708,273 @@ void main() {
       }
     });
   });
+
+  // Every directory of test_corpus the suites above do not name: the files
+  // scripts/download_diverse_corpus.py adds (broken and fuzzed files, fonts,
+  // graphics, codecs, forms, PDF/A, sheet music, maps, scanned books, ...).
+  group('PVS Suite 12: Diverse corpus sweep', () {
+    const named = {
+      'epics', 'features', 'heavy', 'huge', 'languages', 'light', 'ocr',
+      'photo_languages', 'pictures', 'scans',
+    };
+    final corpus = Directory('test_corpus');
+    final only = (Platform.environment['PVS_CATEGORIES'] ?? '')
+        .split(',')
+        .where((c) => c.isNotEmpty)
+        .toSet();
+    final categories = !corpus.existsSync()
+        ? <String>[]
+        : (corpus
+              .listSync()
+              .whereType<Directory>()
+              .map((d) => d.path.split('/').last)
+              .where((c) => !c.startsWith('.') && !named.contains(c))
+              .where((c) => only.isEmpty || only.contains(c))
+              .toList()
+            ..sort());
+    final progress = File('test_pvs_output/diverse_progress.txt');
+    final rows = <_SweepRow>[];
+
+    setUpAll(() {
+      Directory('test_pvs_output').createSync(recursive: true);
+      progress.writeAsStringSync('');
+    });
+
+    tearDownAll(() {
+      if (rows.isNotEmpty) {
+        File('test_pvs_output/diverse_sweep.md').writeAsStringSync(_sweepReport(rows));
+      }
+    });
+
+    for (final category in categories) {
+      test('$category: opens, renders and extracts without a crash or hang', () async {
+        final files = getPdfs(category);
+        expect(files, isNotEmpty);
+
+        final unexpected = <String>[];
+        for (final file in files) {
+          // Written before the file is touched, so a native crash that takes
+          // the test process down still names the file that caused it.
+          progress.writeAsStringSync('${file.path}\n', mode: FileMode.append);
+          final row = await _sweepFile(category, file);
+          rows.add(row);
+          if (row.unexpected) unexpected.add(row.describe());
+        }
+
+        // Garbage in is allowed to fail, but only as an error the app can
+        // show: never a hang, a panic, or an exception of some other type.
+        expect(unexpected, isEmpty, reason: unexpected.join('\n'));
+
+        // Everywhere else the file is meant to work. A failure must be one we
+        // know about, and a known failure that now works comes off the list.
+        if (!_mayFail.contains(category)) {
+          final rowsHere = rows.where((r) => r.category == category);
+          final newFailures = [
+            for (final r in rowsHere)
+              if (!r.allOk && !_knownFailures.containsKey('${r.category}/${r.file}'))
+                r.describe(),
+          ];
+          final fixed = [
+            for (final r in rowsHere)
+              if (r.allOk && _knownFailures.containsKey('${r.category}/${r.file}'))
+                '${r.category}/${r.file}',
+          ];
+          expect(newFailures, isEmpty, reason: 'new failures:\n${newFailures.join('\n')}');
+          expect(fixed, isEmpty,
+              reason: 'now works, remove from _knownFailures:\n${fixed.join('\n')}');
+        }
+      }, timeout: const Timeout(Duration(minutes: 30)));
+    }
+  });
+}
+
+/// Categories whose files are allowed to fail: damaged on purpose, or locked
+/// with a password no suite publishes.
+const _mayFail = {'malformed', 'encryption'};
+
+/// Files in the other categories the engine does not read fully. Each was
+/// checked against MuPDF on 2026-10-12; where MuPDF reads it, that is the gap.
+const _knownFailures = {
+  'documents/pdfminer__simple5.pdf':
+      'PDF 1.5 with a chain of incremental xref streams; MuPDF reads it, we '
+          'report "no recoverable pages"',
+  'documents/pdfminer__patchelf.pdf':
+      'startxref points into a stream (the file was re-encoded); MuPDF '
+          'rebuilds the table, we stop at the bad offset',
+  'graphics/qpdf__shared-images-errors-2-out.pdf':
+      'corrupt Flate stream; the page fails whole where MuPDF draws the rest',
+  'forms/pdfbox__sign_me_protected.pdf': 'encrypted with a password no suite publishes',
+  'regressions/pdfjs__poppler-85140-0.pdf': 'unreadable in MuPDF too',
+  'structure/samples__unreadablemetadata.pdf': 'MuPDF finds no pages either',
+};
+
+/// Passwords the corpus's encrypted files are known to use (qpdf names them in
+/// the file name, pypdf and pdfminer use the others).
+const _knownPasswords = [
+  'foo', 'test', 'asdfzxcv', 'openpassword', 'view', 'wwwww', 'user', 'owner',
+  'password', 'abc', 'qpdf', 'secret', 'u', 'o', 'pdf', 'Hello',
+];
+
+/// How one step (open, render, extract) of the sweep ended.
+class _Outcome {
+  const _Outcome(this.label, [this.detail = '']);
+
+  static const skipped = _Outcome('-');
+
+  /// `ok`, `pdf:<CODE>` for an error the engine reported, `timeout`, or
+  /// `error:<Type>` for anything else that escaped.
+  final String label;
+  final String detail;
+
+  bool get isOk => label == 'ok';
+
+  /// Failing to read a file is fine; hanging, panicking or throwing something
+  /// the app does not expect is not.
+  bool get unexpected =>
+      label == 'timeout' || label == 'pdf:PANIC' || label.startsWith('error:');
+}
+
+Future<_Outcome> _attempt(Future<void> Function() step) async {
+  try {
+    await step().timeout(const Duration(seconds: 45));
+    return const _Outcome('ok');
+  } on TimeoutException {
+    return const _Outcome('timeout');
+  } on PdfException catch (e) {
+    return _Outcome('pdf:${e.code}', e.message);
+  } catch (e) {
+    return _Outcome('error:${e.runtimeType}', '$e');
+  }
+}
+
+class _SweepRow {
+  _SweepRow(this.category, this.file, this.bytes);
+
+  final String category;
+  final String file;
+  final int bytes;
+  int pages = 0;
+  int warnings = 0;
+
+  /// The password that opened an encrypted file, if one of the known ones did.
+  String? password;
+  _Outcome open = _Outcome.skipped;
+  _Outcome first = _Outcome.skipped;
+  _Outcome last = _Outcome.skipped;
+  _Outcome text = _Outcome.skipped;
+  int millis = 0;
+
+  List<_Outcome> get steps => [open, first, last, text];
+
+  bool get unexpected => steps.any((s) => s.unexpected);
+  bool get allOk => steps.every((s) => s.isOk || s == _Outcome.skipped);
+
+  String describe() =>
+      '$category/$file: open ${open.label}, first ${first.label}, '
+      'last ${last.label}, text ${text.label} '
+      '${steps.map((s) => s.detail).where((d) => d.isNotEmpty).join(' | ')}';
+}
+
+Future<_SweepRow> _sweepFile(String category, File file) async {
+  final watch = Stopwatch()..start();
+  final row = _SweepRow(category, file.path.split('/').last, file.lengthSync());
+
+  row.open = await _attempt(() async {
+    row.pages = (await PdfCore.inspectAsync(file.path)).pageCount;
+  });
+  if (row.open.label == 'pdf:ENCRYPTED') {
+    // The test suites these files come from use a handful of passwords.
+    for (final candidate in _knownPasswords) {
+      final tried = await _attempt(() async {
+        row.pages = (await PdfCore.inspectAsync(file.path, password: candidate)).pageCount;
+      });
+      if (tried.isOk) {
+        row.password = candidate;
+        row.open = tried;
+        break;
+      }
+      if (tried.label != 'pdf:WRONG_PASSWORD') break;
+    }
+  }
+  final password = row.password ?? '';
+  if (row.open.isOk && row.pages > 0) {
+    Future<void> render(int page) async {
+      final png = await PdfRaster.renderPageWithWarnings(
+        file.path,
+        page,
+        longEdge: 400,
+        password: password,
+        useCache: false,
+        throwOnError: true,
+      );
+      if (png == null || png.bytes.length < 8 || png.bytes[1] != 0x50) {
+        throw StateError('no PNG for page $page');
+      }
+      row.warnings += png.warnings.length;
+    }
+
+    row.first = await _attempt(() => render(0));
+    if (row.pages > 1) row.last = await _attempt(() => render(row.pages - 1));
+    row.text = await _attempt(() async {
+      await PdfCore.extractTextAsync(file.path, page: 1, password: password);
+    });
+  }
+  row.millis = watch.elapsedMilliseconds;
+  return row;
+}
+
+String _sweepReport(List<_SweepRow> rows) {
+  final out = StringBuffer('# Diverse corpus sweep\n\n')
+    ..writeln('${rows.length} files. "ok" means opened, rendered the first and '
+        'last page, and extracted text; anything else lists what happened.\n')
+    ..writeln('| category | files | all ok | engine error | unexpected |')
+    ..writeln('|---|---|---|---|---|');
+  final byCategory = <String, List<_SweepRow>>{};
+  for (final row in rows) {
+    byCategory.putIfAbsent(row.category, () => []).add(row);
+  }
+  for (final entry in byCategory.entries) {
+    final list = entry.value;
+    final ok = list.where((r) => r.allOk).length;
+    final bad = list.where((r) => r.unexpected).length;
+    out.writeln('| ${entry.key} | ${list.length} | $ok | '
+        '${list.length - ok - bad} | $bad |');
+  }
+
+  out.writeln('\n## Files that did not fully work\n');
+  out.writeln('| file | pages | open | first | last | text | detail |');
+  out.writeln('|---|---|---|---|---|---|---|');
+  for (final row in rows.where((r) => !r.allOk)) {
+    final detail = row.steps
+        .map((s) => s.detail)
+        .where((d) => d.isNotEmpty)
+        .join(' / ')
+        .replaceAll('|', '/')
+        .replaceAll('\n', ' ');
+    out.writeln('| ${row.category}/${row.file} | ${row.pages} | ${row.open.label} | '
+        '${row.first.label} | ${row.last.label} | ${row.text.label} | '
+        '${detail.length > 120 ? detail.substring(0, 120) : detail} |');
+  }
+
+  final unlocked = rows.where((r) => r.password != null).toList();
+  out.writeln('\n## Encrypted files opened with a known password\n');
+  for (final row in unlocked) {
+    out.writeln('- ${row.category}/${row.file}: "${row.password}"'
+        ' (${row.allOk ? 'rendered and read' : 'then failed: ${row.describe()}'})');
+  }
+
+  out.writeln('\n## Slowest\n');
+  final slow = [...rows]..sort((a, b) => b.millis.compareTo(a.millis));
+  for (final row in slow.take(15)) {
+    out.writeln('- ${row.category}/${row.file}: ${row.millis} ms, '
+        '${row.pages} pages, ${(row.bytes / 1024).round()} KB');
+  }
+
+  out.writeln('\n## Renders that carried warnings\n');
+  final warned = rows.where((r) => r.warnings > 0).toList();
+  out.writeln('${warned.length} files rendered with at least one warning '
+      '(approximated or skipped content).');
+  return out.toString();
 }
 
 
