@@ -202,6 +202,40 @@ void main() {
     expect(find.byType(SlideShowScreen), findsNothing);
   }, skip: !available);
 
+  testWidgets('a PowerPoint 97-2003 deck is shown and saved as a new .pptx', (
+    tester,
+  ) async {
+    final path = '${root.path}/talk.ppt';
+    File('test/fixtures/talk.ppt').copySync(path);
+    final original = File(path).readAsBytesSync();
+    await tester.pumpWidget(app(SlideEditorScreen(path: path)));
+    await flush(tester);
+    expect(find.text('PPT · 1 slide'), findsOneWidget);
+    expect(
+      find.textContaining('will be saved as a PowerPoint presentation (.pptx)'),
+      findsOneWidget,
+    );
+
+    // Edit the title so there is something to save.
+    await tapSlide(tester, 0.5, 0.15);
+    await tapSlide(tester, 0.5, 0.15);
+    await tester.enterText(find.byType(TextField), 'Annual meeting 2026');
+    await tester.tap(find.widgetWithText(TextButton, 'Done'));
+    await settle(tester);
+    await tester.tap(find.text('Save'));
+    await flush(tester);
+
+    final saved = '${root.path}/documents/Edited/talk.pptx';
+    expect(File(saved).existsSync(), isTrue);
+    final deck = await tester.runAsync(() => SlideCore.open(saved));
+    expect(deck!.info().format, 'pptx');
+    expect(deck.plainText(), contains('Annual meeting 2026'));
+    expect(deck.notes(0), 'Say hello');
+    deck.close();
+    // The original is left as it was.
+    expect(File(path).readAsBytesSync(), original);
+  }, skip: !available);
+
   testWidgets('opens an OpenDocument presentation and saves it in place', (
     tester,
   ) async {

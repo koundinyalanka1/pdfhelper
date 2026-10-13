@@ -307,6 +307,7 @@ class MainActivity : FlutterActivity() {
             "docx", "docm", "dotx", "dotm", "odt", "ott", "rtf",
             "doc", "dot", "wps", "wpt",
             "pptx", "pptm", "ppsx", "ppsm", "potx", "potm", "odp", "otp",
+            "ppt", "pps", "pot", "dps", "dpt",
         )
 
         /** Formats that are ZIP packages, which must start like one. */
@@ -341,6 +342,8 @@ class MainActivity : FlutterActivity() {
             "application/vnd.ms-powerpoint.template.macroenabled.12" to "potm",
             "application/vnd.oasis.opendocument.presentation" to "odp",
             "application/vnd.oasis.opendocument.presentation-template" to "otp",
+            "application/vnd.ms-powerpoint" to "ppt",
+            "application/wps-office.dps" to "dps",
             "application/rtf" to "rtf",
             "text/rtf" to "rtf",
             "application/msword" to "doc",

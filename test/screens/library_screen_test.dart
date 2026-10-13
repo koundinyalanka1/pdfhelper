@@ -610,7 +610,7 @@ void main() {
     });
 
     testWidgets('a kind without an editor offers another app', (tester) async {
-      seed('Old talk.ppt', body: 'old');
+      seed('Old talk.fodp', body: 'old');
       await settle(tester);
 
       await tester.tap(find.text('Old talk'));
@@ -618,7 +618,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Open with another app'), findsOneWidget);
       expect(
-        find.textContaining('cannot open this PowerPoint format (.ppt) yet'),
+        find.textContaining('cannot open this PowerPoint format (.fodp) yet'),
         findsOneWidget,
       );
     });

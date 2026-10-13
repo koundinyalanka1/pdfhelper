@@ -188,6 +188,8 @@
                 <data android:mimeType="application/vnd.ms-powerpoint.template.macroEnabled.12"/>
                 <data android:mimeType="application/vnd.oasis.opendocument.presentation"/>
                 <data android:mimeType="application/vnd.oasis.opendocument.presentation-template"/>
+                <data android:mimeType="application/vnd.ms-powerpoint"/>
+                <data android:mimeType="application/wps-office.dps"/>
             </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.VIEW"/>
@@ -199,6 +201,9 @@
                 <data android:pathPattern=".*\\.ppsx"/>
                 <data android:pathPattern=".*\\.potx"/>
                 <data android:pathPattern=".*\\.odp"/>
+                <data android:pathPattern=".*\\.ppt"/>
+                <data android:pathPattern=".*\\.pps"/>
+                <data android:pathPattern=".*\\.dps"/>
             </intent-filter>
         </activity-alias>
 

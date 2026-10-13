@@ -86,7 +86,8 @@ enum DocKind {
   };
 
   static const Set<String> _openableSlideExtensions = {
-    'pptx', 'pptm', 'ppsx', 'ppsm', 'potx', 'potm', 'odp', 'otp',
+    'pptx', 'pptm', 'ppsx', 'ppsm', 'potx', 'potm', 'odp', 'otp', 'ppt', 'pps',
+    'pot', 'dps', 'dpt',
   };
 
   /// Whether DocHelper can open this particular file.

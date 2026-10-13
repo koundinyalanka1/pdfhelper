@@ -998,13 +998,40 @@ class _SlideEditorScreenState extends State<SlideEditorScreen> {
 
   // ---------------------------------------------------------------- saving
 
+  /// Formats read but never written back (PowerPoint 97-2003, WPS):
+  /// saved as a new PowerPoint deck next to the app's other edited files.
+  bool get _legacy => const {
+    'ppt',
+    'pps',
+    'pot',
+    'dps',
+    'dpt',
+  }.contains(DocKind.extensionOf(_workingPath));
+
+  String? _convertedPath;
+
+  Future<String> _newPptxPath() async {
+    final dir = Directory(
+      '${(await getApplicationDocumentsDirectory()).path}/Edited',
+    );
+    await dir.create(recursive: true);
+    final title = DocKind.titleOf(documentDisplayName(_workingPath));
+    var file = File('${dir.path}/$title.pptx');
+    for (var n = 2; await file.exists(); n++) {
+      file = File('${dir.path}/$title ($n).pptx');
+    }
+    return file.path;
+  }
+
   Future<bool> _save() async {
     final deck = _deck;
     if (deck == null || _saving) return false;
     final location = context.read<ThemeProvider>().saveLocation;
     setState(() => _saving = true);
     try {
-      final target = _neverSaved
+      final target = _legacy
+          ? _convertedPath ??= await _newPptxPath()
+          : _neverSaved
           ? _workingPath
           : await DocumentSaveService.workingPathFor(_workingPath);
       await deck.save(target);
@@ -1031,7 +1058,7 @@ class _SlideEditorScreenState extends State<SlideEditorScreen> {
 
   String get _extension {
     final ext = DocKind.extensionOf(_workingPath);
-    return ext.isEmpty ? 'pptx' : ext;
+    return ext.isEmpty || _legacy ? 'pptx' : ext;
   }
 
   /// Write a copy in a format: the deck's own, `txt` or `pdf`.
@@ -1203,7 +1230,10 @@ class _SlideEditorScreenState extends State<SlideEditorScreen> {
     final subtitle = info == null
         ? null
         : [
-            _extension.toUpperCase(),
+            (DocKind.extensionOf(_workingPath).isEmpty
+                    ? 'pptx'
+                    : DocKind.extensionOf(_workingPath))
+                .toUpperCase(),
             '${info.slideCount} slide${info.slideCount == 1 ? '' : 's'}',
             if (_dirty) 'Edited',
           ].join(' · ');
