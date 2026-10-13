@@ -14,6 +14,7 @@ import 'package:share_plus/share_plus.dart';
 import '../models/doc_kind.dart';
 import '../providers/theme_provider.dart';
 import '../services/document_save_service.dart';
+import '../services/export_fonts.dart';
 import '../services/public_pdf_save_service.dart';
 import '../services/recent_files_service.dart';
 import '../utils/format_utils.dart';
@@ -1033,16 +1034,29 @@ class _SlideEditorScreenState extends State<SlideEditorScreen> {
     return ext.isEmpty ? 'pptx' : ext;
   }
 
-  Future<void> _share({bool asText = false}) async {
+  /// Write a copy in a format: the deck's own, `txt` or `pdf`.
+  Future<void> _writeAs(SlideDeck deck, String file, String format) async {
+    if (format == 'pdf') {
+      await deck.exportPdf(
+        file,
+        fontDirs: exportFontDirs(),
+        title: DocKind.titleOf(documentDisplayName(_workingPath)),
+      );
+    } else {
+      await deck.writeCopy(file, format: format == 'txt' ? 'txt' : null);
+    }
+  }
+
+  Future<void> _share({String? format}) async {
     final deck = _deck;
     if (deck == null) return;
     try {
       final dir = Directory('${(await getTemporaryDirectory()).path}/share');
       await dir.create(recursive: true);
       final title = DocKind.titleOf(documentDisplayName(_workingPath));
-      final ext = asText ? 'txt' : _extension;
+      final ext = format ?? _extension;
       final file = '${dir.path}/$title.$ext';
-      await deck.writeCopy(file, format: asText ? 'txt' : null);
+      await _writeAs(deck, file, ext);
       await SharePlus.instance.share(
         ShareParams(files: [XFile(file, mimeType: DocKind.mimeTypeOf(file))]),
       );
@@ -1076,6 +1090,11 @@ class _SlideEditorScreenState extends State<SlideEditorScreen> {
               onTap: () => Navigator.pop(ctx, _extension),
             ),
             ListTile(
+              leading: const Icon(Icons.picture_as_pdf_outlined),
+              title: const Text('PDF (.pdf)'),
+              onTap: () => Navigator.pop(ctx, 'pdf'),
+            ),
+            ListTile(
               leading: const Icon(Icons.notes_rounded),
               title: const Text('Slide text (.txt)'),
               onTap: () => Navigator.pop(ctx, 'txt'),
@@ -1091,7 +1110,7 @@ class _SlideEditorScreenState extends State<SlideEditorScreen> {
       await dir.create(recursive: true);
       final title = DocKind.titleOf(documentDisplayName(_workingPath));
       final file = '${dir.path}/$title.$format';
-      await deck.writeCopy(file, format: format == 'txt' ? 'txt' : null);
+      await _writeAs(deck, file, format);
       await PublicPdfSaveService.save(
         sourcePath: file,
         displayName: '$title.$format',
@@ -1251,7 +1270,8 @@ class _SlideEditorScreenState extends State<SlideEditorScreen> {
             'notes' => _editNotes(),
             'copy' => _copyAll(),
             'share' => _share(),
-            'shareText' => _share(asText: true),
+            'sharePdf' => _share(format: 'pdf'),
+            'shareText' => _share(format: 'txt'),
             'copyAs' => _saveCopyAs(),
             _ => null,
           },
@@ -1259,6 +1279,7 @@ class _SlideEditorScreenState extends State<SlideEditorScreen> {
             PopupMenuItem(value: 'notes', child: Text('Speaker notes')),
             PopupMenuItem(value: 'copy', child: Text('Copy all text')),
             PopupMenuItem(value: 'share', child: Text('Share')),
+            PopupMenuItem(value: 'sharePdf', child: Text('Share as PDF')),
             PopupMenuItem(value: 'shareText', child: Text('Share as text')),
             PopupMenuItem(value: 'copyAs', child: Text('Save a copy as…')),
           ],

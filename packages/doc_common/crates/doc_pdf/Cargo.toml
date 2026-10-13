@@ -1,0 +1,12 @@
+[package]
+name = "doc_pdf"
+version = "0.1.0"
+edition = "2021"
+license = "Proprietary"
+description = "A PDF writer, from scratch: pages of paths, gradients, pictures and text in embedded font subsets."
+
+[dependencies]
+doc_font = { path = "../doc_font" }
+doc_image = { path = "../doc_image" }
+# Raw deflate for content, font and image streams.
+flate2 = "1"

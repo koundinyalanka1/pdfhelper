@@ -12,6 +12,7 @@ import 'package:share_plus/share_plus.dart';
 import '../models/doc_kind.dart';
 import '../providers/theme_provider.dart';
 import '../services/document_save_service.dart';
+import '../services/export_fonts.dart';
 import '../services/public_pdf_save_service.dart';
 import '../services/recent_files_service.dart';
 import '../utils/format_utils.dart';
@@ -1129,17 +1130,30 @@ class _SheetEditorScreenState extends State<SheetEditorScreen> {
     }
   }
 
-  Future<void> _share({SheetFormat? as}) async {
+  /// Write a copy as [code]: a workbook format, or `pdf`.
+  Future<List<String>> _writeAs(SheetBook book, String file, String code) async {
+    if (code == 'pdf') {
+      await book.exportPdf(
+        file,
+        fontDirs: exportFontDirs(),
+        title: DocKind.titleOf(documentDisplayName(_workingPath)),
+      );
+      return const [];
+    }
+    return book.writeCopy(file, SheetFormat.forName('x.$code') ?? SheetFormat.xlsx);
+  }
+
+  Future<void> _share({String? as}) async {
     final book = _book;
     if (book == null) return;
     _commit(move: false);
-    final format = as ?? _saveFormat;
+    final code = as ?? _saveFormat.code;
     try {
       final dir = Directory('${(await getTemporaryDirectory()).path}/share');
       await dir.create(recursive: true);
       final title = DocKind.titleOf(documentDisplayName(_workingPath));
-      final file = '${dir.path}/$title.${format.code}';
-      final warnings = await book.writeCopy(file, format);
+      final file = '${dir.path}/$title.$code';
+      final warnings = await _writeAs(book, file, code);
       if (warnings.isNotEmpty) _snack(warnings.join(' '));
       await SharePlus.instance.share(
         ShareParams(files: [XFile(file, mimeType: DocKind.mimeTypeOf(file))]),
@@ -1150,22 +1164,23 @@ class _SheetEditorScreenState extends State<SheetEditorScreen> {
   }
 
   Future<void> _saveCopyAs() async {
-    final format = await _menu<SheetFormat>('Save a copy as', [
-      (SheetFormat.xlsx, Icons.table_chart_rounded, 'Excel workbook (.xlsx)'),
-      (SheetFormat.ods, Icons.table_chart_outlined, 'OpenDocument spreadsheet (.ods)'),
-      (SheetFormat.csv, Icons.notes_rounded, 'CSV, this sheet only (.csv)'),
+    final code = await _menu<String>('Save a copy as', [
+      ('xlsx', Icons.table_chart_rounded, 'Excel workbook (.xlsx)'),
+      ('ods', Icons.table_chart_outlined, 'OpenDocument spreadsheet (.ods)'),
+      ('pdf', Icons.picture_as_pdf_outlined, 'PDF, every sheet (.pdf)'),
+      ('csv', Icons.notes_rounded, 'CSV, this sheet only (.csv)'),
     ]);
-    if (format == null || !mounted) return;
+    if (code == null || !mounted) return;
     final location = context.read<ThemeProvider>().saveLocation;
     try {
       final dir = Directory('${(await getTemporaryDirectory()).path}/export');
       await dir.create(recursive: true);
       final title = DocKind.titleOf(documentDisplayName(_workingPath));
-      final file = '${dir.path}/$title.${format.code}';
-      final warnings = await _book!.writeCopy(file, format);
+      final file = '${dir.path}/$title.$code';
+      final warnings = await _writeAs(_book!, file, code);
       await PublicPdfSaveService.save(
         sourcePath: file,
-        displayName: '$title.${format.code}',
+        displayName: '$title.$code',
         location: location,
         mimeType: DocKind.mimeTypeOf(file),
       );
@@ -1268,7 +1283,8 @@ class _SheetEditorScreenState extends State<SheetEditorScreen> {
             'find' => setState(() => _findOpen = !_findOpen),
             'goto' => _goTo(),
             'share' => _share(),
-            'shareCsv' => _share(as: SheetFormat.csv),
+            'shareCsv' => _share(as: 'csv'),
+            'sharePdf' => _share(as: 'pdf'),
             'copyAs' => _saveCopyAs(),
             'recalc' => _recalc(),
             'zoomReset' => setState(() {
@@ -1281,6 +1297,7 @@ class _SheetEditorScreenState extends State<SheetEditorScreen> {
             PopupMenuItem(value: 'find', child: Text('Find and replace')),
             PopupMenuItem(value: 'goto', child: Text('Go to cell')),
             PopupMenuItem(value: 'share', child: Text('Share')),
+            PopupMenuItem(value: 'sharePdf', child: Text('Share as PDF')),
             PopupMenuItem(value: 'shareCsv', child: Text('Share this sheet as CSV')),
             PopupMenuItem(value: 'copyAs', child: Text('Save a copy as…')),
             PopupMenuItem(value: 'recalc', child: Text('Recalculate')),

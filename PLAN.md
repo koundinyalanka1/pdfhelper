@@ -358,7 +358,7 @@ Status: `[ ]` not started · `[~]` in progress · `[x]` done.
 | 3 | Spreadsheet library v1 (XLSX/CSV/ODS, formulas, number formats) and spreadsheet screen | [x] |
 | 4 | Word library v1 (DOCX/ODT/RTF, in-place editing) and document screen | [x] |
 | 5 | Presentation library v1 (PPTX/ODP, scene, text edits, slide operations) and slides screen | [x] |
-| 6 | Fonts, layout and PDF writer: Word page view and export; sheet and slide export | [ ] |
+| 6 | Fonts, layout and PDF writer: Word page view and export; sheet and slide export | [x] |
 | 7 | Legacy binaries through `doc_cfb`: XLS, DOC, PPT and WPS `.et/.wps/.dps` | [ ] |
 | 8 | PDF editing: annotate, sign, fill forms, stamp, compress, convert pages to images | [ ] |
 | 9 | Other files: images, ZIP archives, Markdown, HTML and JSON viewers, unknown files | [ ] |
@@ -943,13 +943,37 @@ match:
     LibreOffice's own rendering of a converted deck.
   - 14 Rust tests, 3 Dart engine tests, 8 widget tests.
 
+- **2026-10-13 (phase 6).** Saving as PDF, everywhere:
+  - `doc_common` gained `doc_image`, `doc_font`, `doc_pdf` and
+    `doc_layout` (see its README); fonts come from the system's folders
+    (`exportFontDirs()` in `lib/services/export_fonts.dart`: Android's
+    `/system/fonts`, macOS's, Linux's), indexed once per process.
+  - Slides: each scene drawn as the screen draws it (geometry, gradients,
+    pictures with crops, arrowheads, tables, text with bullets); hidden
+    slides left out. Checked against LibreOffice's export of the same deck.
+  - Sheets: pages down then across, a sheet a little too wide shrunk to
+    fit (and turned to landscape), fills, borders, number colours,
+    alignment, wrapping, merged cells, text running into empty
+    neighbours, numbers too wide as `###`, light grid lines, and a footer
+    with the sheet's name and page.
+  - Word: paragraphs flowing across pages with their indents, spacing,
+    line spacing, list labels and shading; pictures (shrunk to fit); page
+    breaks; keep-with-next; tables with fills, borders and repeated header
+    rows. "Page view" in the document screen shows these pages in the PDF
+    viewer (not added to Recent). Raised text (`w:position`) is read and
+    written back now.
+  - Each screen has "Save a copy as… PDF" and "Share as PDF".
+  - Known gaps: no complex-script shaping yet (Devanagari, Tamil and other
+    Indic scripts show unjoined glyphs; Arabic is not joined); Word
+    headers, footers, footnotes, columns and floating shapes are not laid
+    out; CFF fonts (CJK on Android) are embedded whole; charts draw as a
+    placeholder box.
+
 ## Next steps (for the next session)
 
-1. Phase 6: `doc_font` (TrueType/OpenType reading, metrics, subsetting),
-   `doc_layout` (line breaking and pages), `doc_pdf` (a PDF writer drawing
-   scenes and laid-out pages); then "Save as PDF" for documents, sheets and
-   slides, and a page view for Word documents.
-2. Phase 7: `doc_cfb` and the legacy readers (`.doc`, `.xls`, `.ppt`),
+1. Phase 7: `doc_cfb` and the legacy readers (`.doc`, `.xls`, `.ppt`),
    then `doc_common` becomes its own repository.
+2. A complex-script shaper (GSUB/GPOS for Indic and Arabic) in
+   `doc_layout`, so Hindi, Telugu and Tamil text exports correctly.
 3. Run the office corpus sweep (`download_office_corpus.py` needs
    `GITHUB_TOKEN`), and check saved files in real Excel on the Mac.

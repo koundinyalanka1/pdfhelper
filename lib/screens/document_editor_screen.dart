@@ -15,12 +15,14 @@ import 'package:share_plus/share_plus.dart';
 import '../models/doc_kind.dart';
 import '../providers/theme_provider.dart';
 import '../services/document_save_service.dart';
+import '../services/export_fonts.dart';
 import '../services/public_pdf_save_service.dart';
 import '../services/recent_files_service.dart';
 import '../utils/format_utils.dart';
 import '../widgets/word/doc_blocks.dart';
 import '../widgets/word/doc_style.dart';
 import '../widgets/word/para_controller.dart';
+import 'pdf_viewer_screen.dart';
 
 /// Opens, edits and saves a Word document through the word-processing
 /// engine (`flutter_word_core`).
@@ -838,7 +840,46 @@ class _DocumentEditorScreenState extends State<DocumentEditorScreen> {
     return file.path;
   }
 
-  Future<void> _share({bool asText = false}) async {
+  /// Write a copy as `txt`, `pdf` or the document's own format.
+  Future<void> _writeAs(WordDocument doc, String file, String format) async {
+    if (format == 'pdf') {
+      await doc.exportPdf(
+        file,
+        fontDirs: exportFontDirs(),
+        title: DocKind.titleOf(documentDisplayName(_workingPath)),
+      );
+    } else {
+      await doc.writeCopy(file, format: format == 'txt' ? 'txt' : null);
+    }
+  }
+
+  /// The document laid out on pages, shown in the PDF viewer.
+  Future<void> _pageView() async {
+    final doc = _doc;
+    if (doc == null) return;
+    _commit();
+    try {
+      final dir = Directory('${(await getTemporaryDirectory()).path}/pageview');
+      await dir.create(recursive: true);
+      final title = DocKind.titleOf(documentDisplayName(_workingPath));
+      final file = '${dir.path}/$title.pdf';
+      await _writeAs(doc, file, 'pdf');
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => PdfViewerScreen(
+            pdfPath: file,
+            title: '$title (page view)',
+            recordRecent: false,
+          ),
+        ),
+      );
+    } catch (e) {
+      _snack('Could not lay out the pages: $e');
+    }
+  }
+
+  Future<void> _share({String? format}) async {
     final doc = _doc;
     if (doc == null) return;
     _commit();
@@ -846,9 +887,9 @@ class _DocumentEditorScreenState extends State<DocumentEditorScreen> {
       final dir = Directory('${(await getTemporaryDirectory()).path}/share');
       await dir.create(recursive: true);
       final title = DocKind.titleOf(documentDisplayName(_workingPath));
-      final ext = asText ? 'txt' : _info!.saveFormat;
+      final ext = format ?? _info!.saveFormat;
       final file = '${dir.path}/$title.$ext';
-      await doc.writeCopy(file, format: asText ? 'txt' : null);
+      await _writeAs(doc, file, ext);
       await SharePlus.instance.share(
         ShareParams(files: [XFile(file, mimeType: DocKind.mimeTypeOf(file))]),
       );
@@ -878,6 +919,11 @@ class _DocumentEditorScreenState extends State<DocumentEditorScreen> {
               onTap: () => Navigator.pop(ctx, _info!.saveFormat),
             ),
             ListTile(
+              leading: const Icon(Icons.picture_as_pdf_outlined),
+              title: const Text('PDF (.pdf)'),
+              onTap: () => Navigator.pop(ctx, 'pdf'),
+            ),
+            ListTile(
               leading: const Icon(Icons.notes_rounded),
               title: const Text('Plain text (.txt)'),
               onTap: () => Navigator.pop(ctx, 'txt'),
@@ -894,7 +940,7 @@ class _DocumentEditorScreenState extends State<DocumentEditorScreen> {
       await dir.create(recursive: true);
       final title = DocKind.titleOf(documentDisplayName(_workingPath));
       final file = '${dir.path}/$title.$format';
-      await doc.writeCopy(file, format: format == 'txt' ? 'txt' : null);
+      await _writeAs(doc, file, format);
       await PublicPdfSaveService.save(
         sourcePath: file,
         displayName: '$title.$format',
@@ -1125,8 +1171,10 @@ class _DocumentEditorScreenState extends State<DocumentEditorScreen> {
             'outline' => _showOutline(),
             'count' => _showCounts(),
             'copy' => _copyAll(),
+            'pageView' => _pageView(),
             'share' => _share(),
-            'shareText' => _share(asText: true),
+            'sharePdf' => _share(format: 'pdf'),
+            'shareText' => _share(format: 'txt'),
             'copyAs' => _saveCopyAs(),
             'zoomIn' => setState(() => _zoom = math.min(_zoom + 0.15, 2.2)),
             'zoomOut' => setState(() => _zoom = math.max(_zoom - 0.15, 0.55)),
@@ -1137,7 +1185,9 @@ class _DocumentEditorScreenState extends State<DocumentEditorScreen> {
             PopupMenuItem(value: 'outline', child: Text('Headings')),
             PopupMenuItem(value: 'count', child: Text('Word count')),
             PopupMenuItem(value: 'copy', child: Text('Copy all text')),
+            PopupMenuItem(value: 'pageView', child: Text('Page view')),
             PopupMenuItem(value: 'share', child: Text('Share')),
+            PopupMenuItem(value: 'sharePdf', child: Text('Share as PDF')),
             PopupMenuItem(value: 'shareText', child: Text('Share as text')),
             PopupMenuItem(value: 'copyAs', child: Text('Save a copy as…')),
             PopupMenuItem(value: 'zoomIn', child: Text('Larger text')),

@@ -48,11 +48,16 @@ class PdfViewerScreen extends StatefulWidget {
     required this.pdfPath,
     this.title,
     this.password = '',
+    this.recordRecent = true,
   });
 
   final String pdfPath;
   final String? title;
   final String password;
+
+  /// False for a preview made on the fly (a document's page view), which
+  /// does not belong in Recent.
+  final bool recordRecent;
 
   @override
   State<PdfViewerScreen> createState() => _PdfViewerScreenState();
@@ -395,7 +400,9 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
     }
     // Anything that reaches the viewer belongs in Recent — including files
     // opened from another app, which the library sweep never sees.
-    unawaited(RecentFilesService.markOpened(widget.pdfPath));
+    if (widget.recordRecent) {
+      unawaited(RecentFilesService.markOpened(widget.pdfPath));
+    }
     await _load();
   }
 

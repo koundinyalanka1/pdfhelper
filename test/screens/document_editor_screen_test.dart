@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_word_core/flutter_word_core.dart';
 import 'package:pdfhelper/providers/theme_provider.dart';
 import 'package:pdfhelper/screens/document_editor_screen.dart';
+import 'package:pdfhelper/screens/pdf_viewer_screen.dart';
 import 'package:pdfhelper/services/document_save_service.dart';
 import 'package:pdfhelper/widgets/word/para_controller.dart';
 import 'package:provider/provider.dart';
@@ -221,5 +222,19 @@ void main() {
     expect(paras, ['Hello from RTF!']);
     // The original is left as it was.
     expect(File(path).readAsStringSync(), contains('Hello from'));
+  }, skip: !available);
+
+  testWidgets('shows the document laid out on pages', (tester) async {
+    final path = (await tester.runAsync(makeLetter))!;
+    await tester.pumpWidget(app(DocumentEditorScreen(path: path)));
+    await flush(tester);
+    await tester.tap(find.byTooltip('More'));
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    await tester.tap(find.text('Page view'));
+    await flush(tester, rounds: 30);
+    expect(find.byType(PdfViewerScreen), findsOneWidget);
+    expect(find.textContaining('page view'), findsWidgets);
   }, skip: !available);
 }

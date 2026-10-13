@@ -1,0 +1,11 @@
+[package]
+name = "doc_image"
+version = "0.1.0"
+edition = "2021"
+license = "Proprietary"
+description = "Image headers and decoding (PNG, GIF, BMP; JPEG headers for passthrough), written from scratch."
+
+[dependencies]
+# zlib streams inside PNG files only; the PNG format is implemented here.
+flate2 = "1"
+thiserror = "1"

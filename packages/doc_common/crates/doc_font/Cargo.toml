@@ -1,0 +1,9 @@
+[package]
+name = "doc_font"
+version = "0.1.0"
+edition = "2021"
+license = "Proprietary"
+description = "TrueType and OpenType fonts read from scratch: metrics, character maps, kerning, subsetting, and a font book with fallbacks."
+
+[dependencies]
+thiserror = "1"

@@ -12,6 +12,11 @@ members = [
   "crates/doc_encoding",
   "crates/doc_ffi",
   "crates/doc_opc",
+  "crates/doc_image",
+  "crates/doc_font",
+  "crates/doc_pdf",
+  "crates/doc_layout",
+  "crates/doc_cfb",
 ]
 
 [profile.release]
