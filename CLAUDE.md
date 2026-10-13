@@ -39,8 +39,8 @@ whenever work lands.
 - **Commit or push only when the owner asks.**
   - Commit messages are one plain imperative sentence that says what the
     change does for the user (see `git log`), without a type prefix.
-  - The PDF engine is a git submodule. Commit and push inside it first,
-    then commit the updated gitlink in the app.
+  - The PDF, text and sheet engines are git submodules. Commit and push
+    inside them first, then commit the updated gitlink in the app.
 - **Never damage a user's file.**
   - Edit documents in place: copy unchanged ZIP entries raw, and keep XML
     you don't understand.

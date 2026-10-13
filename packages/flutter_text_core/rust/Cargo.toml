@@ -1,9 +1,0 @@
-# The plain-text engine behind flutter_text_core.
-[workspace]
-resolver = "2"
-members = ["crates/text_core", "crates/text_ffi"]
-
-[profile.release]
-lto = true
-codegen-units = 1
-opt-level = 3
