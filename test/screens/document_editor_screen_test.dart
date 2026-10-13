@@ -224,6 +224,37 @@ void main() {
     expect(File(path).readAsStringSync(), contains('Hello from'));
   }, skip: !available);
 
+  testWidgets('a Word 97-2003 document is read and saved as a new .docx', (
+    tester,
+  ) async {
+    // Made by LibreOffice from a letter with a bold phrase and a table.
+    final path = '${root.path}/letter.doc';
+    File('test/fixtures/letter.doc').copySync(path);
+    final original = File(path).readAsBytesSync();
+    await tester.pumpWidget(app(DocumentEditorScreen(path: path)));
+    await flush(tester);
+    expect(find.text('DOC'), findsOneWidget);
+    expect(
+      find.text('This file will be saved as a Word document (.docx).'),
+      findsOneWidget,
+    );
+    expect(find.text('Rent'), findsOneWidget);
+    await tester.tap(find.textContaining('Yours faithfully', findRichText: true));
+    await tester.pump();
+    editor(tester).insertText(',');
+    await tester.pump();
+    await tester.tap(find.text('Save'));
+    await flush(tester);
+    final saved = File('${root.path}/documents/Edited/letter.docx');
+    expect(saved.existsSync(), isTrue);
+    late List<String> paras;
+    await tester.runAsync(() async => paras = await paragraphsOf(saved.path));
+    expect(paras.first, 'Dear Sir, please find the figures below.');
+    expect(paras.last, 'Yours faithfully,');
+    // The original is left as it was.
+    expect(File(path).readAsBytesSync(), original);
+  }, skip: !available);
+
   testWidgets('shows the document laid out on pages', (tester) async {
     final path = (await tester.runAsync(makeLetter))!;
     await tester.pumpWidget(app(DocumentEditorScreen(path: path)));

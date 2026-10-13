@@ -74,15 +74,15 @@ enum DocKind {
     _ => false,
   };
 
-  /// Extensions of kinds DocHelper opens only in some formats (legacy
-  /// binaries such as `.xls` arrive later).
+  /// Extensions of kinds DocHelper opens only in some formats.
   static const Set<String> _openableSheetExtensions = {
     'xlsx', 'xlsm', 'xltx', 'xltm', 'ods', 'ots', 'csv', 'tsv', 'xls', 'xlt',
     'et', 'ett',
   };
 
   static const Set<String> _openableWordExtensions = {
-    'docx', 'docm', 'dotx', 'dotm', 'odt', 'ott', 'rtf',
+    'docx', 'docm', 'dotx', 'dotm', 'odt', 'ott', 'rtf', 'doc', 'dot', 'wps',
+    'wpt',
   };
 
   static const Set<String> _openableSlideExtensions = {

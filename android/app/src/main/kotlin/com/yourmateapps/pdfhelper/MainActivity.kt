@@ -305,6 +305,7 @@ class MainActivity : FlutterActivity() {
             "xlsx", "xlsm", "xltx", "xltm", "ods", "ots", "csv", "tsv",
             "xls", "xlt", "et", "ett",
             "docx", "docm", "dotx", "dotm", "odt", "ott", "rtf",
+            "doc", "dot", "wps", "wpt",
             "pptx", "pptm", "ppsx", "ppsm", "potx", "potm", "odp", "otp",
         )
 
@@ -342,6 +343,8 @@ class MainActivity : FlutterActivity() {
             "application/vnd.oasis.opendocument.presentation-template" to "otp",
             "application/rtf" to "rtf",
             "text/rtf" to "rtf",
+            "application/msword" to "doc",
+            "application/wps-office.wps" to "wps",
             "text/csv" to "csv",
             "text/comma-separated-values" to "csv",
             "application/csv" to "csv",

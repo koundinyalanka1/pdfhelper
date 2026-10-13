@@ -159,6 +159,8 @@
                 <data android:mimeType="application/vnd.oasis.opendocument.text-template"/>
                 <data android:mimeType="application/rtf"/>
                 <data android:mimeType="text/rtf"/>
+                <data android:mimeType="application/msword"/>
+                <data android:mimeType="application/wps-office.wps"/>
             </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.VIEW"/>
@@ -170,6 +172,8 @@
                 <data android:pathPattern=".*\\.dotx"/>
                 <data android:pathPattern=".*\\.odt"/>
                 <data android:pathPattern=".*\\.rtf"/>
+                <data android:pathPattern=".*\\.doc"/>
+                <data android:pathPattern=".*\\.wps"/>
             </intent-filter>
             <!-- PowerPoint presentations. -->
             <intent-filter>
