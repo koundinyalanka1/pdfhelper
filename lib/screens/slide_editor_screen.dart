@@ -1068,7 +1068,11 @@ class _SlideEditorScreenState extends State<SlideEditorScreen> {
             ),
             ListTile(
               leading: const Icon(Icons.slideshow_outlined),
-              title: Text('PowerPoint (.$_extension)'),
+              title: Text(
+                _info?.format == 'odp'
+                    ? 'OpenDocument presentation (.$_extension)'
+                    : 'PowerPoint (.$_extension)',
+              ),
               onTap: () => Navigator.pop(ctx, _extension),
             ),
             ListTile(

@@ -11,6 +11,7 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../support/fake_path_provider.dart';
+import '../support/store_zip.dart';
 
 /// The slides screen, driven through the real presentation engine:
 ///   eval "$(bash scripts/build_engines.sh env)"
@@ -68,9 +69,10 @@ void main() {
   Future<String> makeDeck() async {
     final path = '${root.path}/talk.pptx';
     final deck = SlideCore.create();
-    final title = deck.scene(0).items.firstWhere(
-      (i) => i.placeholder == 'ctrTitle',
-    );
+    final title = deck
+        .scene(0)
+        .items
+        .firstWhere((i) => i.placeholder == 'ctrTitle');
     deck.setText(0, title.id, ['Garden club']);
     deck.addSlide(after: 0);
     deck.setNotes(0, 'Welcome everyone');
@@ -106,9 +108,10 @@ void main() {
     await tester.tap(find.text('Save'));
     await flush(tester);
     final deck = await tester.runAsync(() => SlideCore.open(path));
-    final title = deck!.scene(0).items.firstWhere(
-      (i) => i.placeholder == 'ctrTitle',
-    );
+    final title = deck!
+        .scene(0)
+        .items
+        .firstWhere((i) => i.placeholder == 'ctrTitle');
     expect(title.text!.paragraphs, ['Family trip']);
     deck.close();
   }, skip: !available);
@@ -197,5 +200,47 @@ void main() {
     await tester.tap(find.byTooltip('End show'));
     await settle(tester);
     expect(find.byType(SlideShowScreen), findsNothing);
+  }, skip: !available);
+
+  testWidgets('opens an OpenDocument presentation and saves it in place', (
+    tester,
+  ) async {
+    const ns =
+        'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" '
+        'xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" '
+        'xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" '
+        'xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" '
+        'xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" '
+        'xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" '
+        'xmlns:presentation="urn:oasis:names:tc:opendocument:xmlns:presentation:1.0"';
+    final path = '${root.path}/club.odp';
+    File(path).writeAsBytesSync(
+      storeZip({
+        'mimetype': 'application/vnd.oasis.opendocument.presentation',
+        'META-INF/manifest.xml':
+            '<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"><manifest:file-entry manifest:full-path="/" manifest:media-type="application/vnd.oasis.opendocument.presentation"/></manifest:manifest>',
+        'styles.xml':
+            '<office:document-styles $ns><office:automatic-styles><style:page-layout style:name="PM1"><style:page-layout-properties fo:page-width="28cm" fo:page-height="15.75cm"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Default" style:page-layout-name="PM1"/></office:master-styles></office:document-styles>',
+        'content.xml':
+            '<office:document-content $ns><office:body><office:presentation><draw:page draw:name="page1" draw:master-page-name="Default"><draw:frame svg:x="2cm" svg:y="2cm" svg:width="20cm" svg:height="3cm" presentation:class="title"><draw:text-box><text:p>Garden club</text:p></draw:text-box></draw:frame></draw:page></office:presentation></office:body></office:document-content>',
+      }),
+    );
+    await tester.pumpWidget(app(SlideEditorScreen(path: path)));
+    await flush(tester);
+    expect(find.text('ODP · 1 slide'), findsOneWidget);
+
+    // Select the title, then tap it again to edit it.
+    await tapSlide(tester, 0.4, 0.2);
+    await tapSlide(tester, 0.4, 0.2);
+    await tester.enterText(find.byType(TextField), 'Garden club meeting');
+    await tester.tap(find.widgetWithText(TextButton, 'Done'));
+    await settle(tester);
+    await tester.tap(find.text('Save'));
+    await flush(tester);
+
+    final deck = await tester.runAsync(() => SlideCore.open(path));
+    expect(deck!.info().format, 'odp');
+    expect(deck.plainText(), contains('Garden club meeting'));
+    deck.close();
   }, skip: !available);
 }

@@ -357,7 +357,7 @@ Status: `[ ]` not started · `[~]` in progress · `[x]` done.
 | 2 | Text library and text editor; app-wide file kinds, discovery, "Open with" and routing | [x] |
 | 3 | Spreadsheet library v1 (XLSX/CSV/ODS, formulas, number formats) and spreadsheet screen | [x] |
 | 4 | Word library v1 (DOCX/ODT/RTF, in-place editing) and document screen | [x] |
-| 5 | Presentation library v1 (PPTX/ODP, scene, text edits, slide operations) and slides screen | [ ] |
+| 5 | Presentation library v1 (PPTX/ODP, scene, text edits, slide operations) and slides screen | [x] |
 | 6 | Fonts, layout and PDF writer: Word page view and export; sheet and slide export | [ ] |
 | 7 | Legacy binaries through `doc_cfb`: XLS, DOC, PPT and WPS `.et/.wps/.dps` | [ ] |
 | 8 | PDF editing: annotate, sign, fill forms, stamp, compress, convert pages to images | [ ] |
@@ -916,13 +916,40 @@ match:
   - Still to do in phase 5: the slides screen and app wiring, then ODP.
     Charts draw as a placeholder box until phase 6.
 
+- **2026-10-13 (phase 5 done).** The slides screen and OpenDocument
+  presentations:
+  - `lib/screens/slide_editor_screen.dart`: the slide large, painted from
+    its scene (`lib/widgets/slide/slide_painter.dart`: paths, solid,
+    gradient and picture fills, dashes and arrowheads, text with bullets
+    and line spacing, tables), a strip of slides (tap, long-press to
+    reorder, a menu to add, duplicate, move, hide or delete), tap to select
+    and tap again (or once on an empty placeholder) to type, drag to move,
+    corner handles to resize (pictures keep their shape), bold, italic,
+    underline, size, colour and alignment for the whole shape or a table
+    cell, new text boxes, shapes (a picker drawing the engine's own
+    outlines) and pictures, speaker notes, undo and redo, save, share,
+    "save a copy as" and copy all text.
+  - `lib/screens/slide_show_screen.dart`: full screen, landscape, tap or
+    swipe; hidden slides skipped.
+  - "New presentation" in Files; PowerPoint and OpenDocument presentations
+    open from Files and from other apps ("Open with").
+  - Undoing back to the state last saved leaves the deck unmodified.
+  - `odp`: styles, master pages (their non-placeholder shapes behind each
+    slide), lists with bullets and numbering, enhanced geometry evaluated
+    (equations, modifiers, `T`/`U`/`A`/`B`/`W`/`V`/`X`/`Y`/`G` arcs), SVG
+    path data, polygons, lines, connectors, pictures, tables with their
+    cell styles, rotation (`draw:transform`), notes; every edit the PPTX
+    side has, saved in place with new automatic styles. Checked against
+    LibreOffice's own rendering of a converted deck.
+  - 14 Rust tests, 3 Dart engine tests, 8 widget tests.
+
 ## Next steps (for the next session)
 
-1. Phase 5 (slides): the slides screen (a painter for scenes, the slide
-   strip, select, move and resize, the text sheet, new slides, shapes and
-   pictures, notes, present mode, save and share) and its app wiring
-   (`DocKind.slides.canOpen`, router, "New presentation", Android "Open
-   with", `verifyEngines` and `check_android_native.py`); then ODP.
-2. Phase 6 (layout and PDF export).
+1. Phase 6: `doc_font` (TrueType/OpenType reading, metrics, subsetting),
+   `doc_layout` (line breaking and pages), `doc_pdf` (a PDF writer drawing
+   scenes and laid-out pages); then "Save as PDF" for documents, sheets and
+   slides, and a page view for Word documents.
+2. Phase 7: `doc_cfb` and the legacy readers (`.doc`, `.xls`, `.ppt`),
+   then `doc_common` becomes its own repository.
 3. Run the office corpus sweep (`download_office_corpus.py` needs
    `GITHUB_TOKEN`), and check saved files in real Excel on the Mac.
