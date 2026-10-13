@@ -7,7 +7,7 @@ who does real office work on a phone instead of a laptop.
 This file is the plan and the progress record. It is updated as work lands.
 See the [progress log](#progress-log) at the end.
 
-Last updated: 2026-10-13 (checkpoint: phases 0-2 done, phase 3 started).
+Last updated: 2026-10-13 (phases 0-3 done; phase 4 started).
 
 ## 1. What "done" looks like
 
@@ -355,8 +355,8 @@ Status: `[ ]` not started · `[~]` in progress · `[x]` done.
 | 0 | Plan, rename to DocHelper | [x] |
 | 1 | Shared foundation (`doc_zip`, `doc_xml`, `doc_encoding`); scaffolding for the four libraries; build script and Android preflight | [x] |
 | 2 | Text library and text editor; app-wide file kinds, discovery, "Open with" and routing | [x] |
-| 3 | Spreadsheet library v1 (XLSX/CSV/ODS, formulas, number formats) and spreadsheet screen | [~] |
-| 4 | Word library v1 (DOCX/ODT/RTF, in-place editing) and document screen | [ ] |
+| 3 | Spreadsheet library v1 (XLSX/CSV/ODS, formulas, number formats) and spreadsheet screen | [x] |
+| 4 | Word library v1 (DOCX/ODT/RTF, in-place editing) and document screen | [~] |
 | 5 | Presentation library v1 (PPTX/ODP, scene, text edits, slide operations) and slides screen | [ ] |
 | 6 | Fonts, layout and PDF writer: Word page view and export; sheet and slide export | [ ] |
 | 7 | Legacy binaries through `doc_cfb`: XLS, DOC, PPT and WPS `.et/.wps/.dps` | [ ] |
@@ -789,17 +789,44 @@ match:
     Mac. They can confirm that files DocHelper writes open without a repair
     prompt.
 
+- **2026-10-13 (cloud session).** Phase 3 done.
+  - `doc_common` gained `doc_opc`: OOXML and ODF packages (parts,
+    relationships, content types), saving every untouched part raw.
+  - `sheet_core`:
+    - The function library: about 280 functions in nine modules
+      (criteria, logic, maths, statistics, lookup, text, dates,
+      information, finance), pinned to Excel's results.
+    - The workbook model, styles that are only appended, and
+      recalculation of just what an edit affects (reverse dependency
+      index, Kahn's order, volatile functions, circular references kept
+      and reported).
+    - Every edit as an `Op` with undo and redo: typing, formatting,
+      rows and columns, sheets, fill, paste, sort, replace, names.
+    - XLSX/XLSM in place: unchanged parts byte for byte, only changed
+      sheets regenerated, new styles and shared strings appended,
+      `calcChain.xml` dropped, tables and ranges follow inserted rows.
+    - ODS in place: unchanged tables verbatim, OpenFormula both ways,
+      comments, validations and conditional formats kept.
+    - CSV/TSV with encoding and delimiter detection, each field's text
+      kept until edited.
+    - 68 Rust tests. Files written were checked in LibreOffice and
+      openpyxl: values, formulas, styles, merges, comments, validations,
+      conditional formats, hyperlinks, names and hidden sheets survive.
+  - `sheet_ffi` and the Dart API (`SheetCore`, `SheetBook`), 4 Dart tests.
+  - The app: `SheetEditorScreen` (custom-painted grid with frozen panes,
+    pinch zoom, selection handles, formula bar with function hints,
+    formatting toolbar, number formats including lakh/crore, sheet tabs,
+    find and replace, copy and paste, sort, AutoSum, status-bar sums),
+    "New spreadsheet", "Open with" for XLSX/XLSM/ODS/CSV/TSV, and the
+    sheet engine in the Android preflight. 3 widget tests; 482 app tests
+    pass.
+  - Flutter 3.47.7 and LibreOffice run in the cloud machine, so app tests
+    and reference-application checks work there too.
+
 ## Next steps (for the next session)
 
-1. Phase 3, in order:
-   1. Write the function modules and add `eval` and `functions` to the
-      build.
-   2. Write the workbook model, the dependency-driven recalculation (only
-      cells downstream of an edit; the file's own values are kept on open),
-      and edits with undo and redo.
-   3. XLSX reading and in-place writing, CSV, then ODS.
-   4. The `sheet_ffi` and Dart API.
-   5. The spreadsheet screen.
-2. Register `.xlsx`, `.csv` and `.ods` with "Open with" and add "New
-   spreadsheet" to the add button. Set `DocKind.sheet.canOpen`.
-3. Run the office corpus sweep, and check saved files in real Excel.
+1. Phase 4 (Word): `packages/flutter_word_core` (DOCX in place, then ODT
+   and RTF), its FFI and Dart API, and the document screen.
+2. Phase 5 (slides), then phase 6 (layout and PDF export).
+3. Run the office corpus sweep (`download_office_corpus.py` needs
+   `GITHUB_TOKEN`), and check saved files in real Excel on the Mac.

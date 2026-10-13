@@ -5,6 +5,7 @@ import 'package:share_plus/share_plus.dart';
 import '../models/doc_kind.dart';
 import '../providers/theme_provider.dart';
 import '../screens/pdf_viewer_screen.dart';
+import '../screens/sheet_editor_screen.dart';
 import '../screens/text_editor_screen.dart';
 import '../utils/format_utils.dart';
 
@@ -17,6 +18,7 @@ class DocumentRouter {
   /// kind yet.
   static Widget? screenFor(String path, {String? title, String password = ''}) {
     final name = title ?? documentDisplayName(path);
+    if (!DocKind.canOpenPath(path)) return null;
     return switch (DocKind.ofPath(path)) {
       DocKind.pdf => PdfViewerScreen(
         pdfPath: path,
@@ -24,6 +26,7 @@ class DocumentRouter {
         password: password,
       ),
       DocKind.text => TextEditorScreen(path: path, title: name),
+      DocKind.sheet => SheetEditorScreen(path: path, title: name),
       _ => null,
     };
   }
@@ -116,6 +119,10 @@ class _UnsupportedFileSheet extends StatelessWidget {
               Text(
                 kind == DocKind.other
                     ? 'DocHelper cannot open this kind of file.'
+                    : kind.canOpen
+                    ? 'DocHelper cannot open this ${kind.label} format '
+                          '(.${DocKind.extensionOf(path)}) yet. Until then, you '
+                          'can open it in another app or share it.'
                     : 'Opening ${kind.label} files in DocHelper is coming soon. '
                           'Until then, you can open it in another app or '
                           'share it.',

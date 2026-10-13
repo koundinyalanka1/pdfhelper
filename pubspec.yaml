@@ -26,6 +26,8 @@ dependencies:
   # native binaries with ./scripts/build_engines.sh.
   flutter_text_core:
     path: packages/flutter_text_core
+  flutter_sheet_core:
+    path: packages/flutter_sheet_core
 
   # File handling
   file_picker: ^13.1.0

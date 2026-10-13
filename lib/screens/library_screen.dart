@@ -28,6 +28,7 @@ import 'extract_text_screen.dart';
 import 'metadata_screen.dart';
 import 'organize_pages_screen.dart';
 import 'protect_screen.dart';
+import 'sheet_editor_screen.dart';
 
 /// Every document on the device, on one screen: PDFs, Word, Excel,
 /// PowerPoint and text files.
@@ -427,6 +428,38 @@ class _LibraryScreenState extends State<LibraryScreen>
     }
   }
 
+  /// Start a new, empty spreadsheet. It exists only in memory until its
+  /// first save writes it to the app's documents folder (and publishes a
+  /// copy to Download/DocHelper or Documents/DocHelper).
+  Future<void> _newSpreadsheet() async {
+    final now = DateTime.now();
+    final name = await askPdfName(
+      context: context,
+      initialName: 'Sheet ${formatLibraryDate(now)}',
+      title: 'Name your spreadsheet',
+      confirmLabel: 'Create',
+      accent: DocKind.sheet.color,
+      extension: '.xlsx',
+    );
+    if (name == null || !mounted) return;
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      var file = File('${dir.path}/$name.xlsx');
+      for (var n = 2; await file.exists(); n++) {
+        file = File('${dir.path}/$name ($n).xlsx');
+      }
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => SheetEditorScreen(path: file.path, isNew: true),
+        ),
+      );
+      if (mounted) await _refresh(prune: true);
+    } catch (e) {
+      _snack('Could not create the spreadsheet: $e');
+    }
+  }
+
   Future<void> _showAddSheet() {
     return showModalBottomSheet<void>(
       context: context,
@@ -452,6 +485,21 @@ class _LibraryScreenState extends State<LibraryScreen>
               onTap: () {
                 Navigator.pop(ctx);
                 _newTextFile();
+              },
+            ),
+            ListTile(
+              leading: Icon(DocKind.sheet.icon, color: DocKind.sheet.color),
+              title: Text(
+                'New spreadsheet',
+                style: TextStyle(color: _colors.textPrimary),
+              ),
+              subtitle: Text(
+                'Accounts, lists, bills: rows and columns with totals',
+                style: TextStyle(color: _colors.textTertiary),
+              ),
+              onTap: () {
+                Navigator.pop(ctx);
+                _newSpreadsheet();
               },
             ),
             ListTile(

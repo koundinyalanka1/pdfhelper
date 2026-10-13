@@ -63,10 +63,11 @@ whenever work lands.
 | `lib/services/document_save_service.dart` | Save policy: in place when writable shared storage; otherwise publish/update a public copy in `Download/DocHelper` or `Documents/DocHelper` |
 | `lib/services/library_service.dart` | The Files tab's storage sweep (every listed kind), cache and linked copies |
 | `lib/screens/text_editor_screen.dart` | The text editor |
+| `lib/screens/sheet_editor_screen.dart`, `lib/widgets/sheet/` | The spreadsheet screen and its custom-painted grid |
 | `packages/flutter_pdf_core` | PDF engine (git submodule; commits its Android/Apple binaries) |
-| `packages/doc_common` | Shared Rust crates: `doc_zip`, `doc_xml`, `doc_encoding`, `doc_ffi` |
+| `packages/doc_common` | Shared Rust crates: `doc_zip`, `doc_xml`, `doc_encoding`, `doc_opc`, `doc_ffi` |
 | `packages/flutter_text_core` | Text engine (`text_core`, `text_ffi`, Dart `TextCore`) |
-| `packages/flutter_sheet_core` | Spreadsheet engine, in progress (`sheet_core`); see PLAN.md phase 3 |
+| `packages/flutter_sheet_core` | Spreadsheet engine (`sheet_core`, `sheet_ffi`, Dart `SheetCore`; `cargo run --example sheetcli` tries real files) |
 | `android/app/src/main/kotlin/...` | "Open with" resolution (`MainActivity`), public saves (`PublicPdfExporter`) |
 | `scripts/build_engines.sh` | Builds and tests the per-format engines |
 | `scripts/build_pdf_core.sh` | Builds and tests the PDF engine |

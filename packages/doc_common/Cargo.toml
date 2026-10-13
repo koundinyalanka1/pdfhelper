@@ -11,6 +11,7 @@ members = [
   "crates/doc_xml",
   "crates/doc_encoding",
   "crates/doc_ffi",
+  "crates/doc_opc",
 ]
 
 [profile.release]

@@ -119,6 +119,31 @@
                 <data android:pathPattern=".*\\.json"/>
                 <data android:pathPattern=".*\\.log"/>
             </intent-filter>
+            <!-- Spreadsheets: Excel, OpenDocument, CSV and TSV. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"/>
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.template"/>
+                <data android:mimeType="application/vnd.ms-excel.sheet.macroEnabled.12"/>
+                <data android:mimeType="application/vnd.oasis.opendocument.spreadsheet"/>
+                <data android:mimeType="text/csv"/>
+                <data android:mimeType="text/comma-separated-values"/>
+                <data android:mimeType="application/csv"/>
+                <data android:mimeType="text/tab-separated-values"/>
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:scheme="file"/>
+                <data android:host="*"/>
+                <data android:pathPattern=".*\\.xlsx"/>
+                <data android:pathPattern=".*\\.xlsm"/>
+                <data android:pathPattern=".*\\.ods"/>
+                <data android:pathPattern=".*\\.csv"/>
+                <data android:pathPattern=".*\\.tsv"/>
+            </intent-filter>
         </activity-alias>
 
         <meta-data

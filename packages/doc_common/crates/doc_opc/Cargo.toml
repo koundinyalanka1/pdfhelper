@@ -1,0 +1,11 @@
+[package]
+name = "doc_opc"
+version = "0.1.0"
+edition = "2021"
+license = "Proprietary"
+description = "Office Open XML and OpenDocument packages: parts, relationships, content types, and saving with unchanged parts copied raw."
+
+[dependencies]
+doc_zip = { path = "../doc_zip" }
+doc_xml = { path = "../doc_xml" }
+thiserror = "1"

@@ -203,10 +203,15 @@ class MainActivity : FlutterActivity() {
         return MIME_EXTENSIONS[type] ?: if (type.startsWith("text/")) "txt" else null
     }
 
-    /** PDFs must look like PDFs. Text has no signature; the text engine
-     * reads any bytes, and says so when they look binary. */
+    /** PDFs must look like PDFs and Office packages like ZIP archives.
+     * Text and CSV have no signature; their engines read any bytes. */
     private fun requireDocumentContent(extension: String, header: ByteArray) {
         if (extension == "pdf") requirePdfHeader(header)
+        if (extension in ZIP_EXTENSIONS) {
+            require(header.size >= 4 && header[0] == 'P'.code.toByte() && header[1] == 'K'.code.toByte()) {
+                "The selected document is not a spreadsheet"
+            }
+        }
     }
 
     private fun resolveUriToPath(uriString: String): String? {
@@ -297,7 +302,11 @@ class MainActivity : FlutterActivity() {
         /** Extensions DocHelper opens from other apps. */
         private val OPENABLE_EXTENSIONS = setOf(
             "pdf", "txt", "text", "log", "md", "markdown", "json",
+            "xlsx", "xlsm", "xltx", "xltm", "ods", "ots", "csv", "tsv",
         )
+
+        /** Formats that are ZIP packages, which must start like one. */
+        private val ZIP_EXTENSIONS = setOf("xlsx", "xlsm", "xltx", "xltm", "ods", "ots")
 
         private val MIME_EXTENSIONS = mapOf(
             "application/pdf" to "pdf",
@@ -305,6 +314,14 @@ class MainActivity : FlutterActivity() {
             "text/markdown" to "md",
             "text/x-markdown" to "md",
             "application/json" to "json",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" to "xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.template" to "xltx",
+            "application/vnd.ms-excel.sheet.macroenabled.12" to "xlsm",
+            "application/vnd.oasis.opendocument.spreadsheet" to "ods",
+            "text/csv" to "csv",
+            "text/comma-separated-values" to "csv",
+            "application/csv" to "csv",
+            "text/tab-separated-values" to "tsv",
         )
     }
 
