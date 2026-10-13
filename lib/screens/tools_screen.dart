@@ -14,12 +14,15 @@ import 'merge_pdf_screen.dart';
 import 'metadata_screen.dart';
 import 'ocr_screen.dart';
 import 'organize_pages_screen.dart';
+import 'pdf_edit_screen.dart';
+import 'pdf_stamp_screen.dart';
 import 'pdf_viewer_screen.dart';
 import 'protect_screen.dart';
 import 'split_pdf_screen.dart';
 
 import '../config/features.dart';
 import '../widgets/password_prompt.dart';
+import '../widgets/pdf_edit/edit_items.dart';
 
 /// Every document operation in the app, on one screen, grouped by what you
 /// are trying to get done. Scanning is not here: it has its own tab.
@@ -265,6 +268,43 @@ class _ToolsScreenState extends State<ToolsScreen>
           Icons.content_cut_rounded,
           const Color(0xFFFFC107),
           () => _sendTo(DocHandoff.split),
+        ),
+      ]),
+      _Section('Fill, sign & mark up', [
+        _Tool(
+          'Fill & sign',
+          'Fill in a form, sign it, or type onto the page',
+          Icons.draw_rounded,
+          const Color(0xFF1E88E5),
+          () => _runOnDocument(
+            (p, pw) => PdfEditScreen(pdfPath: p, password: pw),
+          ),
+          needsDocument: true,
+        ),
+        _Tool(
+          'Annotate',
+          'Highlight, underline, draw, and add notes',
+          Icons.border_color_rounded,
+          const Color(0xFFFFB300),
+          () => _runOnDocument(
+            (p, pw) => PdfEditScreen(
+              pdfPath: p,
+              password: pw,
+              tool: PdfEditTool.highlight,
+              title: 'Annotate',
+            ),
+          ),
+          needsDocument: true,
+        ),
+        _Tool(
+          'Page numbers & watermark',
+          'Number the pages, or add a watermark, header or footer',
+          Icons.format_list_numbered_rounded,
+          const Color(0xFF00BFA5),
+          () => _runOnDocument(
+            (p, pw) => PdfStampScreen(pdfPath: p, password: pw),
+          ),
+          needsDocument: true,
         ),
       ]),
       _Section('Edit document', [

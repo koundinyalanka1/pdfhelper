@@ -363,7 +363,7 @@ Status: `[ ]` not started · `[~]` in progress · `[x]` done.
 | 5 | Presentation library v1 (PPTX/ODP, scene, text edits, slide operations) and slides screen | [x] |
 | 6 | Fonts, layout and PDF writer: Word page view and export; sheet and slide export | [x] |
 | 7 | Legacy binaries through `doc_cfb`: XLS, DOC, PPT and WPS `.et/.wps/.dps` | [x] |
-| 8 | PDF editing: annotate, sign, fill forms, stamp, compress, convert pages to images | [ ] |
+| 8 | PDF editing: annotate, sign, fill forms, stamp, compress, convert pages to images | [~] |
 | 9 | Other files: images, ZIP archives, Markdown, HTML and JSON viewers, unknown files | [ ] |
 | 10 | Hardening: a real-world corpus per format, fuzzing, memory and time limits, device runs, accessibility, release | [ ] |
 
@@ -1008,14 +1008,65 @@ match:
     LibreOffice's custom shapes in `.ppt` (formula-driven geometry) draw
     as rectangles.
 
+- **2026-10-13 (metafiles).** WMF and EMF pictures are drawn:
+  - `doc_metafile` in `doc_common` plays both formats onto an anti-aliased
+    canvas: GDI state and mapping modes, world transforms, pens with joins
+    and dashes, brushes, paths, regions as clips, bitmaps (with raster
+    operations), and text through the fonts' TrueType outlines
+    (`doc_font::Font::outline`). `doc_image::encode_png` writes the result.
+  - The word and slide engines show a metafile as a PNG
+    (`doc_metafile::shown`, with the system's fonts) and draw it into
+    their PDF exports; the file keeps the metafile. Clip art, diagrams and
+    newspaper pages with photos from the POI and LibreOffice test files
+    draw as Office shows them.
+  - Known gaps: EMF+ records (GDI+) are skipped, so EMF+-only pictures
+    are blank.
+
+- **2026-10-13 (phase 8, part 1).** PDFs can be filled in, signed and
+  marked up:
+  - `pdf_edit` in `flutter_pdf_core`: form fields (text, comb, multi-line,
+    password, check boxes, radio groups, drop-downs and lists) filled with
+    appearances drawn for the new values; annotations (highlight,
+    underline, strike-out, squiggly, ink, rectangle, ellipse, line, arrow,
+    text box, typed text, note, picture, drawn signature), each with an
+    appearance stream, listed and removable; marks drawn onto many pages
+    (page numbers, headers, footers, watermarks), upright on rotated
+    pages. Anything can be flattened into the page instead.
+  - Saving appends an incremental update, so existing signatures stay
+    valid; files that use cross-reference streams get one; encrypted files
+    keep their password (the update is encrypted with the file's key); a
+    file whose index was rebuilt is written whole. XFA is dropped from a
+    filled form so readers show the AcroForm values.
+  - Checked against the IRS W-9, W-4 and 1040 and pdf.js's form tests,
+    read back with pypdf (strict) and rendered with poppler as well as
+    our renderer.
+  - The app: "Fill & sign", "Annotate" and "Page numbers & watermark" in
+    the viewer's actions and in Tools. `PdfEditScreen` shows the pages
+    with tools (fill, sign, text, highlight, underline, strike, pen, note,
+    box, circle, arrow, picture), undo, colours and widths; highlights
+    follow the text's lines; signatures are drawn once and kept
+    (`SignatureStore`); existing annotations are removed with a long press.
+    `PdfStampScreen` previews its marks on the first page. Both save in
+    place when the file is writable, otherwise to a published copy, and
+    the viewer reloads what was saved.
+  - Known gaps: text is set in the standard fonts (WinAnsi), so Indic and
+    other scripts in fields and text boxes come out as "?" (the app warns);
+    the macOS and iOS PDF binaries need rebuilding on the Mac for these
+    functions (the Android ones are rebuilt).
+
 ## Next steps (for the next session)
 
-1. Draw WMF and EMF pictures (a metafile rasterizer in `doc_common`,
-   used when the app shows a picture and when saving as PDF).
-2. `doc_common` becomes its own repository (`koundinyalanka1/doc_common`)
-   and a submodule at the same path.
-3. A complex-script shaper (GSUB/GPOS for Indic and Arabic) in
-   `doc_layout`, so Hindi, Telugu and Tamil text exports correctly.
-4. Phase 8: PDF editing additions; phase 9: other file viewers.
-5. Run the office corpus sweep (`download_office_corpus.py` needs
+1. Phase 8, part 2: compress (re-encode images with our own JPEG encoder)
+   and turn pages into images (PNG/JPEG, one per page).
+2. Rebuild the PDF engine's macOS dylib and iOS XCFramework on the Mac
+   (`bash scripts/build_pdf_core.sh ios macos`); the Android binaries are
+   current.
+3. `doc_common` becomes its own repository (`koundinyalanka1/doc_common`)
+   and a submodule at the same path. Creating the repository needs the
+   owner: the GitHub app cannot create repositories.
+4. A complex-script shaper (GSUB/GPOS for Indic and Arabic) in
+   `doc_layout`, so Hindi, Telugu and Tamil text exports correctly; then
+   embedded fonts for PDF form text and text boxes.
+5. Phase 9: other file viewers.
+6. Run the office corpus sweep (`download_office_corpus.py` needs
    `GITHUB_TOKEN`), and check saved files in real Office on the Mac.

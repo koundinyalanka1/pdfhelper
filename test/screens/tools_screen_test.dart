@@ -60,6 +60,9 @@ void main() {
     for (final tool in [
       'Merge PDFs',
       'Split PDF',
+      'Fill & sign',
+      'Annotate',
+      'Page numbers & watermark',
       'Organize pages',
       'Document details',
       'Protect with a password',
@@ -92,6 +95,7 @@ void main() {
 
     for (final section in [
       'Combine & split',
+      'Fill, sign & mark up',
       'Edit document',
       'Read & extract',
     ]) {

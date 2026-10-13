@@ -87,6 +87,9 @@ void main() {
     await openSheet(tester);
 
     for (final label in const [
+      'Fill & sign',
+      'Annotate',
+      'Page numbers & watermark',
       'Merge with…',
       'Split',
       'Organize pages',

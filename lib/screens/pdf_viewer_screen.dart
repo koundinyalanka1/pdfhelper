@@ -27,6 +27,7 @@ import '../widgets/banner_ad_widget.dart';
 import '../widgets/device_pixel_snap.dart';
 import '../widgets/pdf_name_dialog.dart';
 import '../widgets/pdf_result_dialog.dart';
+import '../widgets/pdf_edit/edit_items.dart';
 import '../widgets/pdf_text_selection_overlay.dart';
 import 'ai_screen.dart';
 import 'extract_text_screen.dart';
@@ -34,6 +35,8 @@ import 'home_screen.dart';
 import 'merge_pdf_screen.dart';
 import 'metadata_screen.dart';
 import 'organize_pages_screen.dart';
+import 'pdf_edit_screen.dart';
+import 'pdf_stamp_screen.dart';
 import 'protect_screen.dart';
 import 'split_pdf_screen.dart';
 
@@ -108,6 +111,9 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
   /// renders first. Held here rather than in each page so that a page rebuilt
   /// after scrolling away is laid out at its real height straight away.
   final Map<int, double> _pageRatios = {};
+
+  /// Bumped when the file is saved over, so every page renders again.
+  int _generation = 0;
 
   /// Zoom for the whole document.
   ///
@@ -1187,6 +1193,39 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
                 ),
               ),
               Divider(color: colors.divider, height: 20),
+              _action(
+                ctx,
+                colors,
+                Icons.draw_rounded,
+                'Fill & sign',
+                () => _edit(
+                  PdfEditScreen(pdfPath: widget.pdfPath, password: _password),
+                ),
+              ),
+              _action(
+                ctx,
+                colors,
+                Icons.border_color_rounded,
+                'Annotate',
+                () => _edit(
+                  PdfEditScreen(
+                    pdfPath: widget.pdfPath,
+                    password: _password,
+                    tool: PdfEditTool.highlight,
+                    title: 'Annotate',
+                  ),
+                ),
+              ),
+              _action(
+                ctx,
+                colors,
+                Icons.format_list_numbered_rounded,
+                'Page numbers & watermark',
+                () => _edit(
+                  PdfStampScreen(pdfPath: widget.pdfPath, password: _password),
+                ),
+              ),
+              Divider(color: colors.divider, height: 20),
               _action(ctx, colors, Icons.merge_rounded, 'Merge with…', () {
                 _push(MergePdfScreen(initialPdfPath: widget.pdfPath));
               }),
@@ -1312,6 +1351,35 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
 
   void _push(Widget screen) {
     Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
+  }
+
+  /// Open an editing screen, then show what it saved: this file again when
+  /// it was saved in place, otherwise the copy it was saved to.
+  Future<void> _edit(Widget screen) async {
+    final saved = await Navigator.push<String>(
+      context,
+      MaterialPageRoute(builder: (_) => screen),
+    );
+    if (saved == null || !mounted) return;
+    if (saved != widget.pdfPath) {
+      unawaited(
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) =>
+                PdfViewerScreen(pdfPath: saved, password: _password),
+          ),
+        ),
+      );
+      return;
+    }
+    PdfRaster.invalidate(widget.pdfPath);
+    setState(() {
+      _generation++;
+      _isLoading = true;
+      _pageRatios.clear();
+    });
+    await _load();
   }
 
   @override
@@ -1764,30 +1832,34 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
                 ? const NeverScrollableScrollPhysics()
                 : const AlwaysScrollableScrollPhysics(),
             itemCount: _totalPages,
-            itemBuilder: (context, index) => _PageView(
-              key: ValueKey('${widget.pdfPath}#$index'),
-              path: widget.pdfPath,
-              password: _password,
-              pageIndex: index,
-              aspectRatio: pageAspectRatio(_pageRatios, index, _aspectRatio),
-              aspectRatioKnown: _pageRatios.containsKey(index),
-              isDark: _colors.isDark,
-              zoom: _zoom,
-              viewportChanges: _viewportChanges,
-              zoomSettled: _zoomSettled,
-              viewport: _viewportRect,
-              textSelectionController: _textSelectionController,
-              search: _search,
-              recognizedText: _recognized.pages[index]?.layout,
-              // Recorded without a rebuild: the page resizes itself, and the
-              // counter and Go to page read the map when they need it.
-              onAspectRatio: (ratio) => _pageRatios[index] = ratio,
-              onWarnings: _noteWarnings,
-              onNoText: () => _notePageWithoutText(index),
-              onSelectMissingText: () => _pointAtRecognizeButton(
-                _recognized.skipped.contains(index)
-                    ? 'No text could be recognized on this page.'
-                    : 'No selectable text on this page.',
+            // A save over the file starts every page afresh.
+            itemBuilder: (context, index) => KeyedSubtree(
+              key: ValueKey((_generation, index)),
+              child: _PageView(
+                key: ValueKey('${widget.pdfPath}#$index'),
+                path: widget.pdfPath,
+                password: _password,
+                pageIndex: index,
+                aspectRatio: pageAspectRatio(_pageRatios, index, _aspectRatio),
+                aspectRatioKnown: _pageRatios.containsKey(index),
+                isDark: _colors.isDark,
+                zoom: _zoom,
+                viewportChanges: _viewportChanges,
+                zoomSettled: _zoomSettled,
+                viewport: _viewportRect,
+                textSelectionController: _textSelectionController,
+                search: _search,
+                recognizedText: _recognized.pages[index]?.layout,
+                // Recorded without a rebuild: the page resizes itself, and the
+                // counter and Go to page read the map when they need it.
+                onAspectRatio: (ratio) => _pageRatios[index] = ratio,
+                onWarnings: _noteWarnings,
+                onNoText: () => _notePageWithoutText(index),
+                onSelectMissingText: () => _pointAtRecognizeButton(
+                  _recognized.skipped.contains(index)
+                      ? 'No text could be recognized on this page.'
+                      : 'No selectable text on this page.',
+                ),
               ),
             ),
           ),
