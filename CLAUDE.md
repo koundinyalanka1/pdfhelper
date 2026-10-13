@@ -164,6 +164,10 @@ See PLAN.md §6 and `docs/PRODUCTION_AUDIT_2026-10-07.md`.
 
 - **Git-ignored engine binaries.** The per-format binaries are git-ignored
   for now; the alternatives are committing them or Git LFS.
+- **`doc_common`'s home.** The text and sheet engines reference
+  `packages/doc_common` by relative path, so they build inside this
+  checkout but not standalone; giving it its own repository (or submodule)
+  is open.
 - **Metric-compatible fonts.** Bundling Carlito, Caladea and Liberation is
   proposed, so Word and Excel documents lay out as Office does.
 - **Play Console All-files-access declaration.** DocHelper now edits
