@@ -150,6 +150,9 @@ editing in place, not from rebuilding the file:
     The DTD is skipped, so XXE and "billion laughs" attacks don't apply.
 - **`doc_cfb`.** OLE2 compound files (FAT, DIFAT, mini stream, directory
   tree), for `.doc/.xls/.ppt`, WPS binaries and password-protected OOXML.
+- **`doc_art`.** OfficeArt drawing records inside those files: walking
+  them, shape properties and colours, and stored pictures turned back
+  into PNG, JPEG, BMP, TIFF, EMF and WMF files.
 - **`doc_encoding`.**
   - UTF-8 and UTF-16LE/BE, with or without a BOM.
   - Windows-125x, ISO-8859-x, CP437/850 and Mac Roman.
@@ -359,7 +362,7 @@ Status: `[ ]` not started · `[~]` in progress · `[x]` done.
 | 4 | Word library v1 (DOCX/ODT/RTF, in-place editing) and document screen | [x] |
 | 5 | Presentation library v1 (PPTX/ODP, scene, text edits, slide operations) and slides screen | [x] |
 | 6 | Fonts, layout and PDF writer: Word page view and export; sheet and slide export | [x] |
-| 7 | Legacy binaries through `doc_cfb`: XLS, DOC, PPT and WPS `.et/.wps/.dps` | [ ] |
+| 7 | Legacy binaries through `doc_cfb`: XLS, DOC, PPT and WPS `.et/.wps/.dps` | [x] |
 | 8 | PDF editing: annotate, sign, fill forms, stamp, compress, convert pages to images | [ ] |
 | 9 | Other files: images, ZIP archives, Markdown, HTML and JSON viewers, unknown files | [ ] |
 | 10 | Hardening: a real-world corpus per format, fuzzing, memory and time limits, device runs, accessibility, release | [ ] |
@@ -969,11 +972,50 @@ match:
     out; CFF fonts (CJK on Android) are embedded whole; charts draw as a
     placeholder box.
 
+- **2026-10-13 (phase 7).** Office 97-2003 and WPS binaries open:
+  - `doc_cfb` reads OLE2 files (every chain checked for loops and bounds);
+    `doc_art` reads their drawing records and pictures, shared by the
+    readers below.
+  - Excel (`.xls`, `.xlt`, WPS `.et`): BIFF8 values, shared strings,
+    formulas decompiled to text (shared and array formulas, 3-D
+    references, names, add-in functions), number formats, fonts, fills,
+    borders, merges, sizes, frozen panes. The screen saves to a new
+    `.xlsx` in `Edited/` and says so.
+  - Word (`.doc`, `.dot`, WPS `.wps`): the piece table, formatting with
+    styles applied (so text looks as it did), lists with their own
+    numbering, tables (merged and shaded cells, header rows), links,
+    inline and floating pictures, text boxes (as paragraphs after their
+    anchor), footnotes and endnotes, page size and margins, headers and
+    footers; imported into a new `.docx` the way RTF is.
+  - PowerPoint (`.ppt`, `.pps`, `.pot`, WPS `.dps`): the persist directory
+    and edit chain, masters (their shapes, text styles, colour schemes and
+    the properties slide shapes inherit), preset shapes, freeforms,
+    lines, groups with their turns, fills (solid, gradient, picture),
+    pictures with crops, backgrounds, text with bullets and indents,
+    notes; imported into a new `.pptx` built by
+    `pptx::template::package`. The screen saves to a new `.pptx`.
+  - Checked against LibreOffice's rendering of Apache POI's test files
+    (23 `.ppt`, 24 `.doc`, 17 `.xls`) and of files LibreOffice converted.
+    Password-protected files say so; Word 6/95 and PowerPoint 95 say they
+    cannot be opened yet.
+  - The sheet engine now computes a range that stands for one cell as
+    Excel does (implicit intersection: `=$A:$A*2` is this row's A
+    doubled), outside array formulas and aggregates; recalculating POI's
+    formula torture test agrees with Excel's saved values except for
+    last-digit rounding and a few edge cases.
+  - Known gaps: WMF/EMF pictures (common clip art in old files) are kept
+    but not drawn; Word drawing shapes and comments are left out;
+    LibreOffice's custom shapes in `.ppt` (formula-driven geometry) draw
+    as rectangles.
+
 ## Next steps (for the next session)
 
-1. Phase 7: `doc_cfb` and the legacy readers (`.doc`, `.xls`, `.ppt`),
-   then `doc_common` becomes its own repository.
-2. A complex-script shaper (GSUB/GPOS for Indic and Arabic) in
+1. Draw WMF and EMF pictures (a metafile rasterizer in `doc_common`,
+   used when the app shows a picture and when saving as PDF).
+2. `doc_common` becomes its own repository (`koundinyalanka1/doc_common`)
+   and a submodule at the same path.
+3. A complex-script shaper (GSUB/GPOS for Indic and Arabic) in
    `doc_layout`, so Hindi, Telugu and Tamil text exports correctly.
-3. Run the office corpus sweep (`download_office_corpus.py` needs
-   `GITHUB_TOKEN`), and check saved files in real Excel on the Mac.
+4. Phase 8: PDF editing additions; phase 9: other file viewers.
+5. Run the office corpus sweep (`download_office_corpus.py` needs
+   `GITHUB_TOKEN`), and check saved files in real Office on the Mac.
