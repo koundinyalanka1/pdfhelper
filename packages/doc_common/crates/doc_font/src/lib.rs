@@ -10,6 +10,8 @@
 
 mod book;
 mod gpos;
+mod outline;
+pub use outline::Seg;
 mod subset;
 
 use std::collections::HashMap;

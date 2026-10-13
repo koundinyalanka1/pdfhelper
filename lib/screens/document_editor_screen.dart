@@ -776,7 +776,7 @@ class _DocumentEditorScreenState extends State<DocumentEditorScreen> {
         '${(await getTemporaryDirectory()).path}/doc_images_${DateTime.now().microsecondsSinceEpoch}',
       ).create(recursive: true);
       final path = '${dir.path}/$id';
-      final ext = doc.saveImage(id, path);
+      final ext = await doc.saveImageAsync(id, path);
       if (!const ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp'].contains(ext)) {
         return;
       }

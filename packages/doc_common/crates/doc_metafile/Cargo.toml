@@ -1,0 +1,10 @@
+[package]
+name = "doc_metafile"
+version = "0.1.0"
+edition = "2021"
+license = "Proprietary"
+description = "Windows metafiles (WMF and EMF) drawn into pictures, from scratch."
+
+[dependencies]
+doc_font = { path = "../doc_font" }
+doc_image = { path = "../doc_image" }

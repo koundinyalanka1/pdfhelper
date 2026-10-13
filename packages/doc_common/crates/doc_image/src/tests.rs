@@ -154,3 +154,22 @@ fn jpeg_headers() {
     assert_eq!((info.width, info.height, info.components, info.adobe), (30, 20, 4, true));
     assert_eq!(kind(&j), Kind::Jpeg);
 }
+
+#[test]
+fn writes_pngs_it_can_read_back() {
+    // A 3x2 picture, one pixel half transparent.
+    let mut rgba = Vec::new();
+    for i in 0..6u8 {
+        rgba.extend_from_slice(&[i * 40, 255 - i * 40, 7, if i == 4 { 128 } else { 255 }]);
+    }
+    let png = encode_png(3, 2, &rgba);
+    let r = decode(&png).unwrap();
+    assert_eq!((r.width, r.height, r.channels), (3, 2, 3));
+    assert_eq!(&r.pixels[..3], &[0, 255, 7]);
+    assert_eq!(r.alpha.as_ref().unwrap()[4], 128);
+    // All opaque: RGB.
+    let opaque: Vec<u8> = rgba.chunks(4).flat_map(|p| [p[0], p[1], p[2], 255]).collect();
+    let r = decode(&encode_png(3, 2, &opaque)).unwrap();
+    assert!(r.alpha.is_none());
+    assert_eq!(&r.pixels[15..18], &[200, 55, 7]);
+}

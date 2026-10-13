@@ -3,8 +3,11 @@
 //! stays compressed: only its header is read, for passthrough.
 
 mod bmp;
+mod encode;
 mod gif;
 mod png;
+
+pub use encode::encode_png;
 
 pub use bmp::decode as decode_bmp;
 pub use gif::decode as decode_gif;
