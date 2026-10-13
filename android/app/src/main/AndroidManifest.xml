@@ -128,6 +128,7 @@
                 <data android:mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.template"/>
                 <data android:mimeType="application/vnd.ms-excel.sheet.macroEnabled.12"/>
                 <data android:mimeType="application/vnd.oasis.opendocument.spreadsheet"/>
+                <data android:mimeType="application/vnd.ms-excel"/>
                 <data android:mimeType="text/csv"/>
                 <data android:mimeType="text/comma-separated-values"/>
                 <data android:mimeType="application/csv"/>
@@ -140,6 +141,7 @@
                 <data android:host="*"/>
                 <data android:pathPattern=".*\\.xlsx"/>
                 <data android:pathPattern=".*\\.xlsm"/>
+                <data android:pathPattern=".*\\.xls"/>
                 <data android:pathPattern=".*\\.ods"/>
                 <data android:pathPattern=".*\\.csv"/>
                 <data android:pathPattern=".*\\.tsv"/>

@@ -303,6 +303,7 @@ class MainActivity : FlutterActivity() {
         private val OPENABLE_EXTENSIONS = setOf(
             "pdf", "txt", "text", "log", "md", "markdown", "json",
             "xlsx", "xlsm", "xltx", "xltm", "ods", "ots", "csv", "tsv",
+            "xls", "xlt", "et", "ett",
             "docx", "docm", "dotx", "dotm", "odt", "ott", "rtf",
             "pptx", "pptm", "ppsx", "ppsm", "potx", "potm", "odp", "otp",
         )
@@ -324,6 +325,7 @@ class MainActivity : FlutterActivity() {
             "application/vnd.openxmlformats-officedocument.spreadsheetml.template" to "xltx",
             "application/vnd.ms-excel.sheet.macroenabled.12" to "xlsm",
             "application/vnd.oasis.opendocument.spreadsheet" to "ods",
+            "application/vnd.ms-excel" to "xls",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document" to "docx",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.template" to "dotx",
             "application/vnd.ms-word.document.macroenabled.12" to "docm",

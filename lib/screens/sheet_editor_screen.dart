@@ -1103,6 +1103,23 @@ class _SheetEditorScreenState extends State<SheetEditorScreen> {
 
   SheetFormat get _saveFormat => SheetFormat.forName(_workingPath) ?? SheetFormat.xlsx;
 
+  /// Formats read but never written back (Excel 97-2003, WPS): saved as a
+  /// new Excel workbook next to the app's other edited files.
+  bool get _legacy => const {'xls', 'xlt', 'et', 'ett'}.contains(DocKind.extensionOf(_workingPath));
+
+  String? _convertedPath;
+
+  Future<String> _newXlsxPath() async {
+    final dir = Directory('${(await getApplicationDocumentsDirectory()).path}/Edited');
+    await dir.create(recursive: true);
+    final title = DocKind.titleOf(documentDisplayName(_workingPath));
+    var file = File('${dir.path}/$title.xlsx');
+    for (var n = 2; await file.exists(); n++) {
+      file = File('${dir.path}/$title ($n).xlsx');
+    }
+    return file.path;
+  }
+
   Future<bool> _save() async {
     final book = _book;
     if (book == null || _saving) return false;
@@ -1110,8 +1127,12 @@ class _SheetEditorScreenState extends State<SheetEditorScreen> {
     final location = context.read<ThemeProvider>().saveLocation;
     setState(() => _saving = true);
     try {
-      final target = _neverSaved ? _workingPath : await DocumentSaveService.workingPathFor(_workingPath);
-      final warnings = await book.save(target, _saveFormat);
+      final target = _legacy
+          ? _convertedPath ??= await _newXlsxPath()
+          : _neverSaved
+          ? _workingPath
+          : await DocumentSaveService.workingPathFor(_workingPath);
+      final warnings = await book.save(target, SheetFormat.forName(target) ?? SheetFormat.xlsx);
       _neverSaved = false;
       if (target != _workingPath) _workingPath = target;
       await RecentFilesService.markOpened(target);
