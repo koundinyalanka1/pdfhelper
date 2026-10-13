@@ -95,6 +95,16 @@ pub struct StyleInfo {
     pub defined: bool,
 }
 
+/// A structural change: `remove` children of container `parent` (0 for
+/// the body) at `index` replaced by `insert`.
+#[derive(Clone, Debug)]
+pub struct Splice {
+    pub parent: u32,
+    pub index: usize,
+    pub remove: usize,
+    pub insert: Vec<Node>,
+}
+
 /// One file format's reading and writing of paragraphs, tables and the
 /// package around them.
 pub trait Backend: Send {
@@ -118,6 +128,16 @@ pub trait Backend: Send {
     /// Change paragraph properties; `prev` is the paragraph before the
     /// first one, for continuing its list.
     fn patch(&mut self, paras: &mut [Element], prev: Option<&Element>, patch: &ParaPatch);
+    /// Whether lists are containers around paragraphs (OpenDocument)
+    /// rather than paragraph properties (Word).
+    fn structural_lists(&self) -> bool {
+        false
+    }
+    /// For structural lists: the change that puts paragraph `id` into a
+    /// list of `kind` (`bullet`, `number`) or takes it out (`none`).
+    fn list_splice(&mut self, _id: u32, _kind: &str) -> Option<Splice> {
+        None
+    }
     /// A new empty paragraph like `like`, optionally in another style.
     fn new_para(&self, like: Option<&Element>, style: Option<&str>) -> Element;
     /// Section properties a paragraph carries (Word keeps a section break
@@ -136,7 +156,7 @@ pub trait Backend: Send {
     fn new_table(&mut self, rows: usize, cols: usize) -> Node;
     fn table_edit(&mut self, table: &BoxNode, op: TableOp) -> Result<BoxNode, WordError>;
     /// A paragraph holding only a page break.
-    fn page_break_para(&self) -> Element;
+    fn page_break_para(&mut self) -> Element;
 
     fn page_setup(&self) -> PageSetup;
     fn styles(&self) -> Vec<StyleInfo>;

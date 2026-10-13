@@ -77,7 +77,7 @@ enum DocKind {
   };
 
   static const Set<String> _openableWordExtensions = {
-    'docx', 'docm', 'dotx', 'dotm',
+    'docx', 'docm', 'dotx', 'dotm', 'odt', 'ott', 'rtf',
   };
 
   /// Whether DocHelper can open this particular file.

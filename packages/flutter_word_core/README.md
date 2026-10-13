@@ -12,6 +12,8 @@ Dart API over `dart:ffi`.
 | `projected` | Objects, invisible markers and run formats a paragraph had, and where markers go after an edit |
 | `document` | The format-neutral document: block windows, edits (`Edit`) with undo and redo, find and replace, outline, word count |
 | `docx` | Word documents: styles (defaults, chains, themes), numbering and list labels, paragraphs read and written back with their original run properties, tables, pictures, links; saved in place |
+| `odt` | OpenDocument text: named and automatic styles, ODF white space, spans written as new automatic styles, lists as containers (split and joined as paragraphs enter and leave them), headings as `text:h`, tables, pictures; saved in place |
+| `import` | RTF (formatting, styles, lists, tables, pictures, links), plain text and Markdown, read into a new Word document |
 
 An edit replaces whole paragraphs with new content (`SetParas`): the
 paragraph keeps its element and properties, text that looks like an

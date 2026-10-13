@@ -107,6 +107,15 @@ class DocParagraphView extends StatelessWidget {
     if (s.shading != null) {
       out = ColoredBox(color: Color(0xFF000000 | s.shading!), child: out);
     }
+    if (s.pageBreakBefore) {
+      out = Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _PageBreak(width: width),
+          out,
+        ],
+      );
+    }
     if (!para.editable) {
       out = Stack(
         children: [

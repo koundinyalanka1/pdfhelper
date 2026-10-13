@@ -204,6 +204,15 @@ class _DocumentEditorScreenState extends State<DocumentEditorScreen> {
     }
   }
 
+  /// Whether the app bar last showed the document as edited.
+  bool _shownDirty = false;
+
+  void _onTyped() {
+    _scheduleCommit();
+    // The first change enables Save and marks the title "Edited".
+    if (_dirty != _shownDirty) setState(() {});
+  }
+
   void _scheduleCommit() {
     _commitTimer?.cancel();
     _commitTimer = Timer(const Duration(milliseconds: 900), () {
@@ -230,7 +239,7 @@ class _DocumentEditorScreenState extends State<DocumentEditorScreen> {
       cursor: cursor,
       onSplit: _onSplit,
       onJoinBack: _onJoinBack,
-      onChanged: (_) => _scheduleCommit(),
+      onChanged: (_) => _onTyped(),
     );
     if (selectEnd != null && cursor != null) c.select(cursor, selectEnd);
     setState(() {
@@ -782,16 +791,11 @@ class _DocumentEditorScreenState extends State<DocumentEditorScreen> {
     final location = context.read<ThemeProvider>().saveLocation;
     setState(() => _saving = true);
     try {
-      var target = _neverSaved
+      final target = !_info!.writesBack
+          ? _convertedPath ??= await _newWordPath()
+          : _neverSaved
           ? _workingPath
           : await DocumentSaveService.workingPathFor(_workingPath);
-      if (!_info!.writesBack) {
-        // Saved as Word next to the original name.
-        final dir = await getApplicationDocumentsDirectory();
-        final title = DocKind.titleOf(documentDisplayName(_workingPath));
-        target = '${dir.path}/Edited/$title.docx';
-        await Directory('${dir.path}/Edited').create(recursive: true);
-      }
       await doc.save(target);
       _neverSaved = false;
       _workingPath = target;
@@ -812,6 +816,24 @@ class _DocumentEditorScreenState extends State<DocumentEditorScreen> {
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  /// Where a document read from a format that is not written back (RTF,
+  /// text) is saved as Word: a new file in the app's storage, which then
+  /// gets its public copy.
+  String? _convertedPath;
+
+  Future<String> _newWordPath() async {
+    final dir = Directory(
+      '${(await getApplicationDocumentsDirectory()).path}/Edited',
+    );
+    await dir.create(recursive: true);
+    final title = DocKind.titleOf(documentDisplayName(_workingPath));
+    var file = File('${dir.path}/$title.docx');
+    for (var n = 2; await file.exists(); n++) {
+      file = File('${dir.path}/$title ($n).docx');
+    }
+    return file.path;
   }
 
   Future<void> _share({bool asText = false}) async {
@@ -1036,6 +1058,7 @@ class _DocumentEditorScreenState extends State<DocumentEditorScreen> {
 
   PreferredSizeWidget _buildAppBar() {
     final info = _info;
+    _shownDirty = _dirty;
     final subtitle = info == null
         ? null
         : [info.format.toUpperCase(), if (_dirty) 'Edited'].join(' · ');

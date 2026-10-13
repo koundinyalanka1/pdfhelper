@@ -11,6 +11,8 @@ pub mod backend;
 pub mod document;
 pub mod docx;
 pub mod error;
+pub mod import;
+pub mod odt;
 pub mod projected;
 pub mod tree;
 pub mod view;
@@ -97,11 +99,17 @@ pub fn open(bytes: Vec<u8>, name: &str) -> Result<Document, WordError> {
             let d = docx::Docx::open(bytes, format)?;
             Ok(Document::new(Box::new(d), format))
         }
-        Format::Odt | Format::Ott | Format::Rtf | Format::Txt | Format::Markdown => {
-            Err(WordError::Unsupported(format!(
-                "Opening .{} documents is not ready yet.",
-                format.name()
-            )))
+        Format::Odt | Format::Ott => {
+            let d = odt::Odt::open(bytes, format)?;
+            Ok(Document::new(Box::new(d), format))
+        }
+        Format::Rtf | Format::Txt | Format::Markdown => {
+            let docx = match format {
+                Format::Rtf => import::rtf_to_docx(&bytes)?,
+                _ => import::text_to_docx(&decode_text(&bytes), format == Format::Markdown)?,
+            };
+            let d = docx::Docx::open(docx, Format::Docx)?;
+            Ok(Document::new(Box::new(d), format))
         }
     }
 }
@@ -109,4 +117,21 @@ pub fn open(bytes: Vec<u8>, name: &str) -> Result<Document, WordError> {
 /// A new, empty Word document.
 pub fn blank() -> Document {
     Document::new(Box::new(docx::Docx::blank()), Format::Docx)
+}
+
+/// Text bytes as a string: UTF-8 (with or without a byte-order mark),
+/// UTF-16 with a mark, or Windows-1252.
+fn decode_text(bytes: &[u8]) -> String {
+    use doc_encoding::Encoding;
+    if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE][..]) {
+        return Encoding::Utf16Le.decode(rest).text;
+    }
+    if let Some(rest) = bytes.strip_prefix(&[0xFE, 0xFF][..]) {
+        return Encoding::Utf16Be.decode(rest).text;
+    }
+    let b = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF][..]).unwrap_or(bytes);
+    match std::str::from_utf8(b) {
+        Ok(s) => s.to_owned(),
+        Err(_) => Encoding::WINDOWS_1252.decode(b).text,
+    }
 }

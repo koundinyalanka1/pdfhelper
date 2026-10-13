@@ -303,13 +303,13 @@ class MainActivity : FlutterActivity() {
         private val OPENABLE_EXTENSIONS = setOf(
             "pdf", "txt", "text", "log", "md", "markdown", "json",
             "xlsx", "xlsm", "xltx", "xltm", "ods", "ots", "csv", "tsv",
-            "docx", "docm", "dotx", "dotm",
+            "docx", "docm", "dotx", "dotm", "odt", "ott", "rtf",
         )
 
         /** Formats that are ZIP packages, which must start like one. */
         private val ZIP_EXTENSIONS = setOf(
             "xlsx", "xlsm", "xltx", "xltm", "ods", "ots",
-            "docx", "docm", "dotx", "dotm",
+            "docx", "docm", "dotx", "dotm", "odt", "ott",
         )
 
         private val MIME_EXTENSIONS = mapOf(
@@ -326,6 +326,10 @@ class MainActivity : FlutterActivity() {
             "application/vnd.openxmlformats-officedocument.wordprocessingml.template" to "dotx",
             "application/vnd.ms-word.document.macroenabled.12" to "docm",
             "application/vnd.ms-word.template.macroenabled.12" to "dotm",
+            "application/vnd.oasis.opendocument.text" to "odt",
+            "application/vnd.oasis.opendocument.text-template" to "ott",
+            "application/rtf" to "rtf",
+            "text/rtf" to "rtf",
             "text/csv" to "csv",
             "text/comma-separated-values" to "csv",
             "application/csv" to "csv",

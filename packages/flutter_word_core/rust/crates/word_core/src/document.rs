@@ -777,6 +777,29 @@ impl Document {
             .filter(|i| *i > 0)
             .and_then(|i| tree::para(self.backend.body(), order[i - 1]))
             .map(|p| p.el.clone());
+        // Lists that are containers change the tree, one paragraph at a
+        // time from the last, so earlier positions stay put.
+        let mut patch = patch;
+        let mut list_steps = Vec::new();
+        if self.backend.structural_lists() {
+            if let Some(kind) = patch.list.take() {
+                for id in ids.iter().rev() {
+                    if let Some(sp) = self.backend.list_splice(*id, &kind) {
+                        let before = self.splice(sp.parent, sp.index, sp.remove, sp.insert.clone())?;
+                        list_steps.push(Step {
+                            parent: sp.parent,
+                            index: sp.index,
+                            before,
+                            after: sp.insert,
+                        });
+                    }
+                }
+            }
+        }
+        if patch == ParaPatch::default() {
+            self.record(list_steps);
+            return Ok(EditResult { ids, count: 0 });
+        }
         let mut places = Vec::new();
         let mut els: Vec<Element> = Vec::new();
         for id in &ids {
@@ -786,7 +809,7 @@ impl Document {
             els.push(p.el.clone());
         }
         self.backend.patch(&mut els, prev.as_ref(), &patch);
-        let steps = places
+        let steps: Vec<Step> = places
             .into_iter()
             .zip(els)
             .map(|((parent, index, old), el)| Step {
@@ -796,8 +819,29 @@ impl Document {
                 before: vec![Node::Para(old)],
             })
             .collect();
-        self.run(steps)?;
+        if list_steps.is_empty() {
+            self.run(steps)?;
+        } else {
+            for st in &steps {
+                self.splice(st.parent, st.index, st.before.len(), st.after.clone())?;
+            }
+            list_steps.extend(steps);
+            self.record(list_steps);
+        }
         Ok(EditResult { ids, count: 0 })
+    }
+
+    /// Keep steps already applied as one undoable edit.
+    fn record(&mut self, steps: Vec<Step>) {
+        if steps.is_empty() {
+            return;
+        }
+        self.undo.push(steps);
+        if self.undo.len() > UNDO_LIMIT {
+            self.undo.remove(0);
+        }
+        self.redo.clear();
+        self.dirty = true;
     }
 
     fn plan_set_paras(

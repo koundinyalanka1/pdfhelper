@@ -485,7 +485,8 @@ pub unsafe extern "C" fn word_free_string(ptr: *mut c_char) {
     doc_ffi::free_c_string(ptr)
 }
 
-/// Open a document (DOCX, DOCM, DOTX). `name` gives the file name for its
+/// Open a document (DOCX, DOCM, DOTX, ODT, OTT; RTF, TXT and MD are
+/// imported and save as DOCX). `name` gives the file name for its
 /// extension; NULL uses `path`. Returns a handle, or -1.
 ///
 /// # Safety

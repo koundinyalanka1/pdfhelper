@@ -831,7 +831,7 @@ impl Backend for Docx {
         Ok(t)
     }
 
-    fn page_break_para(&self) -> Element {
+    fn page_break_para(&mut self) -> Element {
         fragment(r#"<w:p><w:r><w:br w:type="page"/></w:r></w:p>"#, &self.w)
     }
 

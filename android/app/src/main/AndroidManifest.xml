@@ -153,6 +153,10 @@
                 <data android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.template"/>
                 <data android:mimeType="application/vnd.ms-word.document.macroEnabled.12"/>
                 <data android:mimeType="application/vnd.ms-word.template.macroEnabled.12"/>
+                <data android:mimeType="application/vnd.oasis.opendocument.text"/>
+                <data android:mimeType="application/vnd.oasis.opendocument.text-template"/>
+                <data android:mimeType="application/rtf"/>
+                <data android:mimeType="text/rtf"/>
             </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.VIEW"/>
@@ -162,6 +166,8 @@
                 <data android:pathPattern=".*\\.docx"/>
                 <data android:pathPattern=".*\\.docm"/>
                 <data android:pathPattern=".*\\.dotx"/>
+                <data android:pathPattern=".*\\.odt"/>
+                <data android:pathPattern=".*\\.rtf"/>
             </intent-filter>
         </activity-alias>
 

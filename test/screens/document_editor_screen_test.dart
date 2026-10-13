@@ -72,7 +72,8 @@ void main() {
   }
 
   ParaController editor(WidgetTester tester) =>
-      tester.widget<TextField>(find.byType(TextField)).controller! as ParaController;
+      tester.widget<TextField>(find.byType(TextField)).controller!
+          as ParaController;
 
   testWidgets('says why when the file cannot be opened', (tester) async {
     await tester.pumpWidget(
@@ -82,7 +83,9 @@ void main() {
     expect(find.text('Could not open missing.docx'), findsOneWidget);
   }, skip: !available);
 
-  testWidgets('edits a paragraph, splits it with Enter and saves', (tester) async {
+  testWidgets('edits a paragraph, splits it with Enter and saves', (
+    tester,
+  ) async {
     late String path;
     await tester.runAsync(() async => path = await makeLetter());
     await tester.pumpWidget(app(DocumentEditorScreen(path: path)));
@@ -130,33 +133,45 @@ void main() {
     expect(bold, isTrue);
   }, skip: !available);
 
-  testWidgets('backspace at the start joins paragraphs; undo splits them again', (tester) async {
-    late String path;
-    await tester.runAsync(() async => path = await makeLetter());
-    await tester.pumpWidget(app(DocumentEditorScreen(path: path)));
-    await flush(tester);
+  testWidgets(
+    'backspace at the start joins paragraphs; undo splits them again',
+    (tester) async {
+      late String path;
+      await tester.runAsync(() async => path = await makeLetter());
+      await tester.pumpWidget(app(DocumentEditorScreen(path: path)));
+      await flush(tester);
 
-    await tester.tap(find.textContaining('Hello world', findRichText: true));
-    await tester.pump();
-    final c = editor(tester);
-    c.select(0);
-    // A soft keyboard's backspace deletes the character before the cursor.
-    final v = c.value;
-    c.value = TextEditingValue(
-      text: v.text.substring(1),
-      selection: const TextSelection.collapsed(offset: 0),
-    );
-    await flush(tester, rounds: 4);
-    expect(editor(tester).plain, 'Dear Sir,Hello world');
-    expect(editor(tester).modelSelection.start, 9);
+      await tester.tap(find.textContaining('Hello world', findRichText: true));
+      await tester.pump();
+      final c = editor(tester);
+      c.select(0);
+      // A soft keyboard's backspace deletes the character before the cursor.
+      final v = c.value;
+      c.value = TextEditingValue(
+        text: v.text.substring(1),
+        selection: const TextSelection.collapsed(offset: 0),
+      );
+      await flush(tester, rounds: 4);
+      expect(editor(tester).plain, 'Dear Sir,Hello world');
+      expect(editor(tester).modelSelection.start, 9);
 
-    await tester.tap(find.byTooltip('Undo'));
-    await flush(tester, rounds: 4);
-    expect(find.textContaining('Hello world', findRichText: true), findsOneWidget);
-    expect(find.textContaining('Dear Sir,', findRichText: true), findsOneWidget);
-  }, skip: !available);
+      await tester.tap(find.byTooltip('Undo'));
+      await flush(tester, rounds: 4);
+      expect(
+        find.textContaining('Hello world', findRichText: true),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('Dear Sir,', findRichText: true),
+        findsOneWidget,
+      );
+    },
+    skip: !available,
+  );
 
-  testWidgets('a new document starts editing its first paragraph', (tester) async {
+  testWidgets('a new document starts editing its first paragraph', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       app(DocumentEditorScreen(path: '${root.path}/new.docx', isNew: true)),
     );
@@ -168,7 +183,43 @@ void main() {
     await tester.tap(find.text('Save'));
     await flush(tester);
     late List<String> paras;
-    await tester.runAsync(() async => paras = await paragraphsOf('${root.path}/new.docx'));
+    await tester.runAsync(
+      () async => paras = await paragraphsOf('${root.path}/new.docx'),
+    );
     expect(paras, ['Shopping list']);
+  }, skip: !available);
+
+  testWidgets('an RTF file is edited and saved as a Word document', (
+    tester,
+  ) async {
+    final path = '${root.path}/memo.rtf';
+    File(path).writeAsStringSync(
+      r'{\rtf1\ansi{\fonttbl{\f0 Arial;}}\pard Hello from {\b RTF}\par}',
+    );
+    await tester.pumpWidget(app(DocumentEditorScreen(path: path)));
+    await flush(tester);
+    expect(find.text('RTF'), findsOneWidget);
+    expect(
+      find.text('This file will be saved as a Word document (.docx).'),
+      findsOneWidget,
+    );
+    await tester.tap(find.textContaining('Hello from', findRichText: true));
+    await tester.pump();
+    editor(tester).insertText('!');
+    await tester.pump();
+    expect(find.text('RTF · Edited'), findsOneWidget);
+    await tester.tap(find.text('Save'));
+    await flush(tester);
+    final saved = File('${root.path}/documents/Edited/memo.docx');
+    expect(
+      saved.existsSync(),
+      isTrue,
+      reason: Directory(root.path).listSync(recursive: true).join('\n'),
+    );
+    late List<String> paras;
+    await tester.runAsync(() async => paras = await paragraphsOf(saved.path));
+    expect(paras, ['Hello from RTF!']);
+    // The original is left as it was.
+    expect(File(path).readAsStringSync(), contains('Hello from'));
   }, skip: !available);
 }

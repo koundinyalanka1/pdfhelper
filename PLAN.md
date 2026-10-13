@@ -7,7 +7,7 @@ who does real office work on a phone instead of a laptop.
 This file is the plan and the progress record. It is updated as work lands.
 See the [progress log](#progress-log) at the end.
 
-Last updated: 2026-10-13 (phases 0-3 done; phase 4: Word DOCX done, ODT and RTF next).
+Last updated: 2026-10-13 (phases 0-4 done).
 
 ## 1. What "done" looks like
 
@@ -356,7 +356,7 @@ Status: `[ ]` not started · `[~]` in progress · `[x]` done.
 | 1 | Shared foundation (`doc_zip`, `doc_xml`, `doc_encoding`); scaffolding for the four libraries; build script and Android preflight | [x] |
 | 2 | Text library and text editor; app-wide file kinds, discovery, "Open with" and routing | [x] |
 | 3 | Spreadsheet library v1 (XLSX/CSV/ODS, formulas, number formats) and spreadsheet screen | [x] |
-| 4 | Word library v1 (DOCX/ODT/RTF, in-place editing) and document screen | [~] DOCX done |
+| 4 | Word library v1 (DOCX/ODT/RTF, in-place editing) and document screen | [x] |
 | 5 | Presentation library v1 (PPTX/ODP, scene, text edits, slide operations) and slides screen | [ ] |
 | 6 | Fonts, layout and PDF writer: Word page view and export; sheet and slide export | [ ] |
 | 7 | Legacy binaries through `doc_cfb`: XLS, DOC, PPT and WPS `.et/.wps/.dps` | [ ] |
@@ -859,10 +859,33 @@ match:
     DOCX/DOCM/DOTX, the word engine in the Android preflight. 4 widget
     tests.
 
+- **2026-10-13 (cloud session, later still).** Phase 4 done: ODT, RTF,
+  text and Markdown.
+  - `odt` backend behind the same `Backend` trait: named and automatic
+    styles with inheritance and percentages, ODF white space (collapsed
+    on reading, `text:s` on writing), edited text in spans of new
+    automatic styles (reused when they match), headings as `text:h`,
+    lists as containers (a paragraph joining a list merges with a
+    neighbouring one; leaving it splits the list, the rest continuing
+    its numbering), tables with spans and covered cells, pictures added
+    to `Pictures/` and the manifest, page breaks through a paragraph
+    style.
+  - Markers keep their places through several separate changes in one
+    paragraph: offsets map through a longest common subsequence of the
+    changed middle.
+  - `import`: RTF (code pages and `\u`, fonts, colours, styles with
+    heading names, list tables, tables with merges, PNG/JPEG pictures,
+    hyperlink fields), plain text and Markdown (headings, lists,
+    emphasis, code, links, tables, quotes) become a new `.docx`. The app
+    opens them in the document screen, says so, and saves a new Word
+    file next to the app's other edited files (with its public copy).
+  - 12 Rust tests; files written were checked in LibreOffice.
+  - "Open with" for ODT/OTT/RTF; 5 widget tests.
+
 ## Next steps (for the next session)
 
-1. Phase 4 (Word): ODT in place and RTF import in `word_core` (a second
-   backend behind `backend::Backend`), then "Open with" for them.
-2. Phase 5 (slides), then phase 6 (layout and PDF export).
+1. Phase 5 (slides): `packages/flutter_slide_core` (PPTX in place, then
+   ODP), its FFI and Dart API, and the slides screen.
+2. Phase 6 (layout and PDF export).
 3. Run the office corpus sweep (`download_office_corpus.py` needs
    `GITHUB_TOKEN`), and check saved files in real Excel on the Mac.

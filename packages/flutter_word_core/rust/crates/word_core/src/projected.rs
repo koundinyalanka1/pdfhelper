@@ -143,14 +143,19 @@ pub fn edit_text(inlines: &[InlineEdit], objects: &Objects) -> String {
     s
 }
 
-/// Maps offsets in a paragraph's old text to its new text: positions before
-/// and after the changed stretch move with their characters; positions
-/// inside it go to its start.
+/// Maps offsets in a paragraph's old text to its new text: positions in
+/// text that stayed move with it; positions in text that went go to where
+/// the change is. Unchanged text is found by a longest common subsequence
+/// of the changed middle (after the common start and end), so several
+/// separate changes (replace all) each keep the markers around them.
 pub struct OffsetMap {
-    prefix: usize,
-    old_suffix_start: usize,
-    delta: isize,
+    /// Runs of unchanged text: old start, new start, length (UTF-16).
+    runs: Vec<(usize, usize, usize)>,
 }
+
+/// Above this many cells the middle is not compared character by
+/// character.
+const LCS_LIMIT: usize = 4_000_000;
 
 impl OffsetMap {
     pub fn new(old: &str, new: &str) -> OffsetMap {
@@ -165,22 +170,74 @@ impl OffsetMap {
             .take(max_suffix)
             .take_while(|(x, y)| x == y)
             .count();
-        OffsetMap {
-            prefix,
-            old_suffix_start: a.len() - suffix,
-            delta: b.len() as isize - a.len() as isize,
+        let mut runs = vec![(0, 0, prefix)];
+        let am = &a[prefix..a.len() - suffix];
+        let bm = &b[prefix..b.len() - suffix];
+        if !am.is_empty() && !bm.is_empty() && am.len() * bm.len() <= LCS_LIMIT {
+            for (i, j, len) in lcs_runs(am, bm) {
+                runs.push((prefix + i, prefix + j, len));
+            }
         }
+        runs.push((a.len() - suffix, b.len() - suffix, suffix));
+        OffsetMap { runs }
     }
 
     pub fn map(&self, off: usize) -> usize {
-        if off <= self.prefix {
-            off
-        } else if off >= self.old_suffix_start {
-            (off as isize + self.delta).max(0) as usize
-        } else {
-            self.prefix
+        for &(o, n, len) in &self.runs {
+            if off >= o && off <= o + len {
+                return n + (off - o);
+            }
+        }
+        // In text that went: where the change is.
+        self.runs
+            .iter()
+            .filter(|(o, _, len)| o + len <= off)
+            .map(|(_, n, len)| n + len)
+            .max()
+            .unwrap_or(0)
+    }
+}
+
+/// Runs common to `a` and `b` (start in a, start in b, length), in order.
+fn lcs_runs(a: &[u16], b: &[u16]) -> Vec<(usize, usize, usize)> {
+    let (n, m) = (a.len(), b.len());
+    // Lengths of common subsequences of suffixes, one row at a time; the
+    // choices are kept to walk back.
+    let mut next = vec![0u32; m + 1];
+    let mut cur = vec![0u32; m + 1];
+    let mut take = vec![0u8; n * m];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            if a[i] == b[j] {
+                cur[j] = next[j + 1] + 1;
+                take[i * m + j] = 1;
+            } else if next[j] >= cur[j + 1] {
+                cur[j] = next[j];
+                take[i * m + j] = 2;
+            } else {
+                cur[j] = cur[j + 1];
+                take[i * m + j] = 3;
+            }
+        }
+        std::mem::swap(&mut next, &mut cur);
+    }
+    let mut runs: Vec<(usize, usize, usize)> = Vec::new();
+    let (mut i, mut j) = (0, 0);
+    while i < n && j < m {
+        match take[i * m + j] {
+            1 => {
+                match runs.last_mut() {
+                    Some((ri, rj, len)) if *ri + *len == i && *rj + *len == j => *len += 1,
+                    _ => runs.push((i, j, 1)),
+                }
+                i += 1;
+                j += 1;
+            }
+            2 => i += 1,
+            _ => j += 1,
         }
     }
+    runs
 }
 
 /// Merge text with the previous inline when it looks the same.
@@ -293,5 +350,9 @@ mod tests {
         assert_eq!(m.map(3), 2);
         assert_eq!(m.map(4), 2);
         assert_eq!(m.map(6), 4);
+        // Two separate changes: text between them keeps its markers.
+        let m = OffsetMap::new("Plain bold and spaced end", "Plain! bold and spaced end BOLD");
+        assert_eq!(m.map(21), 22);
+        assert_eq!(m.map(25), 26);
     }
 }
