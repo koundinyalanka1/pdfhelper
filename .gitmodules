@@ -10,3 +10,6 @@
 [submodule "packages/flutter_word_core"]
 	path = packages/flutter_word_core
 	url = https://github.com/koundinyalanka1/flutter_word_core.git
+[submodule "packages/flutter_slide_core"]
+	path = packages/flutter_slide_core
+	url = https://github.com/koundinyalanka1/flutter_slide_core.git

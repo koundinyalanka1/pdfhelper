@@ -889,10 +889,40 @@ match:
   submodule at `packages/flutter_word_core`. The slide engine follows when
   phase 5 is done, `doc_common` when its phase 6 and 7 crates land.
 
+- **2026-10-13 (phase 5, the engine).** `packages/flutter_slide_core`, now
+  in its own repository, `koundinyalanka1/flutter_slide_core` (a submodule,
+  moved early at the owner's request):
+  - `slide_core` reads a PowerPoint deck (`.pptx`, `.pptm`, `.potx`,
+    `.ppsx`, told apart by the main part's content type) into scenes:
+    master and layout decoration behind the slide's own shapes,
+    placeholder inheritance (slide, layout by index or type, master),
+    theme colours with their modifiers, theme fill and line styles,
+    about 80 preset shapes and custom geometry with its guide formulas,
+    gradients, pictures with crops, groups, tables with the default
+    table style, SmartArt from its saved drawing, and text with the whole
+    list-style cascade (autofit scale, bullets and automatic numbering;
+    Wingdings and Symbol bullets become Unicode).
+  - Edits: shape text (unchanged paragraphs kept, changed ones rebuilt
+    with each character's original run properties), whole-shape
+    formatting, new text boxes, shapes and pictures, delete and move or
+    resize, new slides from a layout, duplicate, delete, move and hide
+    slides, speaker notes (a notes slide is made when missing). Undo and
+    redo through copy-on-write state; saving writes the state into a fresh
+    copy of the original package, other parts byte for byte.
+  - A built-in 16:9 template for new decks (six layouts, a notes master),
+    checked in python-pptx and LibreOffice.
+  - `slide_ffi` (`slide_*`), the Dart API (`SlideCore`, `SlideDeck`,
+    scene models); 8 Rust tests and 2 Dart tests.
+  - Still to do in phase 5: the slides screen and app wiring, then ODP.
+    Charts draw as a placeholder box until phase 6.
+
 ## Next steps (for the next session)
 
-1. Phase 5 (slides): `packages/flutter_slide_core` (PPTX in place, then
-   ODP), its FFI and Dart API, and the slides screen.
+1. Phase 5 (slides): the slides screen (a painter for scenes, the slide
+   strip, select, move and resize, the text sheet, new slides, shapes and
+   pictures, notes, present mode, save and share) and its app wiring
+   (`DocKind.slides.canOpen`, router, "New presentation", Android "Open
+   with", `verifyEngines` and `check_android_native.py`); then ODP.
 2. Phase 6 (layout and PDF export).
 3. Run the office corpus sweep (`download_office_corpus.py` needs
    `GITHUB_TOKEN`), and check saved files in real Excel on the Mac.

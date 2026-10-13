@@ -42,8 +42,9 @@ whenever work lands.
     branches.
   - Commit messages are one plain imperative sentence that says what the
     change does for the user (see `git log`), without a type prefix.
-  - The PDF, text, sheet and word engines are git submodules. Commit and
-    push inside them first, then commit the updated gitlink in the app.
+  - The PDF, text, sheet, word and slide engines are git submodules.
+    Commit and push inside them first, then commit the updated gitlink in
+    the app.
   - Each package gets its own GitHub repository (`koundinyalanka1/<package>`)
     and becomes a submodule of the app once its phase is done. Until then it
     lives in the app's tree. To move one: `git subtree split` its history
@@ -78,6 +79,7 @@ whenever work lands.
 | `packages/flutter_text_core` | Text engine (`text_core`, `text_ffi`, Dart `TextCore`) |
 | `packages/flutter_sheet_core` | Spreadsheet engine (`sheet_core`, `sheet_ffi`, Dart `SheetCore`; `cargo run --example sheetcli` tries real files) |
 | `packages/flutter_word_core` | Word-processing engine (git submodule, a private repository): `word_core`, `word_ffi`, Dart `WordCore`; DOCX and ODT in place, RTF/TXT/MD imported; `cargo run --example wordcli` tries real files |
+| `packages/flutter_slide_core` | Presentation engine (git submodule, its own repository): `slide_core`, `slide_ffi`, Dart `SlideCore`; PowerPoint decks as scenes to draw, edited in place; `cargo run --example slidecli` tries real files |
 | `android/app/src/main/kotlin/...` | "Open with" resolution (`MainActivity`), public saves (`PublicPdfExporter`) |
 | `scripts/build_engines.sh` | Builds and tests the per-format engines |
 | `scripts/build_pdf_core.sh` | Builds and tests the PDF engine |
