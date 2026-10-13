@@ -610,14 +610,17 @@ void main() {
     });
 
     testWidgets('a kind without an editor offers another app', (tester) async {
-      seed('Deck.pptx', body: 'PK');
+      seed('Old talk.ppt', body: 'old');
       await settle(tester);
 
-      await tester.tap(find.text('Deck'));
+      await tester.tap(find.text('Old talk'));
       await flush(tester);
       await tester.pumpAndSettle();
       expect(find.text('Open with another app'), findsOneWidget);
-      expect(find.textContaining('Opening PowerPoint files'), findsOneWidget);
+      expect(
+        find.textContaining('cannot open this PowerPoint format (.ppt) yet'),
+        findsOneWidget,
+      );
     });
 
     testWidgets('PDF-only actions are not offered for other kinds', (

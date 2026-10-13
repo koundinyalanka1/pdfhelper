@@ -66,7 +66,11 @@ enum DocKind {
   /// Whether DocHelper has a screen for this kind yet. Kinds without one are
   /// still listed, and offer "Open with another app".
   bool get canOpen => switch (this) {
-    DocKind.pdf || DocKind.text || DocKind.sheet || DocKind.word => true,
+    DocKind.pdf ||
+    DocKind.text ||
+    DocKind.sheet ||
+    DocKind.word ||
+    DocKind.slides => true,
     _ => false,
   };
 
@@ -80,6 +84,10 @@ enum DocKind {
     'docx', 'docm', 'dotx', 'dotm', 'odt', 'ott', 'rtf',
   };
 
+  static const Set<String> _openableSlideExtensions = {
+    'pptx', 'pptm', 'ppsx', 'ppsm', 'potx', 'potm',
+  };
+
   /// Whether DocHelper can open this particular file.
   static bool canOpenPath(String path) {
     final kind = ofPath(path);
@@ -87,6 +95,7 @@ enum DocKind {
     return switch (kind) {
       DocKind.sheet => _openableSheetExtensions.contains(extensionOf(path)),
       DocKind.word => _openableWordExtensions.contains(extensionOf(path)),
+      DocKind.slides => _openableSlideExtensions.contains(extensionOf(path)),
       _ => true,
     };
   }

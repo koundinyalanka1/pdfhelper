@@ -169,6 +169,28 @@
                 <data android:pathPattern=".*\\.odt"/>
                 <data android:pathPattern=".*\\.rtf"/>
             </intent-filter>
+            <!-- PowerPoint presentations. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.presentationml.presentation"/>
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.presentationml.slideshow"/>
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.presentationml.template"/>
+                <data android:mimeType="application/vnd.ms-powerpoint.presentation.macroEnabled.12"/>
+                <data android:mimeType="application/vnd.ms-powerpoint.slideshow.macroEnabled.12"/>
+                <data android:mimeType="application/vnd.ms-powerpoint.template.macroEnabled.12"/>
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:scheme="file"/>
+                <data android:host="*"/>
+                <data android:pathPattern=".*\\.pptx"/>
+                <data android:pathPattern=".*\\.pptm"/>
+                <data android:pathPattern=".*\\.ppsx"/>
+                <data android:pathPattern=".*\\.potx"/>
+            </intent-filter>
         </activity-alias>
 
         <meta-data

@@ -30,6 +30,7 @@ import 'metadata_screen.dart';
 import 'organize_pages_screen.dart';
 import 'protect_screen.dart';
 import 'sheet_editor_screen.dart';
+import 'slide_editor_screen.dart';
 
 /// Every document on the device, on one screen: PDFs, Word, Excel,
 /// PowerPoint and text files.
@@ -490,80 +491,127 @@ class _LibraryScreenState extends State<LibraryScreen>
     }
   }
 
+  Future<void> _newPresentation() async {
+    final now = DateTime.now();
+    final name = await askPdfName(
+      context: context,
+      initialName: 'Presentation ${formatLibraryDate(now)}',
+      title: 'Name your presentation',
+      confirmLabel: 'Create',
+      accent: DocKind.slides.color,
+      extension: '.pptx',
+    );
+    if (name == null || !mounted) return;
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      var file = File('${dir.path}/$name.pptx');
+      for (var n = 2; await file.exists(); n++) {
+        file = File('${dir.path}/$name ($n).pptx');
+      }
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => SlideEditorScreen(path: file.path, isNew: true),
+        ),
+      );
+      if (mounted) await _refresh(prune: true);
+    } catch (e) {
+      _snack('Could not create the presentation: $e');
+    }
+  }
+
   Future<void> _showAddSheet() {
     return showModalBottomSheet<void>(
       context: context,
+      isScrollControlled: true,
       backgroundColor: _colors.cardBackground,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 8),
-            ListTile(
-              leading: Icon(DocKind.text.icon, color: DocKind.text.color),
-              title: Text(
-                'New text file',
-                style: TextStyle(color: _colors.textPrimary),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 8),
+              ListTile(
+                leading: Icon(DocKind.text.icon, color: DocKind.text.color),
+                title: Text(
+                  'New text file',
+                  style: TextStyle(color: _colors.textPrimary),
+                ),
+                subtitle: Text(
+                  'Notes, lists, anything typed',
+                  style: TextStyle(color: _colors.textTertiary),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _newTextFile();
+                },
               ),
-              subtitle: Text(
-                'Notes, lists, anything typed',
-                style: TextStyle(color: _colors.textTertiary),
+              ListTile(
+                leading: Icon(DocKind.word.icon, color: DocKind.word.color),
+                title: Text(
+                  'New document',
+                  style: TextStyle(color: _colors.textPrimary),
+                ),
+                subtitle: Text(
+                  'Letters, applications, reports: a Word document',
+                  style: TextStyle(color: _colors.textTertiary),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _newDocument();
+                },
               ),
-              onTap: () {
-                Navigator.pop(ctx);
-                _newTextFile();
-              },
-            ),
-            ListTile(
-              leading: Icon(DocKind.word.icon, color: DocKind.word.color),
-              title: Text(
-                'New document',
-                style: TextStyle(color: _colors.textPrimary),
+              ListTile(
+                leading: Icon(DocKind.sheet.icon, color: DocKind.sheet.color),
+                title: Text(
+                  'New spreadsheet',
+                  style: TextStyle(color: _colors.textPrimary),
+                ),
+                subtitle: Text(
+                  'Accounts, lists, bills: rows and columns with totals',
+                  style: TextStyle(color: _colors.textTertiary),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _newSpreadsheet();
+                },
               ),
-              subtitle: Text(
-                'Letters, applications, reports: a Word document',
-                style: TextStyle(color: _colors.textTertiary),
+              ListTile(
+                leading: Icon(DocKind.slides.icon, color: DocKind.slides.color),
+                title: Text(
+                  'New presentation',
+                  style: TextStyle(color: _colors.textPrimary),
+                ),
+                subtitle: Text(
+                  'Slides to show: titles, points, pictures and shapes',
+                  style: TextStyle(color: _colors.textTertiary),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _newPresentation();
+                },
               ),
-              onTap: () {
-                Navigator.pop(ctx);
-                _newDocument();
-              },
-            ),
-            ListTile(
-              leading: Icon(DocKind.sheet.icon, color: DocKind.sheet.color),
-              title: Text(
-                'New spreadsheet',
-                style: TextStyle(color: _colors.textPrimary),
+              ListTile(
+                leading: const Icon(Icons.file_open_rounded, color: _accent),
+                title: Text(
+                  'Import a file',
+                  style: TextStyle(color: _colors.textPrimary),
+                ),
+                subtitle: Text(
+                  'Add a PDF, Word, Excel, PowerPoint or text file',
+                  style: TextStyle(color: _colors.textTertiary),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _import();
+                },
               ),
-              subtitle: Text(
-                'Accounts, lists, bills: rows and columns with totals',
-                style: TextStyle(color: _colors.textTertiary),
-              ),
-              onTap: () {
-                Navigator.pop(ctx);
-                _newSpreadsheet();
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.file_open_rounded, color: _accent),
-              title: Text(
-                'Import a file',
-                style: TextStyle(color: _colors.textPrimary),
-              ),
-              subtitle: Text(
-                'Add a PDF, Word, Excel, PowerPoint or text file',
-                style: TextStyle(color: _colors.textTertiary),
-              ),
-              onTap: () {
-                Navigator.pop(ctx);
-                _import();
-              },
-            ),
-            const SizedBox(height: 8),
-          ],
+              const SizedBox(height: 8),
+            ],
+          ),
         ),
       ),
     );

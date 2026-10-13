@@ -110,8 +110,9 @@ class _DocumentEditorScreenState extends State<DocumentEditorScreen> {
     _findController.dispose();
     _replaceController.dispose();
     final dir = _imageDir;
-    if (dir != null)
+    if (dir != null) {
       unawaited(dir.delete(recursive: true).catchError((_) => dir));
+    }
     super.dispose();
   }
 
@@ -774,8 +775,9 @@ class _DocumentEditorScreenState extends State<DocumentEditorScreen> {
       ).create(recursive: true);
       final path = '${dir.path}/$id';
       final ext = doc.saveImage(id, path);
-      if (!const ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp'].contains(ext))
+      if (!const ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp'].contains(ext)) {
         return;
+      }
       if (mounted) setState(() => _images[id] = File(path));
     } catch (_) {
       // Shown as a placeholder.
@@ -1147,8 +1149,9 @@ class _DocumentEditorScreenState extends State<DocumentEditorScreen> {
   }
 
   Widget _buildBody() {
-    if (_loading)
+    if (_loading) {
       return const Center(child: CircularProgressIndicator(color: _accent));
+    }
     final error = _error;
     if (error != null) {
       return Center(
@@ -1271,8 +1274,9 @@ class _DocumentEditorScreenState extends State<DocumentEditorScreen> {
     for (final i in p.inlines) {
       switch (i) {
         case TextInline(:final text):
-          if (viewOffset <= view + text.length)
+          if (viewOffset <= view + text.length) {
             return model + (viewOffset - view);
+          }
           view += text.length;
           model += text.length;
         case ObjectInline(:final object):
@@ -1323,8 +1327,9 @@ class _DocumentEditorScreenState extends State<DocumentEditorScreen> {
           final local = para.globalToLocal(details.globalPosition);
           var offset = para.getPositionForOffset(local).offset;
           // The first-line indent is a spacer at the start.
-          if (p.list == null && p.style.firstLine > 0)
+          if (p.list == null && p.style.firstLine > 0) {
             offset = math.max(0, offset - 1);
+          }
           cursor = _viewToModel(p, offset);
         }
         _activate(p, cursor: cursor);

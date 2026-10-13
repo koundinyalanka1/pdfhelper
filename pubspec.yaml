@@ -28,6 +28,8 @@ dependencies:
     path: packages/flutter_text_core
   flutter_sheet_core:
     path: packages/flutter_sheet_core
+  flutter_slide_core:
+    path: packages/flutter_slide_core
   flutter_word_core:
     path: packages/flutter_word_core
 

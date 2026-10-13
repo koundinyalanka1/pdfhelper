@@ -304,12 +304,14 @@ class MainActivity : FlutterActivity() {
             "pdf", "txt", "text", "log", "md", "markdown", "json",
             "xlsx", "xlsm", "xltx", "xltm", "ods", "ots", "csv", "tsv",
             "docx", "docm", "dotx", "dotm", "odt", "ott", "rtf",
+            "pptx", "pptm", "ppsx", "ppsm", "potx", "potm",
         )
 
         /** Formats that are ZIP packages, which must start like one. */
         private val ZIP_EXTENSIONS = setOf(
             "xlsx", "xlsm", "xltx", "xltm", "ods", "ots",
             "docx", "docm", "dotx", "dotm", "odt", "ott",
+            "pptx", "pptm", "ppsx", "ppsm", "potx", "potm",
         )
 
         private val MIME_EXTENSIONS = mapOf(
@@ -328,6 +330,12 @@ class MainActivity : FlutterActivity() {
             "application/vnd.ms-word.template.macroenabled.12" to "dotm",
             "application/vnd.oasis.opendocument.text" to "odt",
             "application/vnd.oasis.opendocument.text-template" to "ott",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation" to "pptx",
+            "application/vnd.openxmlformats-officedocument.presentationml.slideshow" to "ppsx",
+            "application/vnd.openxmlformats-officedocument.presentationml.template" to "potx",
+            "application/vnd.ms-powerpoint.presentation.macroenabled.12" to "pptm",
+            "application/vnd.ms-powerpoint.slideshow.macroenabled.12" to "ppsm",
+            "application/vnd.ms-powerpoint.template.macroenabled.12" to "potm",
             "application/rtf" to "rtf",
             "text/rtf" to "rtf",
             "text/csv" to "csv",

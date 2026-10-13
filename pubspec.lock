@@ -393,6 +393,13 @@ packages:
       relative: true
     source: path
     version: "0.1.0"
+  flutter_slide_core:
+    dependency: "direct main"
+    description:
+      path: "packages/flutter_slide_core"
+      relative: true
+    source: path
+    version: "0.1.0"
   flutter_test:
     dependency: "direct dev"
     description: flutter
