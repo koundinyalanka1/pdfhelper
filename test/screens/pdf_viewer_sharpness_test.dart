@@ -205,8 +205,9 @@ void main() {
 
     final tile = find.byKey(const ValueKey('pdf-zoom-tile'));
     expect(tile, findsWidgets);
-    final widget = tester.widget<Image>(tile.first);
-    final (width, height) = pngSize((widget.image as MemoryImage).bytes);
+    // Raw pixels made straight into an image, with no PNG in between.
+    final widget = tester.widget<RawImage>(tile.first);
+    final (width, height) = (widget.image!.width, widget.image!.height);
     // One tile pixel per device pixel at 3x.
     final size = tester.getSize(tile.first);
     final scale = 3 * tester.view.devicePixelRatio;
@@ -214,12 +215,34 @@ void main() {
     expect(height, closeTo(size.height * scale, 1));
     expect(widget.filterQuality, FilterQuality.none);
     // Only about a screenful, not the whole page at 3x.
-    final pageWidth = tester.getSize(find.byKey(ValueKey('${pdf.path}#0'))).width;
+    final pageWidth = tester
+        .getSize(find.byKey(ValueKey('${pdf.path}#0')))
+        .width;
     expect(size.width, lessThan(pageWidth));
 
     zoom.value = Matrix4.identity();
     await tester.pump();
     await settle(tester, rounds: 4);
     expect(find.byKey(const ValueKey('pdf-zoom-tile')), findsNothing);
+  });
+
+  testWidgets('a double-tap zoom asks for its sharp region the moment it '
+      'settles', (tester) async {
+    await open(tester);
+    final center = tester.getCenter(find.byKey(ValueKey('${pdf.path}#0')));
+    await tester.tapAt(center);
+    await tester.pump(const Duration(milliseconds: 60));
+    await tester.tapAt(center);
+    // The 200 ms zoom animation, and none of the 150 ms wait that follows a
+    // pinch: from here only real time passes, for the render itself.
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 210));
+    for (var i = 0; i < 20; i++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 50)),
+      );
+      await tester.pump(Duration.zero);
+    }
+    expect(find.byKey(const ValueKey('pdf-zoom-tile')), findsWidgets);
   });
 }

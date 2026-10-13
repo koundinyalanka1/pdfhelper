@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
@@ -23,6 +24,7 @@ import '../utils/error_logger.dart';
 import '../utils/file_naming.dart';
 import '../widgets/password_prompt.dart';
 import '../widgets/banner_ad_widget.dart';
+import '../widgets/device_pixel_snap.dart';
 import '../widgets/pdf_name_dialog.dart';
 import '../widgets/pdf_result_dialog.dart';
 import '../widgets/pdf_text_selection_overlay.dart';
@@ -117,6 +119,11 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
   /// Current scale, watched by each visible page so it can re-rasterize
   /// sharper instead of showing a magnified thumbnail.
   final ValueNotifier<double> _zoom = ValueNotifier<double>(1.0);
+
+  /// Fires when a double-tap zoom has finished animating: where it ends is
+  /// known, so pages redraw their visible part at once instead of waiting to
+  /// see whether the view keeps moving, as they must after a pinch.
+  final ValueNotifier<int> _zoomSettled = ValueNotifier<int>(0);
 
   /// Anything that moves what is on screen — zoom, pan or scroll — so each
   /// page can redraw its visible part sharp once the movement stops.
@@ -231,6 +238,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
     _zoomController.removeListener(_onZoomChanged);
     _zoomController.dispose();
     _zoom.dispose();
+    _zoomSettled.dispose();
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     super.dispose();
@@ -363,6 +371,9 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
       end: target,
     ).animate(CurvedAnimation(parent: controller, curve: Curves.easeOutCubic));
     animation.addListener(() => _zoomController.value = animation.value);
+    controller.addStatusListener((status) {
+      if (status == AnimationStatus.completed) _zoomSettled.value++;
+    });
     controller.forward();
   }
 
@@ -1756,6 +1767,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
               isDark: _colors.isDark,
               zoom: _zoom,
               viewportChanges: _viewportChanges,
+              zoomSettled: _zoomSettled,
               viewport: _viewportRect,
               textSelectionController: _textSelectionController,
               search: _search,
@@ -1799,6 +1811,7 @@ class _PageView extends StatefulWidget {
     required this.isDark,
     required this.zoom,
     required this.viewportChanges,
+    required this.zoomSettled,
     required this.viewport,
     required this.onAspectRatio,
     required this.onWarnings,
@@ -1826,6 +1839,10 @@ class _PageView extends StatefulWidget {
   /// zoomed, the page then redraws the part of itself on screen at the zoom
   /// it is shown at.
   final Listenable viewportChanges;
+
+  /// Fires when an animated zoom has come to rest, so the page redraws its
+  /// visible part without the wait that follows other movement.
+  final Listenable zoomSettled;
 
   /// The viewer's visible area in global coordinates, or null before layout.
   final Rect? Function() viewport;
@@ -1855,6 +1872,7 @@ class _PageView extends StatefulWidget {
 class _PageViewState extends State<_PageView> {
   Uint8List? _bytes;
   double? _aspectRatio;
+
   /// Pixel width the page bitmap was rendered at.
   int _renderedWidth = 0;
   bool _isRendering = false;
@@ -1875,7 +1893,7 @@ class _PageViewState extends State<_PageView> {
   /// far the reader zooms in. Rendering the whole page that large instead
   /// would take 120 MB at 4x for an A4 page. [rect] is in the page's own
   /// logical pixels.
-  ({Uint8List bytes, Rect rect, double zoom})? _tile;
+  ({ui.Image image, Rect rect, double zoom})? _tile;
 
   /// Whether [_tile] was rendered for the zoom now shown, so it lies pixel
   /// for pixel on the screen.
@@ -1894,6 +1912,7 @@ class _PageViewState extends State<_PageView> {
   void initState() {
     super.initState();
     widget.viewportChanges.addListener(_onViewportChanged);
+    widget.zoomSettled.addListener(_onZoomSettled);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _render();
@@ -1907,6 +1926,10 @@ class _PageViewState extends State<_PageView> {
     if (oldWidget.viewportChanges != widget.viewportChanges) {
       oldWidget.viewportChanges.removeListener(_onViewportChanged);
       widget.viewportChanges.addListener(_onViewportChanged);
+    }
+    if (oldWidget.zoomSettled != widget.zoomSettled) {
+      oldWidget.zoomSettled.removeListener(_onZoomSettled);
+      widget.zoomSettled.addListener(_onZoomSettled);
     }
   }
 
@@ -2040,8 +2063,21 @@ class _PageViewState extends State<_PageView> {
   @override
   void dispose() {
     widget.viewportChanges.removeListener(_onViewportChanged);
+    widget.zoomSettled.removeListener(_onZoomSettled);
     _tileTimer?.cancel();
+    _tile?.image.dispose();
     super.dispose();
+  }
+
+  /// Show [tile] instead of the zoom tile shown now. The old one's image is
+  /// let go once the frame that stops drawing it is done; the picture drawing
+  /// it holds a clone of its own.
+  void _replaceTile(({ui.Image image, Rect rect, double zoom})? tile) {
+    final old = _tile;
+    _tile = tile;
+    if (old != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => old.image.dispose());
+    }
   }
 
   /// A zoom, pan or scroll. Once it stops, the part of the page on screen is
@@ -2055,7 +2091,7 @@ class _PageViewState extends State<_PageView> {
       setState(() {
         _zoomed = zoomed;
         _tileAtZoom = tileAtZoom;
-        if (!zoomed) _tile = null;
+        if (!zoomed) _replaceTile(null);
       });
     }
     _tileTimer?.cancel();
@@ -2064,6 +2100,12 @@ class _PageViewState extends State<_PageView> {
     } else {
       _tileRequest++; // whatever is in flight is no longer wanted
     }
+  }
+
+  void _onZoomSettled() {
+    if (!mounted || !_zoomed) return;
+    _tileTimer?.cancel();
+    _refreshTile();
   }
 
   Future<void> _refreshTile() async {
@@ -2122,10 +2164,14 @@ class _PageViewState extends State<_PageView> {
       password: widget.password,
       isWanted: () => mounted && request == _tileRequest,
     );
-    if (!mounted || request != _tileRequest || rendered == null) return;
+    if (rendered == null) return;
+    if (!mounted || request != _tileRequest) {
+      rendered.image.dispose();
+      return;
+    }
     setState(() {
-      _tile = (
-        bytes: rendered.bytes,
+      _replaceTile((
+        image: rendered.image,
         rect: Rect.fromLTWH(
           region.x / region.scale,
           region.y / region.scale,
@@ -2133,7 +2179,7 @@ class _PageViewState extends State<_PageView> {
           region.height / region.scale,
         ),
         zoom: zoom,
-      );
+      ));
       _tileAtZoom = (widget.zoom.value - zoom).abs() < 0.001;
     });
   }
@@ -2228,101 +2274,115 @@ class _PageViewState extends State<_PageView> {
     // page's position nearly always is fractional) softens every glyph edge.
     final exact = _renderedWidth == (width * media.devicePixelRatio).floor();
 
+    // Copied pixel for pixel, the bitmap must also start on a whole device
+    // pixel. The page box, its clip and the selection over it move with it,
+    // by under a pixel, wherever scrolling and zoom put the page.
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      child: Container(
-        key: _pageKey,
-        width: width,
-        height: height,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: widget.isDark ? 0.5 : 0.2),
-              blurRadius: 6,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        clipBehavior: Clip.hardEdge,
-        child: _renderFailed
-            ? Center(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        'Could not display page ${widget.pageIndex + 1}',
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(color: Colors.black54),
-                      ),
-                      TextButton.icon(
-                        onPressed: () => _render(),
-                        icon: const Icon(Icons.refresh),
-                        label: const Text('Retry'),
-                      ),
-                    ],
-                  ),
+      child: SnapToDevicePixels(
+        devicePixelRatio: media.devicePixelRatio,
+        repaint: widget.viewportChanges,
+        child: Container(
+          key: _pageKey,
+          width: width,
+          height: height,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(
+                  alpha: widget.isDark ? 0.5 : 0.2,
                 ),
-              )
-            : _bytes == null
-            ? Center(
-                child: SizedBox(
-                  width: 22,
-                  height: 22,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: Colors.grey.shade400,
-                  ),
-                ),
-              )
-            : Stack(
-                fit: StackFit.expand,
-                children: [
-                  _withTextSelection(
-                    Stack(
-                      fit: StackFit.expand,
+                blurRadius: 6,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          clipBehavior: Clip.hardEdge,
+          child: _renderFailed
+              ? Center(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        // The whole document is magnified by one
-                        // InteractiveViewer above the list, so the page itself
-                        // draws at its natural size, and while zoomed the part
-                        // on screen is redrawn sharp on top of it.
-                        Image.memory(
-                          _bytes!,
-                          scale: exact ? media.devicePixelRatio : 1,
-                          // A bitmap rendered for another width (mid-rotation,
-                          // or a page too long for full resolution) is
-                          // stretched over the page until it is redrawn.
-                          fit: exact ? BoxFit.none : BoxFit.fill,
-                          alignment: Alignment.topLeft,
-                          gaplessPlayback: true,
-                          filterQuality: exact && !_zoomed
-                              ? FilterQuality.none
-                              : FilterQuality.medium,
+                        Text(
+                          'Could not display page ${widget.pageIndex + 1}',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Colors.black54),
                         ),
-                        if (_tile case final tile?)
-                          Positioned.fromRect(
-                            rect: tile.rect,
-                            child: Image.memory(
-                              tile.bytes,
-                              key: const ValueKey('pdf-zoom-tile'),
-                              fit: BoxFit.fill,
-                              gaplessPlayback: true,
-                              // At the zoom it was drawn for it lies pixel for
-                              // pixel on the screen; mid-pinch it is being
-                              // scaled, which filtering keeps smooth.
-                              filterQuality: _tileAtZoom
-                                  ? FilterQuality.none
-                                  : FilterQuality.medium,
-                            ),
-                          ),
+                        TextButton.icon(
+                          onPressed: () => _render(),
+                          icon: const Icon(Icons.refresh),
+                          label: const Text('Retry'),
+                        ),
                       ],
                     ),
                   ),
-                  if (widget.search case final search?) _findHighlights(search),
-                ],
-              ),
+                )
+              : _bytes == null
+              ? Center(
+                  child: SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.grey.shade400,
+                    ),
+                  ),
+                )
+              : Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    _withTextSelection(
+                      Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          // The whole document is magnified by one
+                          // InteractiveViewer above the list, so the page itself
+                          // draws at its natural size, and while zoomed the part
+                          // on screen is redrawn sharp on top of it.
+                          Image.memory(
+                            _bytes!,
+                            scale: exact ? media.devicePixelRatio : 1,
+                            // A bitmap rendered for another width (mid-rotation,
+                            // or a page too long for full resolution) is
+                            // stretched over the page until it is redrawn.
+                            fit: exact ? BoxFit.none : BoxFit.fill,
+                            alignment: Alignment.topLeft,
+                            gaplessPlayback: true,
+                            filterQuality: exact && !_zoomed
+                                ? FilterQuality.none
+                                : FilterQuality.medium,
+                          ),
+                          if (_tile case final tile?)
+                            Positioned.fromRect(
+                              rect: tile.rect,
+                              // The tile's corner falls between device pixels
+                              // at most zooms, so it snaps on its own too.
+                              child: SnapToDevicePixels(
+                                devicePixelRatio: media.devicePixelRatio,
+                                child: RawImage(
+                                  image: tile.image,
+                                  key: const ValueKey('pdf-zoom-tile'),
+                                  fit: BoxFit.fill,
+                                  // At the zoom it was drawn for it lies pixel
+                                  // for pixel on the screen; mid-pinch it is
+                                  // being scaled, which filtering keeps smooth.
+                                  filterQuality: _tileAtZoom
+                                      ? FilterQuality.none
+                                      : FilterQuality.medium,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                    if (widget.search case final search?)
+                      _findHighlights(search),
+                  ],
+                ),
+        ),
       ),
     );
   }

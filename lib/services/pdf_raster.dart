@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:isolate';
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter_pdf_core/flutter_pdf_core.dart';
@@ -16,11 +17,12 @@ import '../utils/error_logger.dart';
 /// renderer stays swappable and so every caller shares one bounded cache —
 /// page bitmaps are by far the largest thing this app holds in memory.
 ///
-/// Everything returns PNG bytes: the native side encodes them, Flutter decodes
+/// Pages come back as PNG bytes: the native side encodes them, Flutter decodes
 /// them off the UI isolate, and the result is a plain `Uint8List` the garbage
-/// collector reclaims on its own. That avoids the manual `ui.Image` lifetime
-/// management a raw-RGBA path would need. `PdfCore.renderPageRgba` is still
-/// there for a future zero-copy texture path.
+/// collector reclaims on its own and a cache can hold compactly. A zoomed-in
+/// region is the exception ([renderRegion]): it is never cached and is shown
+/// the moment it arrives, so it comes as raw pixels made straight into a
+/// `ui.Image`, which its one holder disposes.
 class PdfRaster {
   PdfRaster._();
 
@@ -206,7 +208,11 @@ class PdfRaster {
   /// hundreds of megabytes. Never cached — the next pan or zoom wants a
   /// different region. Null when it cannot be rendered, or when [isWanted]
   /// says the region is stale by the time its turn comes.
-  static Future<PdfRenderedPng?> renderRegion(
+  ///
+  /// The caller owns the image and must dispose it. Raw pixels skip a PNG
+  /// encode and decode that on a phone took longer than drawing a scanned
+  /// page's region; an engine without them falls back to PNG.
+  static Future<PdfRegionImage?> renderRegion(
     String path,
     int pageIndex, {
     required int pageWidth,
@@ -219,8 +225,21 @@ class PdfRaster {
     bool Function()? isWanted,
   }) async {
     try {
-      return await _renders.run(() async {
+      final Object? rendered = await _renders.run(() async {
         if (isWanted != null && !isWanted()) return null;
+        if (PdfCore.canRenderRegionPixels) {
+          return PdfCore.renderPageRegionRgbaWithWarningsAsync(
+            path,
+            pageIndex,
+            pageWidth: pageWidth,
+            pageHeight: pageHeight,
+            x: x,
+            y: y,
+            width: width,
+            height: height,
+            password: password,
+          );
+        }
         return PdfCore.renderPageRegionPngWithWarningsAsync(
           path,
           pageIndex,
@@ -233,9 +252,48 @@ class PdfRaster {
           password: password,
         );
       });
+      // Made into an image after the render has given up its turn.
+      return switch (rendered) {
+        PdfRenderedPage() => PdfRegionImage(
+          await _imageFromPixels(rendered),
+          rendered.warnings,
+        ),
+        PdfRenderedPng() => PdfRegionImage(
+          await _imageFromPng(rendered.bytes),
+          rendered.warnings,
+        ),
+        _ => null,
+      };
     } catch (e) {
       logError('PdfRaster.renderRegion', e);
       return null;
+    }
+  }
+
+  static Future<ui.Image> _imageFromPixels(PdfRenderedPage page) async {
+    final buffer = await ui.ImmutableBuffer.fromUint8List(page.pixels);
+    final descriptor = ui.ImageDescriptor.raw(
+      buffer,
+      width: page.width,
+      height: page.height,
+      pixelFormat: ui.PixelFormat.rgba8888,
+    );
+    try {
+      return await _firstFrame(await descriptor.instantiateCodec());
+    } finally {
+      descriptor.dispose();
+      buffer.dispose();
+    }
+  }
+
+  static Future<ui.Image> _imageFromPng(Uint8List png) async =>
+      _firstFrame(await ui.instantiateImageCodec(png));
+
+  static Future<ui.Image> _firstFrame(ui.Codec codec) async {
+    try {
+      return (await codec.getNextFrame()).image;
+    } finally {
+      codec.dispose();
     }
   }
 
@@ -390,10 +448,7 @@ class PdfRaster {
 
   /// Release one [openDocument]. Never throws: a failure only means the
   /// engine frees the parse later than it could have.
-  static Future<void> closeDocument(
-    String path, {
-    String password = '',
-  }) async {
+  static Future<void> closeDocument(String path, {String password = ''}) async {
     final key = (path: path, password: password);
     final open = _openDocuments[key] ?? 0;
     if (open <= 1) {
@@ -506,7 +561,6 @@ class PdfRaster {
       cachedBytes -= _cache.remove(oldest)!.length;
     }
   }
-
 }
 
 /// A cached render: the page and the pixel box it was fitted into.
@@ -524,4 +578,13 @@ double? _aspectRatioOrNull(String path, int page, String password) {
   } catch (_) {
     return null;
   }
+}
+
+/// A zoomed-in region of a page, ready to draw, and what the renderer had to
+/// skip in it. Whoever holds it disposes [image].
+class PdfRegionImage {
+  PdfRegionImage(this.image, this.warnings);
+
+  final ui.Image image;
+  final List<String> warnings;
 }
