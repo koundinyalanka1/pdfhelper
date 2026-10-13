@@ -16,6 +16,8 @@ scratch; the only dependencies are `flate2` for deflate streams and
 | `doc_font` | TrueType/OpenType faces (and collections): metrics, character maps, widths, `kern` and GPOS pair kerning, subsetting for embedding; `FontBook` indexes font folders by their headers, resolves families with Office substitutes (Calibri to Carlito...) and finds fallbacks for characters a face lacks |
 | `doc_pdf` | A PDF writer: pages of paths, solid and gradient fills, pictures (JPEG passed through, others Flate with soft masks), text in Type 0 font subsets with ToUnicode maps, links; origin at the top left |
 | `doc_layout` | Paragraph layout: faces with fallback per character, kerning, line breaking (spaces, hyphens, ideographs, long words), tabs, list labels, alignment and justification, line spacing (font metrics or PowerPoint's 1.2 em); drawn into `doc_pdf` pages |
+| `doc_cfb` | OLE2 compound files (the container of `.doc`, `.xls`, `.ppt` and WPS binaries): sector chains, the directory tree, the mini stream; every chain checked for loops and bounds |
+| `doc_art` | OfficeArt drawing records inside those files: record walking, shape properties and colours, and stored pictures turned back into PNG, JPEG, BMP, TIFF, EMF and WMF files |
 
 ```bash
 cargo test            # from this directory

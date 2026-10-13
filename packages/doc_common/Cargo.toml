@@ -17,6 +17,7 @@ members = [
   "crates/doc_pdf",
   "crates/doc_layout",
   "crates/doc_cfb",
+  "crates/doc_art",
 ]
 
 [profile.release]
