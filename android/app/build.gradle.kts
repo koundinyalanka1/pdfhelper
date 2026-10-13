@@ -142,7 +142,7 @@ val verifyEngines by tasks.registering {
                 .filter { it.isFile && (it.extension == "rs" || it.name == "Cargo.toml") }
                 .maxOfOrNull { it.lastModified() } ?: 0L
         val sharedNewest = newestSource(shared)
-        for (engine in listOf("text", "sheet")) {
+        for (engine in listOf("text", "sheet", "word")) {
             val pkg = rootProject.file("../packages/flutter_${engine}_core")
             val newest = maxOf(newestSource(pkg.resolve("rust/crates")), sharedNewest)
             for (abi in listOf("arm64-v8a", "armeabi-v7a", "x86_64")) {

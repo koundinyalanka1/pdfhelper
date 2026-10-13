@@ -4,6 +4,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../models/doc_kind.dart';
 import '../providers/theme_provider.dart';
+import '../screens/document_editor_screen.dart';
 import '../screens/pdf_viewer_screen.dart';
 import '../screens/sheet_editor_screen.dart';
 import '../screens/text_editor_screen.dart';
@@ -27,6 +28,7 @@ class DocumentRouter {
       ),
       DocKind.text => TextEditorScreen(path: path, title: name),
       DocKind.sheet => SheetEditorScreen(path: path, title: name),
+      DocKind.word => DocumentEditorScreen(path: path, title: name),
       _ => null,
     };
   }

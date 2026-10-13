@@ -64,10 +64,12 @@ whenever work lands.
 | `lib/services/library_service.dart` | The Files tab's storage sweep (every listed kind), cache and linked copies |
 | `lib/screens/text_editor_screen.dart` | The text editor |
 | `lib/screens/sheet_editor_screen.dart`, `lib/widgets/sheet/` | The spreadsheet screen and its custom-painted grid |
+| `lib/screens/document_editor_screen.dart`, `lib/widgets/word/` | The document screen: reflowing paragraphs and tables, one paragraph edited at a time (`ParaController`) |
 | `packages/flutter_pdf_core` | PDF engine (git submodule; commits its Android/Apple binaries) |
 | `packages/doc_common` | Shared Rust crates: `doc_zip`, `doc_xml`, `doc_encoding`, `doc_opc`, `doc_ffi` |
 | `packages/flutter_text_core` | Text engine (`text_core`, `text_ffi`, Dart `TextCore`) |
 | `packages/flutter_sheet_core` | Spreadsheet engine (`sheet_core`, `sheet_ffi`, Dart `SheetCore`; `cargo run --example sheetcli` tries real files) |
+| `packages/flutter_word_core` | Word-processing engine (`word_core`, `word_ffi`, Dart `WordCore`; `cargo run --example wordcli` tries real files). Lives in this repository for now |
 | `android/app/src/main/kotlin/...` | "Open with" resolution (`MainActivity`), public saves (`PublicPdfExporter`) |
 | `scripts/build_engines.sh` | Builds and tests the per-format engines |
 | `scripts/build_pdf_core.sh` | Builds and tests the PDF engine |
@@ -84,7 +86,7 @@ eval "$(bash scripts/build_engines.sh env)"   # exports *_CORE_LIB_PATH for flut
 flutter analyze
 flutter test                           # the app (about 540 tests)
 (cd packages/flutter_text_core && flutter test)
-bash scripts/build_engines.sh test     # cargo tests: doc_common, text, sheet
+bash scripts/build_engines.sh test     # cargo tests: doc_common, text, sheet, word
 (cd packages/flutter_pdf_core/rust && cargo test --workspace --release)   # PDF engine, about 510 tests
 ```
 

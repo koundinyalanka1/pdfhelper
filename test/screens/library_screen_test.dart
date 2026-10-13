@@ -610,14 +610,14 @@ void main() {
     });
 
     testWidgets('a kind without an editor offers another app', (tester) async {
-      seed('Letter.docx', body: 'PK');
+      seed('Deck.pptx', body: 'PK');
       await settle(tester);
 
-      await tester.tap(find.text('Letter'));
+      await tester.tap(find.text('Deck'));
       await flush(tester);
       await tester.pumpAndSettle();
       expect(find.text('Open with another app'), findsOneWidget);
-      expect(find.textContaining('Opening Word files'), findsOneWidget);
+      expect(find.textContaining('Opening PowerPoint files'), findsOneWidget);
     });
 
     testWidgets('PDF-only actions are not offered for other kinds', (

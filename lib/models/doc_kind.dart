@@ -66,7 +66,7 @@ enum DocKind {
   /// Whether DocHelper has a screen for this kind yet. Kinds without one are
   /// still listed, and offer "Open with another app".
   bool get canOpen => switch (this) {
-    DocKind.pdf || DocKind.text || DocKind.sheet => true,
+    DocKind.pdf || DocKind.text || DocKind.sheet || DocKind.word => true,
     _ => false,
   };
 
@@ -76,14 +76,19 @@ enum DocKind {
     'xlsx', 'xlsm', 'xltx', 'xltm', 'ods', 'ots', 'csv', 'tsv',
   };
 
+  static const Set<String> _openableWordExtensions = {
+    'docx', 'docm', 'dotx', 'dotm',
+  };
+
   /// Whether DocHelper can open this particular file.
   static bool canOpenPath(String path) {
     final kind = ofPath(path);
     if (!kind.canOpen) return false;
-    if (kind == DocKind.sheet) {
-      return _openableSheetExtensions.contains(extensionOf(path));
-    }
-    return true;
+    return switch (kind) {
+      DocKind.sheet => _openableSheetExtensions.contains(extensionOf(path)),
+      DocKind.word => _openableWordExtensions.contains(extensionOf(path)),
+      _ => true,
+    };
   }
 
   /// The kinds the Files tab can filter by, in chip order.

@@ -1,0 +1,13 @@
+[package]
+name = "word_core"
+version = "0.1.0"
+edition = "2021"
+license = "Proprietary"
+description = "Word processing: DOCX, ODT and RTF documents, read, edited in place and written back."
+
+[dependencies]
+doc_zip = { path = "../../../../doc_common/crates/doc_zip" }
+doc_xml = { path = "../../../../doc_common/crates/doc_xml" }
+doc_encoding = { path = "../../../../doc_common/crates/doc_encoding" }
+doc_opc = { path = "../../../../doc_common/crates/doc_opc" }
+thiserror = "1"

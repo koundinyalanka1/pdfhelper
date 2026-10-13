@@ -7,7 +7,7 @@ who does real office work on a phone instead of a laptop.
 This file is the plan and the progress record. It is updated as work lands.
 See the [progress log](#progress-log) at the end.
 
-Last updated: 2026-10-13 (phases 0-3 done; phase 4 started).
+Last updated: 2026-10-13 (phases 0-3 done; phase 4: Word DOCX done, ODT and RTF next).
 
 ## 1. What "done" looks like
 
@@ -356,7 +356,7 @@ Status: `[ ]` not started · `[~]` in progress · `[x]` done.
 | 1 | Shared foundation (`doc_zip`, `doc_xml`, `doc_encoding`); scaffolding for the four libraries; build script and Android preflight | [x] |
 | 2 | Text library and text editor; app-wide file kinds, discovery, "Open with" and routing | [x] |
 | 3 | Spreadsheet library v1 (XLSX/CSV/ODS, formulas, number formats) and spreadsheet screen | [x] |
-| 4 | Word library v1 (DOCX/ODT/RTF, in-place editing) and document screen | [~] |
+| 4 | Word library v1 (DOCX/ODT/RTF, in-place editing) and document screen | [~] DOCX done |
 | 5 | Presentation library v1 (PPTX/ODP, scene, text edits, slide operations) and slides screen | [ ] |
 | 6 | Fonts, layout and PDF writer: Word page view and export; sheet and slide export | [ ] |
 | 7 | Legacy binaries through `doc_cfb`: XLS, DOC, PPT and WPS `.et/.wps/.dps` | [ ] |
@@ -823,10 +823,46 @@ match:
   - Flutter 3.47.7 and LibreOffice run in the cloud machine, so app tests
     and reference-application checks work there too.
 
+- **2026-10-13 (cloud session, later).** Phase 4, Word documents (DOCX).
+  - `word_core`, format-neutral where it can be:
+    - The body is a tree of paragraphs and containers; each paragraph
+      stays the XML element it was read as, and only paragraphs that are
+      edited are written again.
+    - Paragraphs reach the screen as styled text and objects: pictures,
+      breaks, fields (with their shown result), notes, equations, content
+      controls. Bookmarks and comment anchors are invisible markers that
+      go back where their characters went after an edit (a common prefix
+      and suffix of old and new text decide).
+    - Edits: replace a run of sibling paragraphs (typing, splitting with
+      Enter, joining with Backspace, pasting), paragraph properties
+      (style, alignment, lists, indent, spacing, page break before),
+      tables (insert, rows and columns), page breaks, pictures, delete a
+      block, replace all. Undo and redo record container splices.
+    - Paragraphs with tracked changes, or a field running into the next
+      paragraph, are shown but locked, so editing them cannot lose
+      anything.
+  - DOCX: style chains with document defaults and theme fonts, numbering
+    with Word's counters and level restarts, run properties reused from
+    the original runs and only differences written (in schema order),
+    links through relationships, built-in styles added on first use,
+    pictures added as media parts, new lists in `numbering.xml`. Checked
+    in LibreOffice and python-docx.
+  - `word_ffi` (JSON blocks and edits) and the Dart API (`WordCore`,
+    `WordDocument`), 3 Dart tests.
+  - The app: `DocumentEditorScreen`, a reflowing view (tables fitted to
+    the width, pictures, list labels, page breaks); tap a paragraph to edit
+    it where you tapped, with a toolbar (styles, bold, italic, underline,
+    strike, size, colours, alignment, bullets, numbering, indent, line
+    spacing, links, insert table, picture and page break); Enter splits,
+    Backspace at the start joins; find and replace, headings, word count,
+    share, save a copy as text. "New document", "Open with" for
+    DOCX/DOCM/DOTX, the word engine in the Android preflight. 4 widget
+    tests.
+
 ## Next steps (for the next session)
 
-1. Phase 4 (Word): `packages/flutter_word_core` (DOCX in place, then ODT
-   and RTF), its FFI and Dart API, and the document screen.
+1. Phase 4 (Word): ODT in place and RTF import in `word_core` (a second
+   backend behind `backend::Backend`), then "Open with" for them.
 2. Phase 5 (slides), then phase 6 (layout and PDF export).
 3. Run the office corpus sweep (`download_office_corpus.py` needs
    `GITHUB_TOKEN`), and check saved files in real Excel on the Mac.

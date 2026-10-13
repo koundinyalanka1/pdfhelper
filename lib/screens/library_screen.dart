@@ -24,6 +24,7 @@ import '../widgets/library_scan_dialog.dart';
 import '../widgets/pdf_name_dialog.dart';
 import '../widgets/storage_access_dialog.dart';
 import 'ai_screen.dart';
+import 'document_editor_screen.dart';
 import 'extract_text_screen.dart';
 import 'metadata_screen.dart';
 import 'organize_pages_screen.dart';
@@ -460,6 +461,35 @@ class _LibraryScreenState extends State<LibraryScreen>
     }
   }
 
+  Future<void> _newDocument() async {
+    final now = DateTime.now();
+    final name = await askPdfName(
+      context: context,
+      initialName: 'Document ${formatLibraryDate(now)}',
+      title: 'Name your document',
+      confirmLabel: 'Create',
+      accent: DocKind.word.color,
+      extension: '.docx',
+    );
+    if (name == null || !mounted) return;
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      var file = File('${dir.path}/$name.docx');
+      for (var n = 2; await file.exists(); n++) {
+        file = File('${dir.path}/$name ($n).docx');
+      }
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => DocumentEditorScreen(path: file.path, isNew: true),
+        ),
+      );
+      if (mounted) await _refresh(prune: true);
+    } catch (e) {
+      _snack('Could not create the document: $e');
+    }
+  }
+
   Future<void> _showAddSheet() {
     return showModalBottomSheet<void>(
       context: context,
@@ -485,6 +515,21 @@ class _LibraryScreenState extends State<LibraryScreen>
               onTap: () {
                 Navigator.pop(ctx);
                 _newTextFile();
+              },
+            ),
+            ListTile(
+              leading: Icon(DocKind.word.icon, color: DocKind.word.color),
+              title: Text(
+                'New document',
+                style: TextStyle(color: _colors.textPrimary),
+              ),
+              subtitle: Text(
+                'Letters, applications, reports: a Word document',
+                style: TextStyle(color: _colors.textTertiary),
+              ),
+              onTap: () {
+                Navigator.pop(ctx);
+                _newDocument();
               },
             ),
             ListTile(

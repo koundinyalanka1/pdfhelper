@@ -209,7 +209,7 @@ class MainActivity : FlutterActivity() {
         if (extension == "pdf") requirePdfHeader(header)
         if (extension in ZIP_EXTENSIONS) {
             require(header.size >= 4 && header[0] == 'P'.code.toByte() && header[1] == 'K'.code.toByte()) {
-                "The selected document is not a spreadsheet"
+                "The selected document is not an Office document"
             }
         }
     }
@@ -303,10 +303,14 @@ class MainActivity : FlutterActivity() {
         private val OPENABLE_EXTENSIONS = setOf(
             "pdf", "txt", "text", "log", "md", "markdown", "json",
             "xlsx", "xlsm", "xltx", "xltm", "ods", "ots", "csv", "tsv",
+            "docx", "docm", "dotx", "dotm",
         )
 
         /** Formats that are ZIP packages, which must start like one. */
-        private val ZIP_EXTENSIONS = setOf("xlsx", "xlsm", "xltx", "xltm", "ods", "ots")
+        private val ZIP_EXTENSIONS = setOf(
+            "xlsx", "xlsm", "xltx", "xltm", "ods", "ots",
+            "docx", "docm", "dotx", "dotm",
+        )
 
         private val MIME_EXTENSIONS = mapOf(
             "application/pdf" to "pdf",
@@ -318,6 +322,10 @@ class MainActivity : FlutterActivity() {
             "application/vnd.openxmlformats-officedocument.spreadsheetml.template" to "xltx",
             "application/vnd.ms-excel.sheet.macroenabled.12" to "xlsm",
             "application/vnd.oasis.opendocument.spreadsheet" to "ods",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document" to "docx",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.template" to "dotx",
+            "application/vnd.ms-word.document.macroenabled.12" to "docm",
+            "application/vnd.ms-word.template.macroenabled.12" to "dotm",
             "text/csv" to "csv",
             "text/comma-separated-values" to "csv",
             "application/csv" to "csv",
