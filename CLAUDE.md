@@ -2,9 +2,10 @@
 
 DocHelper (formerly PDF Helper) is a Flutter app, Android first, whose
 engines are written from scratch in Rust. The owner is growing it from a PDF
-toolkit into a full document app. His father will use it to do office work
-(PDFs, Word, Excel, PowerPoint, WPS/LibreOffice and text files) on a phone
-instead of a laptop.
+toolkit into an all-in-one office app, like LibreOffice on a phone: a word
+processor, spreadsheets, presentations and PDFs in one app. His father will
+use it to do office work (PDFs, Word, Excel, PowerPoint, WPS/LibreOffice and
+text files) on a phone instead of a laptop.
 
 **Start every session by reading [PLAN.md](PLAN.md).** Its phase table,
 progress log and "Next steps" say exactly where work stands. Update it
@@ -37,10 +38,17 @@ whenever work lands.
   `packages/flutter_<kind>_core`, `lib<kind>_ffi`. Code that every engine
   needs lives in the Rust-only `packages/doc_common`.
 - **Commit or push only when the owner asks.**
+  - Work on `main`, in the app and in every engine repository. No feature
+    branches.
   - Commit messages are one plain imperative sentence that says what the
     change does for the user (see `git log`), without a type prefix.
-  - The PDF, text and sheet engines are git submodules. Commit and push
-    inside them first, then commit the updated gitlink in the app.
+  - The PDF, text, sheet and word engines are git submodules. Commit and
+    push inside them first, then commit the updated gitlink in the app.
+  - Each package gets its own GitHub repository (`koundinyalanka1/<package>`)
+    and becomes a submodule of the app once its phase is done. Until then it
+    lives in the app's tree. To move one: `git subtree split` its history
+    into the new repository's `main`, then `git submodule add` it at the
+    same path.
 - **Never damage a user's file.**
   - Edit documents in place: copy unchanged ZIP entries raw, and keep XML
     you don't understand.
@@ -69,7 +77,7 @@ whenever work lands.
 | `packages/doc_common` | Shared Rust crates: `doc_zip`, `doc_xml`, `doc_encoding`, `doc_opc`, `doc_ffi` |
 | `packages/flutter_text_core` | Text engine (`text_core`, `text_ffi`, Dart `TextCore`) |
 | `packages/flutter_sheet_core` | Spreadsheet engine (`sheet_core`, `sheet_ffi`, Dart `SheetCore`; `cargo run --example sheetcli` tries real files) |
-| `packages/flutter_word_core` | Word-processing engine (`word_core`, `word_ffi`, Dart `WordCore`): DOCX and ODT in place, RTF/TXT/MD imported; `cargo run --example wordcli` tries real files. Lives in this repository for now |
+| `packages/flutter_word_core` | Word-processing engine (git submodule, a private repository): `word_core`, `word_ffi`, Dart `WordCore`; DOCX and ODT in place, RTF/TXT/MD imported; `cargo run --example wordcli` tries real files |
 | `android/app/src/main/kotlin/...` | "Open with" resolution (`MainActivity`), public saves (`PublicPdfExporter`) |
 | `scripts/build_engines.sh` | Builds and tests the per-format engines |
 | `scripts/build_pdf_core.sh` | Builds and tests the PDF engine |
@@ -167,10 +175,10 @@ See PLAN.md §6 and `docs/PRODUCTION_AUDIT_2026-10-07.md`.
 
 - **Git-ignored engine binaries.** The per-format binaries are git-ignored
   for now; the alternatives are committing them or Git LFS.
-- **`doc_common`'s home.** The text and sheet engines reference
-  `packages/doc_common` by relative path, so they build inside this
-  checkout but not standalone; giving it its own repository (or submodule)
-  is open.
+- **`doc_common`'s home.** The engines reference `packages/doc_common` by
+  relative path, so they build inside this checkout but not standalone. Per
+  the owner's rule it gets its own repository and becomes a submodule once
+  its planned crates (fonts, layout, PDF writer, CFB; phases 6 and 7) land.
 - **Metric-compatible fonts.** Bundling Carlito, Caladea and Liberation is
   proposed, so Word and Excel documents lay out as Office does.
 - **Play Console All-files-access declaration.** DocHelper now edits

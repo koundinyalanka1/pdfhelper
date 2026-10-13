@@ -882,6 +882,13 @@ match:
   - 12 Rust tests; files written were checked in LibreOffice.
   - "Open with" for ODT/OTT/RTF; 5 widget tests.
 
+- **2026-10-13 (owner's direction).** All work now goes on `main` (the
+  app and the engine repositories); the cloud session's feature branch was
+  fast-forwarded into `main`. The word engine moved to its own repository,
+  `koundinyalanka1/flutter_word_core` (private), with its history, and is a
+  submodule at `packages/flutter_word_core`. The slide engine follows when
+  phase 5 is done, `doc_common` when its phase 6 and 7 crates land.
+
 ## Next steps (for the next session)
 
 1. Phase 5 (slides): `packages/flutter_slide_core` (PPTX in place, then
