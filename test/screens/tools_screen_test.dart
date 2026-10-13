@@ -63,6 +63,8 @@ void main() {
       'Fill & sign',
       'Annotate',
       'Page numbers & watermark',
+      'Compress PDF',
+      'Pages as pictures',
       'Organize pages',
       'Document details',
       'Protect with a password',

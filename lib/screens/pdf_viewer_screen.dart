@@ -30,11 +30,13 @@ import '../widgets/pdf_result_dialog.dart';
 import '../widgets/pdf_edit/edit_items.dart';
 import '../widgets/pdf_text_selection_overlay.dart';
 import 'ai_screen.dart';
+import 'compress_screen.dart';
 import 'extract_text_screen.dart';
 import 'home_screen.dart';
 import 'merge_pdf_screen.dart';
 import 'metadata_screen.dart';
 import 'organize_pages_screen.dart';
+import 'page_images_screen.dart';
 import 'pdf_edit_screen.dart';
 import 'pdf_stamp_screen.dart';
 import 'protect_screen.dart';
@@ -1232,6 +1234,27 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
               _action(ctx, colors, Icons.content_cut_rounded, 'Split', () {
                 _push(SplitPdfScreen(initialPdfPath: widget.pdfPath));
               }),
+              _action(
+                ctx,
+                colors,
+                Icons.compress_rounded,
+                'Compress',
+                () => _push(
+                  CompressScreen(pdfPath: widget.pdfPath, password: _password),
+                ),
+              ),
+              _action(
+                ctx,
+                colors,
+                Icons.collections_rounded,
+                'Save pages as pictures',
+                () => _push(
+                  PageImagesScreen(
+                    pdfPath: widget.pdfPath,
+                    password: _password,
+                  ),
+                ),
+              ),
               _action(
                 ctx,
                 colors,

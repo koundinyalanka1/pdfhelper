@@ -363,7 +363,7 @@ Status: `[ ]` not started · `[~]` in progress · `[x]` done.
 | 5 | Presentation library v1 (PPTX/ODP, scene, text edits, slide operations) and slides screen | [x] |
 | 6 | Fonts, layout and PDF writer: Word page view and export; sheet and slide export | [x] |
 | 7 | Legacy binaries through `doc_cfb`: XLS, DOC, PPT and WPS `.et/.wps/.dps` | [x] |
-| 8 | PDF editing: annotate, sign, fill forms, stamp, compress, convert pages to images | [~] |
+| 8 | PDF editing: annotate, sign, fill forms, stamp, compress, convert pages to images | [x] |
 | 9 | Other files: images, ZIP archives, Markdown, HTML and JSON viewers, unknown files | [ ] |
 | 10 | Hardening: a real-world corpus per format, fuzzing, memory and time limits, device runs, accessibility, release | [ ] |
 
@@ -1054,10 +1054,28 @@ match:
     the macOS and iOS PDF binaries need rebuilding on the Mac for these
     functions (the Android ones are rebuilt).
 
+- **2026-10-13 (phase 8, part 2).** PDFs can be made smaller and their
+  pages saved as pictures:
+  - A baseline JPEG encoder of our own in `pdf_render` (4:2:0 colour,
+    Annex K quantization scaled by quality, Huffman tables made for each
+    image).
+  - `pdf_compress`: pictures scaled to the chosen resolution and
+    re-encoded when that is smaller (masks, bi-level scans and colour-keyed
+    pictures keep their pixels), plain streams Flate-packed, unreferenced
+    objects dropped, and the file written with object streams and a
+    cross-reference stream. Photo-heavy arXiv papers came out at a third of
+    their size and render as before. Encrypted files keep their password; a
+    file that does not shrink is returned as it was.
+  - Pages as PNG or JPEG at a chosen sharpness.
+  - The app: "Compress" (Light, Recommended, Strong; a named copy, with the
+    sizes before and after) and "Save pages as pictures" (format,
+    sharpness, pages; shared or published to `Download/DocHelper`), in the
+    viewer's actions and in Tools.
+
 ## Next steps (for the next session)
 
-1. Phase 8, part 2: compress (re-encode images with our own JPEG encoder)
-   and turn pages into images (PNG/JPEG, one per page).
+1. Phase 9: other files: images, ZIP archives, Markdown, HTML and JSON
+   viewers, unknown files (and flat ODF `.fodt/.fods/.fodp`).
 2. Rebuild the PDF engine's macOS dylib and iOS XCFramework on the Mac
    (`bash scripts/build_pdf_core.sh ios macos`); the Android binaries are
    current.
@@ -1067,6 +1085,5 @@ match:
 4. A complex-script shaper (GSUB/GPOS for Indic and Arabic) in
    `doc_layout`, so Hindi, Telugu and Tamil text exports correctly; then
    embedded fonts for PDF form text and text boxes.
-5. Phase 9: other file viewers.
-6. Run the office corpus sweep (`download_office_corpus.py` needs
+5. Run the office corpus sweep (`download_office_corpus.py` needs
    `GITHUB_TOKEN`), and check saved files in real Office on the Mac.

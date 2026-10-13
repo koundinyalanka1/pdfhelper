@@ -9,11 +9,13 @@ import '../services/pdf_core_service.dart';
 import '../utils/format_utils.dart';
 import 'ai_models_screen.dart';
 import 'ai_screen.dart';
+import 'compress_screen.dart';
 import 'extract_text_screen.dart';
 import 'merge_pdf_screen.dart';
 import 'metadata_screen.dart';
 import 'ocr_screen.dart';
 import 'organize_pages_screen.dart';
+import 'page_images_screen.dart';
 import 'pdf_edit_screen.dart';
 import 'pdf_stamp_screen.dart';
 import 'pdf_viewer_screen.dart';
@@ -319,6 +321,16 @@ class _ToolsScreenState extends State<ToolsScreen>
           needsDocument: true,
         ),
         _Tool(
+          'Compress PDF',
+          'Make the file smaller to send or upload',
+          Icons.compress_rounded,
+          const Color(0xFF26A69A),
+          () => _runOnDocument(
+            (p, pw) => CompressScreen(pdfPath: p, password: pw),
+          ),
+          needsDocument: true,
+        ),
+        _Tool(
           'Document details',
           'Title, author, subject and keywords',
           Icons.sell_rounded,
@@ -369,6 +381,16 @@ class _ToolsScreenState extends State<ToolsScreen>
           const Color(0xFFE94560),
           () => _runOnDocument(
             (p, pw) => ExtractTextScreen(pdfPath: p, password: pw),
+          ),
+          needsDocument: true,
+        ),
+        _Tool(
+          'Pages as pictures',
+          'Save pages as JPEG or PNG images',
+          Icons.collections_rounded,
+          const Color(0xFF7E57C2),
+          () => _runOnDocument(
+            (p, pw) => PageImagesScreen(pdfPath: p, password: pw),
           ),
           needsDocument: true,
         ),

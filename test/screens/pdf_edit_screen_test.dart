@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:ui' show Offset;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_pdf_core/flutter_pdf_core.dart';

@@ -74,14 +74,14 @@ whenever work lands.
 | `lib/screens/text_editor_screen.dart` | The text editor |
 | `lib/screens/sheet_editor_screen.dart`, `lib/widgets/sheet/` | The spreadsheet screen and its custom-painted grid |
 | `lib/screens/document_editor_screen.dart`, `lib/widgets/word/` | The document screen: reflowing paragraphs and tables, one paragraph edited at a time (`ParaController`) |
-| `packages/flutter_pdf_core` | PDF engine (git submodule; commits its Android/Apple binaries); `pdf_edit` fills forms, annotates and stamps, saving incremental updates |
+| `packages/flutter_pdf_core` | PDF engine (git submodule; commits its Android/Apple binaries); `pdf_edit` fills forms, annotates and stamps, saving incremental updates; `pdf_compress` makes smaller copies and page pictures |
 | `packages/doc_common` | Shared Rust crates: `doc_zip`, `doc_xml`, `doc_encoding`, `doc_opc`, `doc_ffi`; for PDF export `doc_image`, `doc_font`, `doc_pdf`, `doc_layout`; for Office 97-2003 files `doc_cfb` and `doc_art`; `doc_metafile` draws WMF and EMF pictures |
 | `packages/flutter_text_core` | Text engine (`text_core`, `text_ffi`, Dart `TextCore`) |
 | `packages/flutter_sheet_core` | Spreadsheet engine (`sheet_core`, `sheet_ffi`, Dart `SheetCore`; `cargo run --example sheetcli` tries real files) |
 | `packages/flutter_word_core` | Word-processing engine (git submodule, a private repository): `word_core`, `word_ffi`, Dart `WordCore`; DOCX and ODT in place, RTF/TXT/MD and Word 97-2003 imported; `cargo run --example wordcli` tries real files |
 | `packages/flutter_slide_core` | Presentation engine (git submodule, its own repository): `slide_core`, `slide_ffi`, Dart `SlideCore`; PowerPoint and OpenDocument decks as scenes to draw, edited in place, PowerPoint 97-2003 imported; `cargo run --example slidecli` tries real files |
 | `lib/screens/slide_editor_screen.dart`, `lib/widgets/slide/` | The slides screen and its scene painter; `slide_show_screen.dart` presents |
-| `lib/screens/pdf_edit_screen.dart`, `lib/widgets/pdf_edit/` | Fill & sign and annotate: pending items over the pages, saved through `PdfCore.applyEdits`; `pdf_stamp_screen.dart` adds page numbers and watermarks |
+| `lib/screens/pdf_edit_screen.dart`, `lib/widgets/pdf_edit/` | Fill & sign and annotate: pending items over the pages, saved through `PdfCore.applyEdits`; `pdf_stamp_screen.dart` adds page numbers and watermarks; `compress_screen.dart` and `page_images_screen.dart` make smaller copies and pictures of pages |
 | `android/app/src/main/kotlin/...` | "Open with" resolution (`MainActivity`), public saves (`PublicPdfExporter`) |
 | `scripts/build_engines.sh` | Builds and tests the per-format engines |
 | `scripts/build_pdf_core.sh` | Builds and tests the PDF engine |

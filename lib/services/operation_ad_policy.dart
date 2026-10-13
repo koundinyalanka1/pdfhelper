@@ -9,6 +9,8 @@ enum PdfOperation {
   unlock,
   metadata,
   ocr,
+  compress,
+  images,
 }
 
 /// Counts successful actions independently of which result button is used.

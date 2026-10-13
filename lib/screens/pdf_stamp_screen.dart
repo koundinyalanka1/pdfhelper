@@ -112,8 +112,9 @@ class _PdfStampScreenState extends State<PdfStampScreen> {
     _header.dispose();
     _pages.dispose();
     final scratch = _scratch;
-    if (scratch != null)
+    if (scratch != null) {
       unawaited(scratch.delete(recursive: true).catchError((_) => scratch));
+    }
     super.dispose();
   }
 
@@ -150,8 +151,9 @@ class _PdfStampScreenState extends State<PdfStampScreen> {
           to == null ||
           from < 1 ||
           to < from ||
-          to > _pageCount)
+          to > _pageCount) {
         return null;
+      }
       for (var n = from; n <= to; n++) {
         pages.add(n);
       }
@@ -227,8 +229,9 @@ class _PdfStampScreenState extends State<PdfStampScreen> {
         password: widget.password,
         useCache: false,
       );
-      if (source != widget.pdfPath)
+      if (source != widget.pdfPath) {
         unawaited(File(source).delete().catchError((_) => File(source)));
+      }
       if (mounted) setState(() => _preview = rendered?.bytes ?? _preview);
     } catch (e) {
       logError('PdfStamp.preview', e);

@@ -228,6 +228,50 @@ class PdfCoreService {
     return out;
   }
 
+  /// A smaller copy of [path], and what compressing did.
+  static Future<(String, PdfCompressReport)> compress(
+    String path,
+    PdfCompressLevel level, {
+    String password = '',
+    String? fileName,
+  }) async {
+    final out = await _outputPath('compressed', fileName: fileName);
+    final report = await PdfCore.compressAsync(
+      path,
+      out,
+      level: level,
+      password: password,
+    );
+    return (out, report);
+  }
+
+  /// Pages of [path] saved as pictures in a folder of the app's documents
+  /// named [title]; returns their paths.
+  static Future<List<String>> pageImages(
+    String path,
+    String title, {
+    String pages = '',
+    PdfPageImageFormat format = PdfPageImageFormat.png,
+    double dpi = 150,
+    String password = '',
+  }) async {
+    final docs = await getApplicationDocumentsDirectory();
+    final name = sanitizeFileName(title);
+    var dir = Directory('${docs.path}/Pictures/$name');
+    for (var n = 2; await dir.exists(); n++) {
+      dir = Directory('${docs.path}/Pictures/$name ($n)');
+    }
+    await dir.create(recursive: true);
+    return PdfCore.pageImagesAsync(
+      path,
+      '${dir.path}/$name - page ',
+      pages: pages,
+      format: format,
+      dpi: dpi,
+      password: password,
+    );
+  }
+
   /// Remove encryption (needs the correct [password]).
   static Future<String> unlock(
     String path,

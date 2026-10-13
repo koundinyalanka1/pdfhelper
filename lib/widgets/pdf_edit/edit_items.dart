@@ -365,8 +365,9 @@ Path smoothPath(List<Offset> points) {
     for (final p in points.skip(1)) {
       path.lineTo(p.dx, p.dy);
     }
-    if (points.length == 1)
+    if (points.length == 1) {
       path.lineTo(points.first.dx + 0.01, points.first.dy);
+    }
     return path;
   }
   for (var i = 1; i < points.length - 1; i++) {

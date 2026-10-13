@@ -90,6 +90,8 @@ void main() {
       'Fill & sign',
       'Annotate',
       'Page numbers & watermark',
+      'Compress',
+      'Save pages as pictures',
       'Merge with…',
       'Split',
       'Organize pages',
