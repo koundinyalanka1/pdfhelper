@@ -1,0 +1,11 @@
+[package]
+name = "doc_zip"
+version = "0.1.0"
+edition = "2021"
+license = "Proprietary"
+description = "ZIP archives, read and written from scratch, for OOXML, ODF and EPUB packages."
+
+[dependencies]
+# Raw deflate streams only; the ZIP container is implemented here.
+flate2 = "1"
+thiserror = "1"

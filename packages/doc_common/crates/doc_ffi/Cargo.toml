@@ -1,0 +1,8 @@
+[package]
+name = "doc_ffi"
+version = "0.1.0"
+edition = "2021"
+license = "Proprietary"
+description = "Shared Rust helpers for the engines' FFI layers (extern \"C\" exports called by dart:ffi)."
+
+[dependencies]

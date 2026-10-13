@@ -1,6 +1,6 @@
 {
-    "name": "pdfhelper",
-    "short_name": "pdfhelper",
+    "name": "DocHelper",
+    "short_name": "DocHelper",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

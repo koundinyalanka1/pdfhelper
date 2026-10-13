@@ -15,7 +15,7 @@ class _SplashScreenState extends State<SplashScreen>
   late AnimationController _controller;
   late Animation<double> _fadeAnimation;
   late Animation<double> _scaleAnimation;
-  String _statusText = 'Your PDF Toolkit';
+  String _statusText = 'Your documents, on your phone';
 
   @override
   void initState() {
@@ -119,14 +119,14 @@ class _SplashScreenState extends State<SplashScreen>
                           ],
                         ),
                         child: const Icon(
-                          Icons.picture_as_pdf_rounded,
+                          Icons.description_rounded,
                           size: 60,
                           color: Colors.white,
                         ),
                       ),
                       const SizedBox(height: 30),
                       const Text(
-                        'PDF Helper',
+                        'DocHelper',
                         style: TextStyle(
                           fontSize: 36,
                           fontWeight: FontWeight.w700,
@@ -150,7 +150,7 @@ class _SplashScreenState extends State<SplashScreen>
                       ),
                       const SizedBox(height: 60),
                       Semantics(
-                        label: 'Loading PDF Helper',
+                        label: 'Loading DocHelper',
                         child: SizedBox(
                           width: 40,
                           height: 40,

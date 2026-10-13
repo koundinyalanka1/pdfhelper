@@ -8,14 +8,19 @@ import argparse
 import struct
 import zipfile
 
+# Every native engine the app ships: the PDF engine and one library per
+# other kind of file (see PLAN.md).
+ENGINES = ('pdf', 'text')
+
 
 def check(path):
     failures = []
     with zipfile.ZipFile(path) as archive:
         libraries = [name for name in archive.namelist() if name.endswith('.so')]
         for abi in ('arm64-v8a', 'armeabi-v7a', 'x86_64'):
-            if not any(name.endswith(f'lib/{abi}/libpdf_ffi.so') for name in libraries):
-                failures.append(f'Missing PDF engine for {abi}')
+            for engine in ENGINES:
+                if not any(name.endswith(f'lib/{abi}/lib{engine}_ffi.so') for name in libraries):
+                    failures.append(f'Missing {engine} engine for {abi}')
         checked = 0
         for name in libraries:
             if '/arm64-v8a/' not in name and '/x86_64/' not in name:
@@ -55,7 +60,7 @@ def check(path):
             checked += 1
     if failures:
         raise SystemExit('\n'.join(failures))
-    print(f'PASS: PDF engine present for 3 ABIs; {checked} ELF64 libraries support 16 KB alignment.')
+    print(f'PASS: {len(ENGINES)} engines present for 3 ABIs; {checked} ELF64 libraries support 16 KB alignment.')
 
 
 if __name__ == '__main__':

@@ -1,8 +1,9 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pdfhelper/models/doc_kind.dart';
 import 'package:pdfhelper/models/library_query.dart';
-import 'package:pdfhelper/services/pdf_library_service.dart';
+import 'package:pdfhelper/services/library_service.dart';
 
-PdfFileEntry entry(
+LibraryEntry entry(
   String name, {
   int size = 1000,
   int modified = 0,
@@ -10,7 +11,7 @@ PdfFileEntry entry(
   bool appOwned = false,
   String? path,
 }) {
-  return PdfFileEntry(
+  return LibraryEntry(
     path: path ?? '/storage/$folder/$name',
     name: name,
     sizeBytes: size,
@@ -26,7 +27,7 @@ void main() {
   final gamma = entry('Gamma.pdf', size: 200, modified: 200, appOwned: true);
   final all = [alpha, beta, gamma];
 
-  List<String> names(List<PdfFileEntry> entries) =>
+  List<String> names(List<LibraryEntry> entries) =>
       entries.map((e) => e.name).toList();
 
   group('filters', () {
@@ -144,6 +145,46 @@ void main() {
         search: 'alpha',
       ).apply(all);
       expect(names(result), ['Alpha.pdf']);
+    });
+  });
+
+  group('kinds', () {
+    final letter = entry('Letter.docx', modified: 50);
+    final sheet = entry('Accounts.xlsx', modified: 40);
+    final notes = entry('notes.txt', modified: 30, appOwned: true);
+    final mixed = [...all, letter, sheet, notes];
+
+    test('a kind keeps only its files', () {
+      expect(
+        names(const LibraryQuery(kind: DocKind.word).apply(mixed)),
+        ['Letter.docx'],
+      );
+      expect(
+        names(const LibraryQuery(kind: DocKind.pdf).apply(mixed)),
+        ['Alpha.pdf', 'Gamma.pdf', 'beta.pdf'],
+      );
+    });
+
+    test('a kind combines with the other filters', () {
+      expect(
+        names(
+          const LibraryQuery(
+            kind: DocKind.text,
+            filter: LibraryFilter.created,
+          ).apply(mixed),
+        ),
+        ['notes.txt'],
+      );
+      final recent = LibraryQuery(
+        kind: DocKind.sheet,
+        filter: LibraryFilter.recent,
+        recents: [letter.path, sheet.path, alpha.path],
+      ).apply(mixed);
+      expect(names(recent), ['Accounts.xlsx']);
+    });
+
+    test('no kind shows every kind', () {
+      expect(const LibraryQuery().apply(mixed), hasLength(6));
     });
   });
 

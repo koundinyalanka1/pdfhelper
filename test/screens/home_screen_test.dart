@@ -7,7 +7,7 @@ import 'package:pdfhelper/screens/home_screen.dart';
 import 'package:pdfhelper/screens/library_screen.dart';
 import 'package:pdfhelper/screens/settings_screen.dart';
 import 'package:pdfhelper/screens/tools_screen.dart';
-import 'package:pdfhelper/services/pdf_library_service.dart';
+import 'package:pdfhelper/services/library_service.dart';
 import 'package:pdfhelper/services/recent_files_service.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -24,7 +24,7 @@ void main() {
     FakePathProvider.install(root);
     SharedPreferences.setMockInitialValues({});
     RecentFilesService.resetCacheForTesting();
-    PdfLibraryService.resetForTesting();
+    LibraryService.resetForTesting();
   });
 
   tearDown(() {
@@ -126,7 +126,7 @@ void main() {
     await flush(tester);
 
     // Files is on top again, and the app is still running.
-    expect(find.text('All PDFs'), findsOneWidget);
+    expect(find.text('All files'), findsOneWidget);
   });
 
   testWidgets('can be launched straight onto a tab', (tester) async {

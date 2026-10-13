@@ -82,7 +82,7 @@ void main() {
       }
       return {
         'uri': 'content://media/external_primary/downloads/42',
-        'publicPath': '/storage/emulated/0/Download/PDFHelper/Result.pdf',
+        'publicPath': '/storage/emulated/0/Download/DocHelper/Result.pdf',
       };
     });
   });
@@ -117,7 +117,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 400));
       expect(find.byType(AlertDialog), findsOneWidget);
       expect(
-        find.text('Saved to Downloads/PDFHelper (device storage)'),
+        find.text('Saved to Downloads/DocHelper (device storage)'),
         findsOneWidget,
       );
       expect(exports, 1);

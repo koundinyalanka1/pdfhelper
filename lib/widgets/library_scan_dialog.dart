@@ -2,7 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../providers/theme_provider.dart';
-import '../services/pdf_library_service.dart';
+import '../services/library_service.dart';
 import '../utils/format_utils.dart';
 
 /// Show the first full search of the device after storage access is granted.
@@ -14,38 +14,38 @@ import '../utils/format_utils.dart';
 /// finding. The search never depends on the dialog: "Run in background" (or
 /// Back) closes it and the sweep carries on.
 ///
-/// [found] resolves to the number of PDFs found, or null if the search could
-/// not finish. [progress] defaults to [PdfLibraryService.progress].
-Future<void> showPdfScanDialog(
+/// [found] resolves to the number of documents found, or null if the search could
+/// not finish. [progress] defaults to [LibraryService.progress].
+Future<void> showLibraryScanDialog(
   BuildContext context, {
   required Future<int?> found,
-  ValueListenable<PdfScanProgress?>? progress,
+  ValueListenable<LibraryScanProgress?>? progress,
 }) {
   return showDialog<void>(
     context: context,
     // A stray tap beside the dialog should not hide a search the user is
     // watching. Back still closes it; the search carries on either way.
     barrierDismissible: false,
-    builder: (_) => _PdfScanDialog(
+    builder: (_) => _LibraryScanDialog(
       found: found,
-      progress: progress ?? PdfLibraryService.progress,
+      progress: progress ?? LibraryService.progress,
     ),
   );
 }
 
 enum _Phase { searching, found, empty, failed }
 
-class _PdfScanDialog extends StatefulWidget {
-  const _PdfScanDialog({required this.found, required this.progress});
+class _LibraryScanDialog extends StatefulWidget {
+  const _LibraryScanDialog({required this.found, required this.progress});
 
   final Future<int?> found;
-  final ValueListenable<PdfScanProgress?> progress;
+  final ValueListenable<LibraryScanProgress?> progress;
 
   @override
-  State<_PdfScanDialog> createState() => _PdfScanDialogState();
+  State<_LibraryScanDialog> createState() => _LibraryScanDialogState();
 }
 
-class _PdfScanDialogState extends State<_PdfScanDialog> {
+class _LibraryScanDialogState extends State<_LibraryScanDialog> {
   static const Color _accent = Color(0xFFE94560);
   static const Color _success = Color(0xFF4CAF50);
   static const Duration _morph = Duration(milliseconds: 220);
@@ -57,7 +57,7 @@ class _PdfScanDialogState extends State<_PdfScanDialog> {
   /// as soon as the walk ends — before the screen has finished with the
   /// result. Reading the listenable directly would drop the count to zero
   /// for that moment.
-  PdfScanProgress? _latest;
+  LibraryScanProgress? _latest;
 
   @override
   void initState() {
@@ -95,7 +95,7 @@ class _PdfScanDialogState extends State<_PdfScanDialog> {
   Widget build(BuildContext context) {
     final colors = AppColors.of(context);
     final searching = _phase == _Phase.searching;
-    final pdfs = searching ? (_latest?.pdfs ?? 0) : _count;
+    final pdfs = searching ? (_latest?.documents ?? 0) : _count;
     final folders = _latest?.folders ?? 0;
 
     final (IconData icon, Color tint) = switch (_phase) {
@@ -105,9 +105,9 @@ class _PdfScanDialogState extends State<_PdfScanDialog> {
       _Phase.failed => (Icons.error_outline_rounded, Colors.red.shade400),
     };
     final title = switch (_phase) {
-      _Phase.searching => 'Finding your PDFs',
+      _Phase.searching => 'Finding your documents',
       _Phase.found => 'Search complete',
-      _Phase.empty => 'No PDFs found',
+      _Phase.empty => 'No documents found',
       _Phase.failed => 'Couldn\'t finish searching',
     };
     final message = switch (_phase) {
@@ -115,7 +115,7 @@ class _PdfScanDialogState extends State<_PdfScanDialog> {
         'Looking through internal storage and any SD card or USB drive.',
       _Phase.found => 'They\'re listed in Files, ready to open.',
       _Phase.empty =>
-        'Nothing in internal storage or on a connected drive yet. PDFs you '
+        'Nothing in internal storage or on a connected drive yet. Files you '
             'download or receive will show up in Files.',
       _Phase.failed =>
         'Something interrupted the search. Pull down on the list to try '
@@ -194,7 +194,7 @@ class _PdfScanDialogState extends State<_PdfScanDialog> {
                     ),
                   ),
                   Text(
-                    pdfs == 1 ? 'PDF found' : 'PDFs found',
+                    pdfs == 1 ? 'document found' : 'documents found',
                     style: TextStyle(color: colors.textSecondary, fontSize: 13),
                   ),
                 ],
@@ -205,7 +205,7 @@ class _PdfScanDialogState extends State<_PdfScanDialog> {
                     borderRadius: BorderRadius.circular(3),
                     color: _accent,
                     backgroundColor: _accent.withValues(alpha: 0.12),
-                    semanticsLabel: 'Searching for PDFs',
+                    semanticsLabel: 'Searching for documents',
                   ),
                   const SizedBox(height: 8),
                   Text(
@@ -240,7 +240,7 @@ class _PdfScanDialogState extends State<_PdfScanDialog> {
                               backgroundColor: _accent,
                             ),
                             child: Text(
-                              _phase == _Phase.found ? 'View PDFs' : 'OK',
+                              _phase == _Phase.found ? 'View files' : 'OK',
                             ),
                           ),
                   ),

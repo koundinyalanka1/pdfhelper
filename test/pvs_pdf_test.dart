@@ -716,6 +716,9 @@ void main() {
     const named = {
       'epics', 'features', 'heavy', 'huge', 'languages', 'light', 'ocr',
       'photo_languages', 'pictures', 'scans',
+      // Not PDFs: office documents for the other engines
+      // (scripts/download_office_corpus.py).
+      'office',
     };
     final corpus = Directory('test_corpus');
     final only = (Platform.environment['PVS_CATEGORIES'] ?? '')

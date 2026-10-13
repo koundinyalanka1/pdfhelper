@@ -2,23 +2,22 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'screens/home_screen.dart';
-import 'screens/pdf_viewer_screen.dart';
 import 'screens/splash_screen.dart';
 import 'providers/theme_provider.dart';
+import 'services/document_router.dart';
 import 'services/firebase_service.dart';
 import 'services/intent_service.dart';
 import 'services/notification_service.dart';
 import 'services/pdf_core_service.dart';
 import 'services/scan_route_observer.dart';
-import 'widgets/pdf_intent_listener.dart';
-import 'utils/format_utils.dart';
+import 'widgets/document_intent_listener.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // Resolve external documents while startup services initialize. Choose the
   // initial routes before the first Flutter frame so viewing skips the splash.
-  final openedPdf = IntentService.getOpenedPdfPath();
+  final openedPdf = IntentService.getOpenedDocumentPath();
 
   // Crash reporting first: anything that fails during the rest of startup
   // should be reported rather than lost. Safe if the config file is missing.
@@ -39,13 +38,13 @@ void main() async {
       systemNavigationBarIconBrightness: Brightness.light,
     ),
   );
-  runApp(PDFHelperApp(initialPdfPath: await openedPdf));
+  runApp(DocHelperApp(initialPdfPath: await openedPdf));
 }
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
-class PDFHelperApp extends StatelessWidget {
-  const PDFHelperApp({super.key, this.initialPdfPath});
+class DocHelperApp extends StatelessWidget {
+  const DocHelperApp({super.key, this.initialPdfPath});
 
   final String? initialPdfPath;
 
@@ -55,12 +54,12 @@ class PDFHelperApp extends StatelessWidget {
       create: (_) => ThemeProvider(),
       child: Consumer<ThemeProvider>(
         builder: (context, themeProvider, _) {
-          return PdfIntentListener(
+          return DocumentIntentListener(
             navigatorKey: navigatorKey,
             child: MaterialApp(
               navigatorKey: navigatorKey,
               navigatorObservers: [scanRouteObserver],
-              title: 'PDF Helper',
+              title: 'DocHelper',
               debugShowCheckedModeBanner: false,
               theme: themeProvider.lightTheme,
               darkTheme: themeProvider.darkTheme,
@@ -82,12 +81,9 @@ class PDFHelperApp extends StatelessWidget {
                 return [
                   MaterialPageRoute<void>(
                     settings: const RouteSettings(
-                      name: PdfIntentListener.viewerRouteName,
+                      name: DocumentIntentListener.viewerRouteName,
                     ),
-                    builder: (_) => PdfViewerScreen(
-                      pdfPath: path,
-                      title: getPdfDisplayTitle(path),
-                    ),
+                    builder: (_) => externalDocumentScreen(path),
                   ),
                 ];
               },

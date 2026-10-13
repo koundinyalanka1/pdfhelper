@@ -3,8 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pdfhelper/providers/theme_provider.dart';
-import 'package:pdfhelper/services/pdf_library_service.dart';
-import 'package:pdfhelper/widgets/pdf_scan_dialog.dart';
+import 'package:pdfhelper/services/library_service.dart';
+import 'package:pdfhelper/widgets/library_scan_dialog.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -12,7 +12,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// hold it to showing real progress, ending on a clear outcome, and never
 /// trapping the user behind a search they would rather not watch.
 void main() {
-  late ValueNotifier<PdfScanProgress?> progress;
+  late ValueNotifier<LibraryScanProgress?> progress;
   late Completer<int?> found;
   late bool closed;
 
@@ -32,7 +32,7 @@ void main() {
           builder: (context) => Scaffold(
             body: ElevatedButton(
               onPressed: () async {
-                await showPdfScanDialog(
+                await showLibraryScanDialog(
                   context,
                   found: found.future,
                   progress: progress,
@@ -62,14 +62,14 @@ void main() {
 
   testWidgets('shows live counts while searching', (tester) async {
     await open(tester);
-    expect(find.text('Finding your PDFs'), findsOneWidget);
+    expect(find.text('Finding your documents'), findsOneWidget);
     expect(find.byType(LinearProgressIndicator), findsOneWidget);
 
-    progress.value = const PdfScanProgress(folders: 1204, pdfs: 128);
+    progress.value = const LibraryScanProgress(folders: 1204, documents: 128);
     await tester.pump();
 
     expect(find.text('128'), findsOneWidget);
-    expect(find.text('PDFs found'), findsOneWidget);
+    expect(find.text('documents found'), findsOneWidget);
     expect(find.text('1,204 folders searched'), findsOneWidget);
     expect(find.text('Run in background'), findsOneWidget);
   });
@@ -78,7 +78,7 @@ void main() {
     tester,
   ) async {
     await open(tester);
-    progress.value = const PdfScanProgress(folders: 40, pdfs: 7);
+    progress.value = const LibraryScanProgress(folders: 40, documents: 7);
     await tester.pump();
 
     // The service clears progress the moment the walk ends, before the
@@ -91,7 +91,7 @@ void main() {
 
   testWidgets('ends on the number found, then closes', (tester) async {
     await open(tester);
-    progress.value = const PdfScanProgress(folders: 900, pdfs: 340);
+    progress.value = const LibraryScanProgress(folders: 900, documents: 340);
     await tester.pump();
 
     found.complete(1342);
@@ -102,7 +102,7 @@ void main() {
     expect(find.byType(LinearProgressIndicator), findsNothing);
     expect(find.textContaining('folders searched'), findsNothing);
 
-    await tester.tap(find.text('View PDFs'));
+    await tester.tap(find.text('View files'));
     await tester.pumpAndSettle();
 
     expect(find.text('Search complete'), findsNothing);
@@ -115,7 +115,7 @@ void main() {
     found.complete(0);
     await tester.pumpAndSettle();
 
-    expect(find.text('No PDFs found'), findsOneWidget);
+    expect(find.text('No documents found'), findsOneWidget);
     expect(find.text('0'), findsNothing);
     expect(find.text('OK'), findsOneWidget);
   });
@@ -137,7 +137,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
 
-    expect(find.text('Finding your PDFs'), findsNothing);
+    expect(find.text('Finding your documents'), findsNothing);
     expect(closed, isTrue);
     expect(found.isCompleted, isFalse);
   });
@@ -148,7 +148,7 @@ void main() {
     await tester.tapAt(const Offset(8, 8));
     await tester.pump(const Duration(milliseconds: 300));
 
-    expect(find.text('Finding your PDFs'), findsOneWidget);
+    expect(find.text('Finding your documents'), findsOneWidget);
     expect(closed, isFalse);
   });
 }

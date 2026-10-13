@@ -9,30 +9,33 @@ import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config/features.dart';
+import '../models/doc_kind.dart';
 import '../models/home_tabs.dart';
 import '../models/library_query.dart';
 import '../providers/theme_provider.dart';
-import '../services/pdf_library_service.dart';
+import '../services/document_router.dart';
+import '../services/library_service.dart';
 import '../services/pdf_raster.dart';
 import '../services/recent_files_service.dart';
 import '../utils/error_logger.dart';
 import '../utils/format_utils.dart';
 import '../utils/file_naming.dart';
-import '../widgets/pdf_scan_dialog.dart';
+import '../widgets/library_scan_dialog.dart';
+import '../widgets/pdf_name_dialog.dart';
 import '../widgets/storage_access_dialog.dart';
 import 'ai_screen.dart';
 import 'extract_text_screen.dart';
 import 'metadata_screen.dart';
 import 'organize_pages_screen.dart';
-import 'pdf_viewer_screen.dart';
 import 'protect_screen.dart';
 
-/// Every PDF on the device, on one screen.
+/// Every document on the device, on one screen: PDFs, Word, Excel,
+/// PowerPoint and text files.
 ///
 /// This is the app's landing tab and its answer to "where are my documents" —
 /// a reader shows you what you already have rather than making you find it
 /// through a file picker every time. The sweep itself lives in
-/// [PdfLibraryService]; this screen owns presentation, selection state and
+/// [LibraryService]; this screen owns presentation, selection state and
 /// the per-file actions.
 class LibraryScreen extends StatefulWidget {
   const LibraryScreen({
@@ -78,13 +81,16 @@ class _LibraryScreenState extends State<LibraryScreen>
   /// again. The banner stays as the always-available way back to it.
   static const String _accessPromptKey = 'library.accessPromptShown';
 
-  List<PdfFileEntry> _entries = const [];
-  List<PdfFileEntry> _referenceEntries = const [];
+  List<LibraryEntry> _entries = const [];
+  List<LibraryEntry> _referenceEntries = const [];
   List<String> _recentOrder = const [];
   Set<String> _starred = {};
 
   LibraryFilter _filter = LibraryFilter.all;
   LibrarySort _sort = LibrarySort.newest;
+
+  /// Only documents of this kind; null shows every kind.
+  DocKind? _kind;
 
   /// List is the default: a filename, folder, size and date say more about a
   /// document than a thumbnail of its first page, and most first pages of
@@ -149,7 +155,7 @@ class _LibraryScreenState extends State<LibraryScreen>
     // Warm start: show last session's list immediately, then refresh behind
     // it. A full sweep takes seconds; an empty screen for that long reads as
     // "this app has nothing in it".
-    final cached = await PdfLibraryService.cached();
+    final cached = await LibraryService.cached();
     if (mounted && cached.isNotEmpty) {
       setState(() => _entries = cached);
     }
@@ -217,22 +223,25 @@ class _LibraryScreenState extends State<LibraryScreen>
     });
   }
 
-  Future<void> _refresh({bool prune = false}) async {
-    if (!mounted) return;
+  /// Look through the device again. True when this sweep finished; false
+  /// when it failed (and said so) or was queued behind one already running.
+  Future<bool> _refresh({bool prune = false}) async {
+    if (!mounted) return false;
     if (_isScanning) {
       // A grant or a newly mounted volume may arrive during an older sweep.
       // Queue a fresh sweep instead of dropping the request.
       _refreshPending = true;
-      return;
+      return false;
     }
     setState(() => _isScanning = true);
     // Set when this sweep is the first to see a new storage grant, so it is
     // shown in a dialog. Resolves to the number found, or null on failure.
     Completer<int?>? shown;
+    var finished = false;
     try {
       await _loadUserLists();
-      final access = await PdfLibraryService.access();
-      if (!mounted) return;
+      final access = await LibraryService.access();
+      if (!mounted) return false;
       final justGranted =
           _accessChecked &&
           _access == StorageAccess.appOnly &&
@@ -244,30 +253,31 @@ class _LibraryScreenState extends State<LibraryScreen>
         unawaited(_showSearchProgress(shown.future));
       }
       if (prune) {
-        final alive = await PdfLibraryService.prune(_entries);
+        final alive = await LibraryService.prune(_entries);
         if (mounted && alive.length != _entries.length) {
           setState(() => _entries = alive);
         }
       }
-      final found = await PdfLibraryService.scan();
+      final found = await LibraryService.scan();
       await _loadUserLists();
       // Intent/picker copies belong to Recent or Starred, not the device
       // library. Keep them separate so viewing a file never imports its
       // temporary copy into All PDFs or Created.
       final known = found.map((e) => e.path).toSet();
-      final extras = <PdfFileEntry>[];
+      final extras = <LibraryEntry>[];
       for (final path in {..._recentOrder, ..._starred}) {
         if (!known.add(path)) continue;
-        final entry = await PdfLibraryService.describe(path);
+        final entry = await LibraryService.describe(path);
         if (entry != null) extras.add(entry);
       }
-      if (!mounted) return;
+      if (!mounted) return false;
       setState(() {
         _entries = found;
         _referenceEntries = extras;
         _access = access;
       });
       shown?.complete(found.length);
+      finished = true;
     } catch (e) {
       // A failed sweep leaves whatever was already listed on screen. The one
       // outcome that must not happen is a spinner that never stops.
@@ -297,6 +307,25 @@ class _LibraryScreenState extends State<LibraryScreen>
         }
       }
     }
+    return finished;
+  }
+
+  /// The refresh button: look through the device again now, and say what
+  /// it found — pull-to-refresh does the same, but nothing on screen says so.
+  Future<void> _rescan() async {
+    if (_isScanning) return;
+    final before = {for (final entry in _entries) entry.path};
+    if (!await _refresh(prune: true) || !mounted) return;
+    final added = _entries
+        .where((entry) => !before.contains(entry.path))
+        .length;
+    // This answer replaces the last one rather than queueing behind it.
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    _snack(switch (added) {
+      0 => 'No new files found',
+      1 => 'Found 1 new file',
+      _ => 'Found ${formatCount(added)} new files',
+    });
   }
 
   /// Show the sweep that follows a new storage grant in a dialog.
@@ -315,7 +344,7 @@ class _LibraryScreenState extends State<LibraryScreen>
     unawaited(found.then((_) => finished = true));
     _searchDialogOpen = true;
     try {
-      await showPdfScanDialog(context, found: found);
+      await showLibraryScanDialog(context, found: found);
     } finally {
       _searchDialogOpen = false;
     }
@@ -338,13 +367,14 @@ class _LibraryScreenState extends State<LibraryScreen>
 
   // ------------------------------------------------------------- filtering
 
-  List<PdfFileEntry> get _visible =>
+  List<LibraryEntry> get _visible =>
       LibraryQuery(
         filter: _filter,
         sort: _sort,
         search: _query,
         recents: _recentOrder,
         starred: _starred,
+        kind: _kind,
       ).apply(
         _filter == LibraryFilter.recent || _filter == LibraryFilter.starred
             ? [..._entries, ..._referenceEntries]
@@ -353,17 +383,97 @@ class _LibraryScreenState extends State<LibraryScreen>
 
   // --------------------------------------------------------------- actions
 
-  Future<void> _open(PdfFileEntry entry) async {
+  Future<void> _open(LibraryEntry entry) async {
     await RecentFilesService.markOpened(entry.path);
     await _loadUserLists();
     if (!mounted) return;
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => PdfViewerScreen(pdfPath: entry.path, title: entry.name),
+    await DocumentRouter.open(context, entry.path, title: entry.name);
+    if (mounted) await _refresh(prune: true);
+  }
+
+  /// Start a new, empty text file in the app's documents folder and open it.
+  /// The first save also publishes a copy to Download/DocHelper or
+  /// Documents/DocHelper, so it outlives the app.
+  Future<void> _newTextFile() async {
+    final now = DateTime.now();
+    final name = await askPdfName(
+      context: context,
+      initialName: 'Note ${formatLibraryDate(now)}',
+      title: 'Name your text file',
+      confirmLabel: 'Create',
+      accent: DocKind.text.color,
+      extension: '.txt',
+    );
+    if (name == null || !mounted) return;
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      var file = File('${dir.path}/$name.txt');
+      for (var n = 2; await file.exists(); n++) {
+        file = File('${dir.path}/$name ($n).txt');
+      }
+      await file.writeAsString('');
+      await RecentFilesService.markOpened(file.path);
+      if (!mounted) return;
+      await DocumentRouter.open(context, file.path);
+      // A note left without a word in it was never really made; do not
+      // leave an empty file behind in the library.
+      if (await file.exists() && await file.length() == 0) {
+        await file.delete();
+        await RecentFilesService.forget(file.path);
+      }
+      if (mounted) await _refresh(prune: true);
+    } catch (e) {
+      _snack('Could not create the file: $e');
+    }
+  }
+
+  Future<void> _showAddSheet() {
+    return showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: _colors.cardBackground,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            ListTile(
+              leading: Icon(DocKind.text.icon, color: DocKind.text.color),
+              title: Text(
+                'New text file',
+                style: TextStyle(color: _colors.textPrimary),
+              ),
+              subtitle: Text(
+                'Notes, lists, anything typed',
+                style: TextStyle(color: _colors.textTertiary),
+              ),
+              onTap: () {
+                Navigator.pop(ctx);
+                _newTextFile();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.file_open_rounded, color: _accent),
+              title: Text(
+                'Import a file',
+                style: TextStyle(color: _colors.textPrimary),
+              ),
+              subtitle: Text(
+                'Add a PDF, Word, Excel, PowerPoint or text file',
+                style: TextStyle(color: _colors.textTertiary),
+              ),
+              onTap: () {
+                Navigator.pop(ctx);
+                _import();
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
       ),
     );
-    if (mounted) await _refresh(prune: true);
   }
 
   Future<void> _requestAccess() async {
@@ -372,7 +482,7 @@ class _LibraryScreenState extends State<LibraryScreen>
     if (!await showStorageAccessDialog(context)) return;
     if (!mounted) return;
     setState(() => _isRequestingAccess = true);
-    final granted = await PdfLibraryService.requestAccess();
+    final granted = await LibraryService.requestAccess();
     if (!mounted) return;
     setState(() => _isRequestingAccess = false);
     if (granted == StorageAccess.full) {
@@ -386,21 +496,21 @@ class _LibraryScreenState extends State<LibraryScreen>
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: const Text(
-          'PDF Helper still cannot read shared storage. Turn on '
-          'storage access in Settings to find PDFs outside this app.',
+          'DocHelper still cannot read shared storage. Turn on '
+          'storage access in Settings to find documents outside this app.',
         ),
         duration: const Duration(seconds: 6),
         // A snack bar with an action otherwise ignores its duration.
         persist: false,
         action: SnackBarAction(
           label: 'Settings',
-          onPressed: PdfLibraryService.openSettings,
+          onPressed: LibraryService.openSettings,
         ),
       ),
     );
   }
 
-  /// Bring a PDF in from the system file picker.
+  /// Bring a document in from the system file picker.
   ///
   /// On iOS this is the only way a document reaches the app at all, so the
   /// file is copied into app storage; on Android the picked path is already
@@ -409,7 +519,7 @@ class _LibraryScreenState extends State<LibraryScreen>
     try {
       final result = await FilePicker.pickFiles(
         type: FileType.custom,
-        allowedExtensions: ['pdf'],
+        allowedExtensions: DocKind.importExtensions,
       );
       final picked = result.map((f) => f.path).whereType<String>().toList();
       if (picked.isEmpty) return;
@@ -429,7 +539,7 @@ class _LibraryScreenState extends State<LibraryScreen>
       _snack(
         imported.length == 1
             ? 'Added ${imported.first.split('/').last}'
-            : 'Added ${imported.length} PDFs',
+            : 'Added ${imported.length} files',
       );
     } catch (e) {
       if (mounted) _snack('Could not import that file: $e');
@@ -444,26 +554,27 @@ class _LibraryScreenState extends State<LibraryScreen>
   /// on Android is referenced where it already lives instead of duplicated.
   Future<bool> _shouldCopy(String path) async {
     if (Platform.isIOS) return true;
-    return PdfLibraryService.isTemporaryPath(path);
+    return LibraryService.isTemporaryPath(path);
   }
 
   Future<String> _copyIntoLibrary(String path) async {
     final dir = await getApplicationDocumentsDirectory();
     final name = path.split('/').last;
     var target = File('${dir.path}/$name');
+    final base = DocKind.titleOf(name);
+    final extension = DocKind.extensionOf(name);
     var counter = 1;
     while (await target.exists()) {
-      final base = name.toLowerCase().endsWith('.pdf')
-          ? name.substring(0, name.length - 4)
-          : name;
-      target = File('${dir.path}/$base ($counter).pdf');
+      target = File(
+        '${dir.path}/$base ($counter)${extension.isEmpty ? '' : '.$extension'}',
+      );
       counter++;
     }
     await File(path).copy(target.path);
     return target.path;
   }
 
-  Future<void> _toggleStar(PdfFileEntry entry) async {
+  Future<void> _toggleStar(LibraryEntry entry) async {
     final starred = await RecentFilesService.toggleStar(entry.path);
     if (!mounted) return;
     setState(() {
@@ -475,7 +586,9 @@ class _LibraryScreenState extends State<LibraryScreen>
     });
   }
 
-  Future<void> _rename(PdfFileEntry entry) async {
+  Future<void> _rename(LibraryEntry entry) async {
+    final extension = DocKind.extensionOf(entry.name);
+    final suffix = extension.isEmpty ? '' : '.$extension';
     final controller = TextEditingController(text: entry.title);
     final newName = await showDialog<String>(
       context: context,
@@ -486,9 +599,9 @@ class _LibraryScreenState extends State<LibraryScreen>
           controller: controller,
           autofocus: true,
           style: TextStyle(color: _colors.textPrimary),
-          decoration: const InputDecoration(
+          decoration: InputDecoration(
             labelText: 'File name',
-            suffixText: '.pdf',
+            suffixText: suffix,
           ),
           onSubmitted: (v) => Navigator.pop(ctx, v),
         ),
@@ -511,24 +624,27 @@ class _LibraryScreenState extends State<LibraryScreen>
     if (trimmed == null || trimmed.isEmpty || trimmed == entry.title) return;
     // Path separators in a file name would silently move the file somewhere
     // else, so they are stripped rather than rejected.
-    final safe = sanitizeFileName(stripPdfExtension(trimmed));
+    final typed = suffix.isNotEmpty && trimmed.toLowerCase().endsWith(suffix)
+        ? trimmed.substring(0, trimmed.length - suffix.length)
+        : trimmed;
+    final safe = sanitizeFileName(typed);
     try {
-      final result = await PdfLibraryService.renameDocument(
+      final result = await LibraryService.renameDocument(
         entry.path,
-        '$safe.pdf',
+        '$safe$suffix',
       );
       for (final path in result.renamedPaths.keys) {
         PdfRaster.invalidate(path);
       }
       await _loadUserLists();
       await _refresh();
-      if (mounted) _snack(result.warning ?? 'Renamed to $safe.pdf');
+      if (mounted) _snack(result.warning ?? 'Renamed to $safe$suffix');
     } catch (e) {
       if (mounted) _snack('Could not rename: $e');
     }
   }
 
-  Future<void> _delete(PdfFileEntry entry) async {
+  Future<void> _delete(LibraryEntry entry) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -560,7 +676,7 @@ class _LibraryScreenState extends State<LibraryScreen>
     );
     if (confirmed != true) return;
     try {
-      final result = await PdfLibraryService.deleteDocument(entry.path);
+      final result = await LibraryService.deleteDocument(entry.path);
       for (final path in result.removedPaths) {
         PdfRaster.invalidate(path);
       }
@@ -572,10 +688,11 @@ class _LibraryScreenState extends State<LibraryScreen>
     }
   }
 
-  Future<void> _showDetails(PdfFileEntry entry) async {
+  Future<void> _showDetails(LibraryEntry entry) async {
     // A details sheet has no way to ask for a password, so an encrypted
     // file simply reports an unknown page count here.
-    final pageCount = await PdfRaster.pageCountOrZero(entry.path);
+    final isPdf = entry.kind == DocKind.pdf;
+    final pageCount = isPdf ? await PdfRaster.pageCountOrZero(entry.path) : 0;
     if (!mounted) return;
     await showDialog<void>(
       context: context,
@@ -590,7 +707,9 @@ class _LibraryScreenState extends State<LibraryScreen>
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _detailRow('Pages', pageCount > 0 ? '$pageCount' : 'Unreadable'),
+            _detailRow('Type', entry.kind.label),
+            if (isPdf)
+              _detailRow('Pages', pageCount > 0 ? '$pageCount' : 'Unreadable'),
             _detailRow('Size', formatFileSize(entry.sizeBytes)),
             _detailRow(
               'Modified',
@@ -641,7 +760,7 @@ class _LibraryScreenState extends State<LibraryScreen>
     ).showSnackBar(SnackBar(content: Text(message)));
   }
 
-  Future<void> _showActions(PdfFileEntry entry) async {
+  Future<void> _showActions(LibraryEntry entry) async {
     final isStarred = _starred.contains(entry.path);
     await showModalBottomSheet<void>(
       context: context,
@@ -659,11 +778,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                 padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
                 child: Row(
                   children: [
-                    Icon(
-                      Icons.picture_as_pdf_rounded,
-                      color: _accent,
-                      size: 22,
-                    ),
+                    Icon(entry.kind.icon, color: entry.kind.color, size: 22),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(
@@ -679,7 +794,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                             ),
                           ),
                           Text(
-                            '${entry.folder} · ${formatFileSize(entry.sizeBytes)}',
+                            '${entry.displayFolder} · ${formatFileSize(entry.sizeBytes)}',
                             style: TextStyle(
                               color: _colors.textTertiary,
                               fontSize: 11.5,
@@ -703,69 +818,17 @@ class _LibraryScreenState extends State<LibraryScreen>
               ),
               _action(ctx, Icons.share_rounded, 'Share', () {
                 SharePlus.instance.share(
-                  ShareParams(files: [XFile(entry.path)]),
-                );
-              }),
-              Divider(color: _colors.divider, height: 20),
-              if (Features.ai)
-                _action(ctx, Icons.auto_awesome_rounded, 'Ask AI', () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => AiScreen(pdfPath: entry.path),
-                    ),
-                  );
-                }),
-              _action(
-                ctx,
-                Icons.dashboard_customize_rounded,
-                'Organize pages',
-                () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => OrganizePagesScreen(pdfPath: entry.path),
-                    ),
-                  );
-                },
-              ),
-              _action(ctx, Icons.text_snippet_rounded, 'Extract text', () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => ExtractTextScreen(pdfPath: entry.path),
+                  ShareParams(
+                    files: [
+                      XFile(
+                        entry.path,
+                        mimeType: DocKind.mimeTypeOf(entry.path),
+                      ),
+                    ],
                   ),
                 );
               }),
-              _action(ctx, Icons.lock_rounded, 'Protect', () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => ProtectScreen(pdfPath: entry.path),
-                  ),
-                );
-              }),
-              _action(ctx, Icons.info_outline_rounded, 'Document details', () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => MetadataScreen(pdfPath: entry.path),
-                  ),
-                );
-              }),
-              if (widget.onSendTo != null) ...[
-                Divider(color: _colors.divider, height: 20),
-                _action(ctx, Icons.merge_rounded, 'Merge with…', () {
-                  widget.onSendTo!(DocHandoff.merge, entry.path);
-                }),
-                _action(ctx, Icons.content_cut_rounded, 'Split', () {
-                  widget.onSendTo!(DocHandoff.split, entry.path);
-                }),
-              ],
-              if (widget.onOpenInTools != null)
-                _action(ctx, Icons.handyman_rounded, 'Open in Tools', () {
-                  widget.onOpenInTools!(entry.path);
-                }),
+              if (entry.kind == DocKind.pdf) ..._pdfActions(ctx, entry),
               Divider(color: _colors.divider, height: 20),
               _action(
                 ctx,
@@ -791,6 +854,63 @@ class _LibraryScreenState extends State<LibraryScreen>
         ),
       ),
     );
+  }
+
+  /// The actions that only apply to PDFs.
+  List<Widget> _pdfActions(BuildContext ctx, LibraryEntry entry) {
+    return [
+      Divider(color: _colors.divider, height: 20),
+      if (Features.ai)
+        _action(ctx, Icons.auto_awesome_rounded, 'Ask AI', () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => AiScreen(pdfPath: entry.path)),
+          );
+        }),
+      _action(ctx, Icons.dashboard_customize_rounded, 'Organize pages', () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => OrganizePagesScreen(pdfPath: entry.path),
+          ),
+        );
+      }),
+      _action(ctx, Icons.text_snippet_rounded, 'Extract text', () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => ExtractTextScreen(pdfPath: entry.path),
+          ),
+        );
+      }),
+      _action(ctx, Icons.lock_rounded, 'Protect', () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => ProtectScreen(pdfPath: entry.path)),
+        );
+      }),
+      _action(ctx, Icons.info_outline_rounded, 'Document details', () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => MetadataScreen(pdfPath: entry.path),
+          ),
+        );
+      }),
+      if (widget.onSendTo != null) ...[
+        Divider(color: _colors.divider, height: 20),
+        _action(ctx, Icons.merge_rounded, 'Merge with…', () {
+          widget.onSendTo!(DocHandoff.merge, entry.path);
+        }),
+        _action(ctx, Icons.content_cut_rounded, 'Split', () {
+          widget.onSendTo!(DocHandoff.split, entry.path);
+        }),
+      ],
+      if (widget.onOpenInTools != null)
+        _action(ctx, Icons.handyman_rounded, 'Open in Tools', () {
+          widget.onOpenInTools!(entry.path);
+        }),
+    ];
   }
 
   Widget _action(
@@ -844,10 +964,10 @@ class _LibraryScreenState extends State<LibraryScreen>
         ],
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: _import,
+        onPressed: _showAddSheet,
         backgroundColor: _accent,
-        tooltip: 'Import a PDF',
-        child: const Icon(Icons.note_add_rounded, color: Colors.white),
+        tooltip: 'New or import',
+        child: const Icon(Icons.add_rounded, color: Colors.white, size: 28),
       ),
     );
   }
@@ -863,7 +983,7 @@ class _LibraryScreenState extends State<LibraryScreen>
               autofocus: true,
               style: TextStyle(color: _colors.textPrimary, fontSize: 16),
               decoration: InputDecoration(
-                hintText: 'Search PDFs',
+                hintText: 'Search files',
                 hintStyle: TextStyle(color: _colors.textTertiary),
                 border: InputBorder.none,
               ),
@@ -904,6 +1024,24 @@ class _LibraryScreenState extends State<LibraryScreen>
             await prefs.setBool(_viewModeKey, _isGrid);
           },
         ),
+        _isScanning
+            ? Padding(
+                padding: const EdgeInsets.all(14),
+                child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: _colors.textPrimary,
+                    semanticsLabel: 'Looking for files',
+                  ),
+                ),
+              )
+            : IconButton(
+                tooltip: 'Look for new files',
+                icon: Icon(Icons.refresh_rounded, color: _colors.textPrimary),
+                onPressed: _rescan,
+              ),
         PopupMenuButton<LibrarySort>(
           tooltip: 'Sort',
           icon: Icon(Icons.sort_rounded, color: _colors.textPrimary),
@@ -930,6 +1068,28 @@ class _LibraryScreenState extends State<LibraryScreen>
   }
 
   Widget _buildFilterBar() {
+    Widget kindChip(DocKind kind) {
+      final selected = _kind == kind;
+      return Padding(
+        padding: const EdgeInsets.only(right: 8),
+        child: ChoiceChip(
+          avatar: Icon(kind.icon, size: 16, color: kind.color),
+          label: Text(kind.label),
+          selected: selected,
+          onSelected: (_) => setState(() => _kind = selected ? null : kind),
+          showCheckmark: false,
+          backgroundColor: _colors.cardBackground,
+          selectedColor: kind.color.withValues(alpha: 0.16),
+          labelStyle: TextStyle(
+            color: selected ? kind.color : _colors.textSecondary,
+            fontSize: 12.5,
+            fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+          ),
+          side: BorderSide(color: selected ? kind.color : _colors.divider),
+        ),
+      );
+    }
+
     return SizedBox(
       height: 46,
       child: ListView(
@@ -958,6 +1118,11 @@ class _LibraryScreenState extends State<LibraryScreen>
                 ),
               ),
             ),
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: VerticalDivider(color: _colors.divider, width: 1),
+          ),
+          for (final kind in DocKind.filterable) kindChip(kind),
         ],
       ),
     );
@@ -1001,8 +1166,8 @@ class _LibraryScreenState extends State<LibraryScreen>
               children: [
                 Text(
                   isAndroid
-                      ? 'Showing only PDF Helper\'s own files'
-                      : 'Showing documents inside PDF Helper',
+                      ? 'Showing only DocHelper\'s own files'
+                      : 'Showing documents inside DocHelper',
                   style: TextStyle(
                     color: _colors.textPrimary,
                     fontSize: 13,
@@ -1012,11 +1177,11 @@ class _LibraryScreenState extends State<LibraryScreen>
                 const SizedBox(height: 3),
                 Text(
                   isAndroid
-                      ? 'Allow all files access to find PDFs in internal '
-                            'storage and SD/USB drives. Android keeps other '
-                            'apps\' private folders restricted.'
+                      ? 'Allow all files access to find documents in '
+                            'internal storage and SD/USB drives. Android keeps '
+                            'other apps\' private folders restricted.'
                       : 'iOS keeps each app to its own documents. Import a '
-                            'PDF to add it to your library.',
+                            'file to add it to your library.',
                   style: TextStyle(
                     color: _colors.textSecondary,
                     fontSize: 12,
@@ -1040,7 +1205,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                         fontWeight: FontWeight.w600,
                       ),
                     ),
-                    child: Text(isAndroid ? 'Allow access' : 'Import a PDF'),
+                    child: Text(isAndroid ? 'Allow access' : 'Import a file'),
                   ),
                 ),
               ],
@@ -1053,18 +1218,19 @@ class _LibraryScreenState extends State<LibraryScreen>
 
   Widget _buildEmptyState() {
     final String message;
+    final what = _kind?.pluralLabel ?? 'files';
     if (_query.trim().isNotEmpty) {
-      message = 'No PDFs match "${_query.trim()}".';
+      message = 'No $what match "${_query.trim()}".';
     } else {
       message = switch (_filter) {
         LibraryFilter.recent => 'Documents you open show up here.',
         LibraryFilter.starred => 'Star a document to keep it close at hand.',
         LibraryFilter.created =>
-          'PDFs you make with PDF Helper are collected here.',
+          'Files you make with DocHelper are collected here.',
         LibraryFilter.all =>
           _hasScanned
-              ? 'No PDFs found on this device yet.'
-              : 'Looking for PDFs…',
+              ? 'No $what found on this device yet.'
+              : 'Looking for $what…',
       };
     }
     // Explicitly always-scrollable: this content is shorter than the viewport,
@@ -1094,7 +1260,7 @@ class _LibraryScreenState extends State<LibraryScreen>
           child: OutlinedButton.icon(
             onPressed: _import,
             icon: const Icon(Icons.note_add_rounded, size: 18),
-            label: const Text('Import a PDF'),
+            label: const Text('Import a file'),
             style: OutlinedButton.styleFrom(
               foregroundColor: _accent,
               side: const BorderSide(color: _accent),
@@ -1105,7 +1271,7 @@ class _LibraryScreenState extends State<LibraryScreen>
     );
   }
 
-  Widget _buildGrid(List<PdfFileEntry> entries) {
+  Widget _buildGrid(List<LibraryEntry> entries) {
     return LayoutBuilder(
       builder: (context, constraints) {
         // Target ~160dp tiles, so a phone gets 2-3 columns and a tablet more.
@@ -1133,7 +1299,7 @@ class _LibraryScreenState extends State<LibraryScreen>
     );
   }
 
-  Widget _buildList(List<PdfFileEntry> entries) {
+  Widget _buildList(List<LibraryEntry> entries) {
     return ListView.separated(
       padding: const EdgeInsets.fromLTRB(12, 4, 12, 96),
       physics: const AlwaysScrollableScrollPhysics(),
@@ -1147,7 +1313,7 @@ class _LibraryScreenState extends State<LibraryScreen>
           accent: _accent,
           isStarred: _starred.contains(entry.path),
           subtitle:
-              '${entry.folder} · ${formatFileSize(entry.sizeBytes)} · '
+              '${entry.displayFolder} · ${formatFileSize(entry.sizeBytes)} · '
               '${formatLibraryDate(entry.modified)}',
           onTap: () => _open(entry),
           onMore: () => _showActions(entry),
@@ -1170,7 +1336,7 @@ class _LibraryScreenState extends State<LibraryScreen>
 class _Cover extends StatefulWidget {
   const _Cover({required this.entry, required this.colors});
 
-  final PdfFileEntry entry;
+  final LibraryEntry entry;
   final AppColors colors;
 
   @override
@@ -1197,6 +1363,8 @@ class _CoverState extends State<_Cover> {
 
   /// Ask for a cover at least [longEdge] device pixels on its long side.
   void _want(int longEdge) {
+    // Only PDFs have rendered covers; other kinds show their icon.
+    if (widget.entry.kind != DocKind.pdf) return;
     if (longEdge <= _requested) return;
     _requested = longEdge;
 
@@ -1279,6 +1447,13 @@ class _CoverState extends State<_Cover> {
   }
 
   Widget _placeholder({required bool failed}) {
+    final kind = widget.entry.kind;
+    if (kind != DocKind.pdf) {
+      return ColoredBox(
+        color: kind.color.withValues(alpha: widget.colors.isDark ? 0.22 : 0.12),
+        child: Center(child: Icon(kind.icon, color: kind.color, size: 26)),
+      );
+    }
     return ColoredBox(
       color: widget.colors.isDark
           ? Colors.white10
@@ -1304,7 +1479,7 @@ class _GridTile extends StatelessWidget {
     required this.onMore,
   });
 
-  final PdfFileEntry entry;
+  final LibraryEntry entry;
   final AppColors colors;
   final Color accent;
   final bool isStarred;
@@ -1411,7 +1586,7 @@ class _ListRow extends StatelessWidget {
     required this.onMore,
   });
 
-  final PdfFileEntry entry;
+  final LibraryEntry entry;
   final AppColors colors;
   final Color accent;
   final bool isStarred;

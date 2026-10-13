@@ -18,8 +18,8 @@ class PublicPdfExporterInstrumentation : Instrumentation() {
 
     override fun onStart() {
         val tests = listOf(
-            "downloadsPublication" to { publishesIn("Downloads", "Download/PDFHelper/") },
-            "documentsPublication" to { publishesIn("Documents", "Documents/PDFHelper/") },
+            "downloadsPublication" to { publishesIn("Downloads", "Download/DocHelper/") },
+            "documentsPublication" to { publishesIn("Documents", "Documents/DocHelper/") },
             "nameCollisionsPreserveBothDocuments" to ::preservesCollisions,
             "providerRenameDeleteAndLegacyRecovery" to ::mutatesProviderCopies,
             "staleUriCannotDeleteReplacementAtSamePath" to ::protectsReplacement,

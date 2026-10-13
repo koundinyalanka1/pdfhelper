@@ -1,9 +1,16 @@
-# PDF Helper
+# DocHelper
 
-A Flutter PDF reader and toolkit with a Rust engine. The current release scope
-is **Android**. Read, merge, split, organize, scan, protect, extract text from
-and recognize text in PDFs locally. Ads and release crash reporting use network services; Ask AI is
-hidden and is not a shipped feature. iOS is deferred.
+DocHelper (formerly PDF Helper) is a Flutter app for reading and working on
+documents on a phone, built on engines written from scratch in Rust. Today it
+reads, merges, splits, organizes, scans, protects, extracts text from and
+recognizes text in PDFs, locally. It is growing into a full document app:
+Word, Excel, PowerPoint, WPS and LibreOffice files, text files and more, each
+with its own engine library. [PLAN.md](PLAN.md) is the plan and the progress
+record for that work.
+
+The current release scope is **Android**. Ads and release crash reporting use
+network services; Ask AI is hidden and is not a shipped feature. iOS is
+deferred.
 
 Start with the [documentation index](docs/README.md):
 
@@ -11,12 +18,14 @@ Start with the [documentation index](docs/README.md):
 - [Production audit](docs/PRODUCTION_AUDIT_2026-10-07.md): verification evidence, defects fixed for release and outstanding release checks.
 - [Renderer capabilities](docs/RENDERER_CAPABILITIES_2026-10-06.md): supported PDF features and concrete compatibility limits.
 - [Improvements](IMPROVEMENTS.md): work beyond the current baseline.
+- [Plan](PLAN.md): the DocHelper roadmap, with one engine library per kind of file.
 
 ## Features
 
 | Area | Available now |
 | --- | --- |
-| Files | All/Recent/Starred/Created, filename/folder search, sorting, list/grid, covers, share, rename and linked-copy deletion |
+| Files | PDF, Word, Excel, PowerPoint and text files on the device; All/Recent/Starred/Created and kind filters, filename/folder search, sorting, list/grid, covers, share, rename and linked-copy deletion; "New text file" and import |
+| Text files | Open, edit and save `.txt`, `.md`, `.json`, logs and other text, keeping the original encoding, byte-order mark and line endings; find and replace, undo/redo, encoding and line-ending choices, JSON formatting; large files open read-only by line |
 | Viewer | Continuous scrolling, pinch/double-tap zoom, document-wide scrolling while zoomed, sharper rerendering, page jump, find in document, text selection/copy and tool shortcuts |
 | Assemble | Ordered merge and output batches; split by range, selection or individual pages |
 | Edit | Page rotation/reordering/deletion, metadata, AES-256 protection and password removal |
@@ -27,8 +36,10 @@ Start with the [documentation index](docs/README.md):
 | Settings | Dark/light theme, output quality/location, searchable scans, notifications and applicable ad privacy choices |
 
 Four tabs—Files, Tools, Scan and Settings—provide the main navigation. Tools
-reuse a selected working document. Android offers one PDF **Open with** entry;
-external launches go directly to the viewer.
+reuse a selected working document. Android offers one **Open with** entry for
+PDFs and text files; external launches go directly to the right screen. Word,
+Excel and PowerPoint files are listed and can be handed to another app until
+their editors arrive (see [PLAN.md](PLAN.md)).
 
 Files search matches names and folders, not PDF contents; the viewer's find
 searches the open document's text. Last-read restoration, interactive form
@@ -77,6 +88,7 @@ cargo install cargo-ndk
 rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
 bash scripts/build_pdf_core.sh android
 bash scripts/build_pdf_core.sh macos
+bash scripts/build_engines.sh android macos   # the per-format engines
 flutter run
 ```
 
@@ -87,7 +99,9 @@ library is needed. Explicit targets avoid the script's macOS default also
 attempting the deferred iOS build.
 
 Rebuild native libraries after engine changes, then rebuild the Flutter app;
-hot reload cannot replace native binaries. Missing native libraries fail the
+hot reload cannot replace native binaries. The per-format engines' binaries
+are not committed; the Android build refuses to start when one is missing or
+older than its Rust source. Missing native libraries fail the
 Android build preflight. Runtime availability checks also give the app a
 readable error if its engine cannot load.
 
@@ -104,6 +118,11 @@ readable error if its engine cannot load.
 | `lib/ai`, `lib/config/features.dart` | Hidden AI implementation and feature gate |
 | `android/app/src/main/kotlin` | Incoming PDF URI handling, storage access and public exports |
 | `packages/flutter_pdf_core/rust/crates` | `pdf_core`, `pdf_ops`, `pdf_text`, `pdf_render`, `pdf_ai`, `pdf_ffi` |
+| `packages/doc_common` | Shared Rust crates for every engine: `doc_zip`, `doc_xml`, `doc_encoding`, `doc_ffi` |
+| `packages/flutter_text_core` | The text-file engine (Rust `text_core`/`text_ffi`, Dart `TextCore`) |
+| `packages/flutter_sheet_core` | The spreadsheet engine, in progress (Rust `sheet_core`) |
+| `lib/models/doc_kind.dart`, `lib/services/document_router.dart` | Kinds of file, and which screen opens each |
+| `lib/services/document_save_service.dart` | Saving edited documents in place or as public copies |
 
 ## Storage, privacy and advertising
 
@@ -136,8 +155,10 @@ Run host checks against rebuilt native libraries:
 
 ```bash
 bash scripts/build_pdf_core.sh test
+bash scripts/build_engines.sh test
 flutter analyze
-PDF_CORE_LIB_PATH="$PWD/packages/flutter_pdf_core/macos/Frameworks/libpdf_ffi.dylib" flutter test
+eval "$(bash scripts/build_engines.sh env)"   # *_CORE_LIB_PATH for every engine
+flutter test
 flutter test integration_test -d <android-device-id>
 flutter build appbundle --release
 python3 scripts/check_android_native.py build/app/outputs/bundle/release/app-release.aab

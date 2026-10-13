@@ -12,7 +12,7 @@ class IntentService {
 
   /// The PDF this app was launched to open, or null when it was not launched
   /// from an intent (or is not on Android).
-  static Future<String?> getOpenedPdfPath() async {
+  static Future<String?> getOpenedDocumentPath() async {
     if (!Platform.isAndroid) {
       return null;
     }

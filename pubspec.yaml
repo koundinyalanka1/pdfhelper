@@ -1,5 +1,5 @@
 name: pdfhelper
-description: "A PDF toolkit app for merging, splitting, and converting images to PDF."
+description: "DocHelper: read, edit, create, convert and share documents of every common kind on the phone."
 publish_to: 'none'
 
 version: 3.0.0+3
@@ -20,6 +20,12 @@ dependencies:
   # Run ./scripts/build_pdf_core.sh once to produce the native binaries.
   flutter_pdf_core:
     path: packages/flutter_pdf_core
+
+  # DocHelper's other engines: one library per kind of file, each written
+  # from scratch in Rust and called over dart:ffi (see PLAN.md). Build their
+  # native binaries with ./scripts/build_engines.sh.
+  flutter_text_core:
+    path: packages/flutter_text_core
 
   # File handling
   file_picker: ^13.1.0

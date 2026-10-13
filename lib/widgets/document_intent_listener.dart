@@ -4,14 +4,15 @@ import 'package:flutter/material.dart' hide Intent;
 import 'package:flutter/services.dart';
 import 'package:receive_intent/receive_intent.dart';
 import '../services/intent_service.dart';
-import '../screens/pdf_viewer_screen.dart';
 import '../screens/splash_screen.dart';
-import '../utils/format_utils.dart';
+import '../services/document_router.dart';
 
-/// Listens for new PDF intents when app is resumed (e.g. user opens PDF while app in background).
+/// Listens for documents opened from other apps while DocHelper is already
+/// running (e.g. the user taps a file in WhatsApp with the app in the
+/// background).
 /// Must wrap the app and have access to navigator.
-class PdfIntentListener extends StatefulWidget {
-  const PdfIntentListener({
+class DocumentIntentListener extends StatefulWidget {
+  const DocumentIntentListener({
     super.key,
     required this.navigatorKey,
     required this.child,
@@ -27,10 +28,10 @@ class PdfIntentListener extends StatefulWidget {
   final Future<String?> Function()? resolvePdfPath;
 
   @override
-  State<PdfIntentListener> createState() => _PdfIntentListenerState();
+  State<DocumentIntentListener> createState() => _DocumentIntentListenerState();
 }
 
-class _PdfIntentListenerState extends State<PdfIntentListener> {
+class _DocumentIntentListenerState extends State<DocumentIntentListener> {
   StreamSubscription<Intent?>? _intentSubscription;
   Future<void> _pendingOpen = Future<void>.value();
 
@@ -67,12 +68,12 @@ class _PdfIntentListenerState extends State<PdfIntentListener> {
       return;
     }
 
-    // If intent has data, validate it's a PDF; otherwise rely on native getPdfIntentData
+    // Only local documents: content:// from a provider, or file://. The
+    // native side checks the type and content before handing a path over.
     final uri = intent.data;
     if (uri != null && uri.isNotEmpty) {
-      if (!uri.toLowerCase().contains('.pdf') &&
-          !uri.toLowerCase().startsWith('content://') &&
-          !uri.toLowerCase().startsWith('file://')) {
+      final lower = uri.toLowerCase();
+      if (!lower.startsWith('content://') && !lower.startsWith('file://')) {
         return;
       }
     }
@@ -90,7 +91,8 @@ class _PdfIntentListenerState extends State<PdfIntentListener> {
     if (!mounted) return;
     try {
       final path =
-          await (widget.resolvePdfPath ?? IntentService.getOpenedPdfPath)();
+          await (widget.resolvePdfPath ??
+              IntentService.getOpenedDocumentPath)();
       if (!mounted ||
           path == null ||
           !(widget.navigatorKey.currentState?.mounted ?? false)) {
@@ -101,11 +103,10 @@ class _PdfIntentListenerState extends State<PdfIntentListener> {
       navigator.pushAndRemoveUntil(
         PageRouteBuilder<void>(
           settings: const RouteSettings(
-            name: PdfIntentListener.viewerRouteName,
+            name: DocumentIntentListener.viewerRouteName,
           ),
           transitionDuration: Duration.zero,
-          pageBuilder: (_, _, _) =>
-              PdfViewerScreen(pdfPath: path, title: getPdfDisplayTitle(path)),
+          pageBuilder: (_, _, _) => externalDocumentScreen(path),
         ),
         // Preserve an existing library, but remove startup and old external
         // viewers. Direct viewing must not build a hidden library or ask for
@@ -113,7 +114,7 @@ class _PdfIntentListenerState extends State<PdfIntentListener> {
         (route) =>
             route.isFirst &&
             route.settings.name != SplashScreen.routeName &&
-            route.settings.name != PdfIntentListener.viewerRouteName,
+            route.settings.name != DocumentIntentListener.viewerRouteName,
       );
     } on PlatformException catch (error) {
       debugPrint('[PdfIntent] ${error.message}');

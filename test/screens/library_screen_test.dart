@@ -3,11 +3,12 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_text_core/flutter_text_core.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:pdfhelper/config/features.dart';
 import 'package:pdfhelper/providers/theme_provider.dart';
 import 'package:pdfhelper/screens/library_screen.dart';
-import 'package:pdfhelper/services/pdf_library_service.dart';
+import 'package:pdfhelper/services/library_service.dart';
 import 'package:pdfhelper/services/public_pdf_save_service.dart';
 import 'package:pdfhelper/services/recent_files_service.dart';
 import 'package:provider/provider.dart';
@@ -27,7 +28,7 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     PublicPdfSaveService.resetForTesting();
     RecentFilesService.resetCacheForTesting();
-    PdfLibraryService.resetForTesting();
+    LibraryService.resetForTesting();
   });
 
   tearDown(() {
@@ -92,7 +93,7 @@ void main() {
     await tester.pump();
 
     expect(find.text('Files'), findsOneWidget);
-    expect(find.text('All PDFs'), findsOneWidget);
+    expect(find.text('All files'), findsOneWidget);
     expect(find.text('Recent'), findsOneWidget);
     expect(find.text('Starred'), findsOneWidget);
     expect(find.text('Created'), findsOneWidget);
@@ -125,24 +126,43 @@ void main() {
     expect(find.text('Before'), findsOneWidget);
   });
 
+  testWidgets('the refresh button looks again and says what it found', (
+    tester,
+  ) async {
+    seed('Before.pdf');
+    await settle(tester);
+    final refresh = find.byTooltip('Look for new files');
+    expect(refresh, findsOneWidget);
+
+    seed('Downloaded.pdf');
+    await tester.tap(refresh);
+    await flush(tester, rounds: 25);
+    expect(find.text('Downloaded'), findsOneWidget);
+    expect(find.text('Found 1 new file'), findsOneWidget);
+
+    await tester.tap(refresh);
+    await flush(tester, rounds: 25);
+    expect(find.text('No new files found'), findsOneWidget);
+  });
+
   testWidgets('explains an empty library instead of showing a blank page', (
     tester,
   ) async {
     await settle(tester);
 
-    expect(find.text('No PDFs found on this device yet.'), findsOneWidget);
-    expect(find.text('Import a PDF'), findsWidgets);
+    expect(find.text('No files found on this device yet.'), findsOneWidget);
+    expect(find.text('Import a file'), findsWidgets);
   });
 
   testWidgets('pull-to-refresh works on an empty library', (tester) async {
     await settle(tester);
-    expect(find.text('No PDFs found on this device yet.'), findsOneWidget);
+    expect(find.text('No files found on this device yet.'), findsOneWidget);
 
     // The empty state is shorter than the viewport, so this only works if it
     // opts into always-scrollable physics. Dragging the message itself avoids
     // the horizontal filter bar, which is also a ListView.
     await tester.drag(
-      find.text('No PDFs found on this device yet.'),
+      find.text('No files found on this device yet.'),
       const Offset(0, 260),
     );
     await tester.pump();
@@ -192,7 +212,7 @@ void main() {
     await tester.enterText(find.byType(TextField), 'zzzz');
     await tester.pump();
 
-    expect(find.textContaining('No PDFs match'), findsOneWidget);
+    expect(find.textContaining('No files match'), findsOneWidget);
   });
 
   testWidgets('opens as a list, not a grid', (tester) async {
@@ -234,7 +254,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
 
     // Rebuild from scratch, as a relaunch would.
-    PdfLibraryService.resetForTesting();
+    LibraryService.resetForTesting();
     await settle(tester);
 
     expect(find.byType(GridView), findsOneWidget);
@@ -354,7 +374,7 @@ void main() {
     // The host is not Android, so the screen reports app-only access and
     // explains the iOS sandbox rather than offering an Android grant.
     expect(
-      find.textContaining('Showing documents inside PDF Helper'),
+      find.textContaining('Showing documents inside DocHelper'),
       findsOneWidget,
     );
   });
@@ -559,6 +579,113 @@ void main() {
       reason: 'the new name must stay inside the original directory',
     );
     expect(File('${paths.documents.path}/escaped.pdf').existsSync(), isTrue);
+  });
+
+  group('kinds of file', () {
+    testWidgets('lists every kind and filters by kind', (tester) async {
+      seed('Report.pdf');
+      seed('Letter.docx', body: 'PK');
+      seed('Accounts.xlsx', body: 'PK');
+      seed('notes.txt', body: 'hello');
+      await settle(tester);
+
+      for (final title in ['Report', 'Letter', 'Accounts', 'notes']) {
+        expect(find.text(title), findsOneWidget, reason: title);
+      }
+
+      final excel = find.widgetWithText(ChoiceChip, 'Excel');
+      await tester.ensureVisible(excel);
+      await tester.pumpAndSettle();
+      await tester.tap(excel);
+      await tester.pump();
+      expect(find.text('Accounts'), findsOneWidget);
+      expect(find.text('Report'), findsNothing);
+      expect(find.text('Letter'), findsNothing);
+
+      // Tapping the selected chip again shows every kind.
+      await tester.tap(excel);
+      await tester.pump();
+      expect(find.text('Report'), findsOneWidget);
+      expect(find.text('Letter'), findsOneWidget);
+    });
+
+    testWidgets('a kind without an editor offers another app', (tester) async {
+      seed('Letter.docx', body: 'PK');
+      await settle(tester);
+
+      await tester.tap(find.text('Letter'));
+      await flush(tester);
+      await tester.pumpAndSettle();
+      expect(find.text('Open with another app'), findsOneWidget);
+      expect(find.textContaining('Opening Word files'), findsOneWidget);
+    });
+
+    testWidgets('PDF-only actions are not offered for other kinds', (
+      tester,
+    ) async {
+      seed('notes.txt', body: 'hello');
+      await settle(tester);
+
+      await tester.tap(find.byTooltip('More').first);
+      await tester.pumpAndSettle();
+      expect(find.text('Rename'), findsOneWidget);
+      expect(find.text('Organize pages'), findsNothing);
+      expect(find.text('Protect'), findsNothing);
+      expect(find.text('Extract text'), findsNothing);
+    });
+
+    testWidgets('renaming keeps the file\'s own extension', (tester) async {
+      seed('Letter.docx', body: 'PK');
+      await settle(tester);
+
+      await tester.tap(find.byTooltip('More').first);
+      await tester.pumpAndSettle();
+      await tapSheetItem(tester, 'Rename');
+      expect(find.text('.docx'), findsOneWidget);
+      await tester.enterText(find.byType(TextField).last, 'Reply');
+      await tester.tap(find.widgetWithText(FilledButton, 'Rename'));
+      await flush(tester);
+      expect(File('${paths.documents.path}/Reply.docx').existsSync(), isTrue);
+      expect(File('${paths.documents.path}/Letter.docx').existsSync(), isFalse);
+    });
+
+    testWidgets('a new note left empty is not kept', (tester) async {
+      await settle(tester);
+      await tester.tap(find.byType(FloatingActionButton));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('New text file'));
+      await tester.pumpAndSettle();
+      expect(find.text('Name your text file'), findsOneWidget);
+      expect(find.text('.txt'), findsOneWidget);
+      await tester.tap(find.text('Create'));
+      await tester.pump();
+      await flush(tester, rounds: 20);
+      final notes = paths.documents
+          .listSync()
+          .whereType<File>()
+          .where((f) => f.path.endsWith('.txt'));
+      expect(notes, hasLength(1), reason: 'the note exists while open');
+
+      await tester.pageBack();
+      await tester.pump();
+      await flush(tester, rounds: 20);
+      expect(
+        paths.documents.listSync().whereType<File>().where(
+          (f) => f.path.endsWith('.txt'),
+        ),
+        isEmpty,
+      );
+    }, skip: !TextCore.isAvailable);
+
+    testWidgets('the add button offers a new text file and import', (
+      tester,
+    ) async {
+      await settle(tester);
+      await tester.tap(find.byType(FloatingActionButton));
+      await tester.pumpAndSettle();
+      expect(find.text('New text file'), findsOneWidget);
+      expect(find.text('Import a file'), findsWidgets);
+    });
   });
 }
 

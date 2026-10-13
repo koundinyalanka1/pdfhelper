@@ -36,7 +36,7 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     
     <application
-        android:label="PDF Helper"
+        android:label="DocHelper"
         android:name="${applicationName}"
         android:requestLegacyExternalStorage="true"
         android:allowBackup="false"
@@ -67,16 +67,22 @@
             android:exported="false"
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
-        <!-- The app's single "Open with" entry. Opening a PDF from another app
-             means one thing — read it — so the chooser gets one row labelled
-             with the app's name, not a menu of verbs. Merge, split and the
-             rest are reached from the viewer's own actions once the document
-             is on screen; see PdfViewerScreen. -->
+        <!-- The app's single "Open with" entry. Opening a document from
+             another app means one thing — read it — so the chooser gets one
+             row labelled with the app's name, not a menu of verbs. Merge,
+             split and the rest are reached from the screen's own actions once
+             the document is on screen.
+
+             It covers every kind DocHelper can open: PDFs, and plain text
+             (other kinds join as their editors arrive; keep this in step with
+             OPENABLE_EXTENSIONS in MainActivity). The component keeps its old
+             name: renaming it would reset the "Always open with" choices
+             people have made. -->
         <activity-alias
             android:name=".ViewPdfAlias"
             android:targetActivity=".PdfIntentTrampolineActivity"
             android:exported="true"
-            android:label="PDF Helper">
+            android:label="DocHelper">
             <meta-data
                 android:name="com.yourmateapps.pdfhelper.PDF_ACTION"
                 android:value="view"/>
@@ -92,6 +98,26 @@
                 <data android:scheme="file"/>
                 <data android:host="*"/>
                 <data android:pathPattern=".*\\.pdf"/>
+            </intent-filter>
+            <!-- Plain text, Markdown and JSON. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:mimeType="text/plain"/>
+                <data android:mimeType="text/markdown"/>
+                <data android:mimeType="text/x-markdown"/>
+                <data android:mimeType="application/json"/>
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:scheme="file"/>
+                <data android:host="*"/>
+                <data android:pathPattern=".*\\.txt"/>
+                <data android:pathPattern=".*\\.md"/>
+                <data android:pathPattern=".*\\.json"/>
+                <data android:pathPattern=".*\\.log"/>
             </intent-filter>
         </activity-alias>
 
@@ -118,6 +144,11 @@
         <intent>
             <action android:name="android.intent.action.VIEW"/>
             <data android:mimeType="application/pdf"/>
+        </intent>
+        <!-- "Open with another app" for kinds DocHelper cannot open yet. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:mimeType="*/*"/>
         </intent>
         <!-- url_launcher: opening external URLs (Rate App, Privacy, Terms) -->
         <intent>

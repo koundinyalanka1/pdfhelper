@@ -110,7 +110,7 @@ void main() {
 
     await recognizeText(tester);
     expect(find.textContaining('Found text on one page'), findsOneWidget);
-    await choose(tester, 'Keep in PDF Helper');
+    await choose(tester, 'Keep in DocHelper');
 
     expect(selectableText(tester), contains(scanText));
     expect(recognize, findsNothing);
@@ -138,7 +138,7 @@ void main() {
   ) async {
     await open(tester, source);
     await recognizeText(tester);
-    await choose(tester, 'Keep in PDF Helper');
+    await choose(tester, 'Keep in DocHelper');
     await close(tester);
 
     // Opened again from another app, which hands over a new temporary copy.
@@ -198,7 +198,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('Text recognized'), findsOneWidget);
-    await choose(tester, 'Keep in PDF Helper');
+    await choose(tester, 'Keep in DocHelper');
     expect(selectableText(tester), contains(scanText));
     expect(paths.documents.listSync(), isEmpty);
     await close(tester);

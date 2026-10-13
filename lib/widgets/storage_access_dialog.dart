@@ -46,7 +46,7 @@ Future<bool> showStorageAccessDialog(BuildContext context) async {
     builder: (ctx) => AlertDialog(
       backgroundColor: colors.cardBackground,
       title: Text(
-        'Find PDFs on your phone',
+        'Find documents on your phone',
         style: TextStyle(color: colors.textPrimary),
       ),
       content: Column(
@@ -55,7 +55,7 @@ Future<bool> showStorageAccessDialog(BuildContext context) async {
         children: [
           Text(
             'Android puts files outside this app behind a permission called '
-            '"All files access". Without it, PDF Helper can only show the '
+            '"All files access". Without it, DocHelper can only show the '
             'documents it created itself.',
             style: TextStyle(
               color: colors.textSecondary,
@@ -64,8 +64,9 @@ Future<bool> showStorageAccessDialog(BuildContext context) async {
             ),
           ),
           const SizedBox(height: 16),
-          point(Icons.picture_as_pdf_rounded, 'Only PDFs are read. Nothing '
-              'else on your phone is opened or listed.'),
+          point(Icons.description_rounded, 'Only documents are listed: '
+              'PDF, Word, Excel, PowerPoint and text files. Photos, '
+              'messages and other files are not opened or listed.'),
           point(Icons.phone_android_rounded, 'Everything stays on this '
               'device. No file is uploaded anywhere.'),
           point(Icons.settings_rounded, 'The next screen is Android\'s own. '

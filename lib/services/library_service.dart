@@ -7,6 +7,7 @@ import 'dart:isolate';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../models/doc_kind.dart';
 import '../utils/error_logger.dart';
 import 'android_storage_service.dart';
 import 'public_pdf_save_service.dart';
@@ -26,9 +27,10 @@ enum StorageAccess {
   appOnly,
 }
 
-/// One PDF found on the device.
-class PdfFileEntry {
-  const PdfFileEntry({
+/// One document found on the device: a PDF, Word, Excel, PowerPoint or
+/// text file (see [DocKind.isListed]).
+class LibraryEntry {
+  const LibraryEntry({
     required this.path,
     required this.name,
     required this.sizeBytes,
@@ -54,11 +56,16 @@ class PdfFileEntry {
 
   DateTime get modified => DateTime.fromMillisecondsSinceEpoch(modifiedMs);
 
-  /// File name without the `.pdf` extension.
-  String get title {
-    final dot = name.toLowerCase().lastIndexOf('.pdf');
-    return dot > 0 ? name.substring(0, dot) : name;
-  }
+  /// File name without its extension.
+  String get title => DocKind.titleOf(name);
+
+  /// What kind of document this is, from its extension.
+  DocKind get kind => DocKind.ofPath(name);
+
+  /// The folder to show a person. Files in the app's own storage live in
+  /// folders like `app_flutter` that mean nothing to them, so those read
+  /// "DocHelper".
+  String get displayFolder => isAppOwned ? 'DocHelper' : folder;
 
   Map<String, Object> toJson() => {
     'p': path,
@@ -69,12 +76,12 @@ class PdfFileEntry {
     'a': isAppOwned,
   };
 
-  static PdfFileEntry? fromJson(Object? json) {
+  static LibraryEntry? fromJson(Object? json) {
     if (json is! Map) return null;
     final path = json['p'];
     final name = json['n'];
     if (path is! String || name is! String) return null;
-    return PdfFileEntry(
+    return LibraryEntry(
       path: path,
       name: name,
       sizeBytes: json['s'] is int ? json['s'] as int : 0,
@@ -89,29 +96,30 @@ class PdfFileEntry {
 ///
 /// The walk cannot know how many folders remain until it reaches them, so
 /// this is a running count rather than a fraction.
-class PdfScanProgress {
-  const PdfScanProgress({required this.folders, required this.pdfs});
+class LibraryScanProgress {
+  const LibraryScanProgress({required this.folders, required this.documents});
 
   /// Directories listed so far.
   final int folders;
 
-  /// PDFs found so far.
-  final int pdfs;
+  /// Documents found so far.
+  final int documents;
 }
 
-/// Finds every PDF the app is allowed to read, the way a document reader does.
+/// Finds every document the app is allowed to read, the way a file manager
+/// does: PDFs, Word, Excel, PowerPoint and text files.
 ///
 /// The walk runs on a background isolate — a full sweep of shared storage
 /// touches thousands of directories and would drop frames for seconds on the
 /// UI isolate. Results are cached to disk so reopening the Files tab is
 /// instant while a fresh scan runs behind it.
-class PdfLibraryService {
-  PdfLibraryService._();
+class LibraryService {
+  LibraryService._();
 
   static const String _cacheFileName = 'pdf_library_cache.json';
 
-  static List<PdfFileEntry>? _memory;
-  static Future<List<PdfFileEntry>>? _inFlight;
+  static List<LibraryEntry>? _memory;
+  static Future<List<LibraryEntry>>? _inFlight;
 
   /// The cache write started by the last completed sweep. Writing is
   /// deliberately not awaited by [scan] — the list should reach the screen
@@ -119,13 +127,15 @@ class PdfLibraryService {
   /// waits for it to land.
   static Future<void> _cacheWrite = Future<void>.value();
 
-  static final ValueNotifier<PdfScanProgress?> _progress = ValueNotifier(null);
+  static final ValueNotifier<LibraryScanProgress?> _progress = ValueNotifier(
+    null,
+  );
 
   /// Last completed scan, if the Files tab has already run one this session.
-  static List<PdfFileEntry>? get lastResult => _memory;
+  static List<LibraryEntry>? get lastResult => _memory;
 
   /// Running counts for the sweep in progress; null when none is running.
-  static ValueListenable<PdfScanProgress?> get progress => _progress;
+  static ValueListenable<LibraryScanProgress?> get progress => _progress;
 
   // --------------------------------------------------------------- access
 
@@ -137,7 +147,7 @@ class PdfLibraryService {
           ? StorageAccess.full
           : StorageAccess.appOnly;
     } catch (e) {
-      logError('PdfLibraryService.access', e);
+      logError('LibraryService.access', e);
       return StorageAccess.appOnly;
     }
   }
@@ -150,7 +160,7 @@ class PdfLibraryService {
           ? StorageAccess.full
           : StorageAccess.appOnly;
     } catch (e) {
-      logError('PdfLibraryService.requestAccess', e);
+      logError('LibraryService.requestAccess', e);
       return StorageAccess.appOnly;
     }
   }
@@ -161,7 +171,7 @@ class PdfLibraryService {
     try {
       await AndroidStorageService.openSettings();
     } catch (e) {
-      logError('PdfLibraryService.openSettings', e);
+      logError('LibraryService.openSettings', e);
     }
   }
 
@@ -170,20 +180,23 @@ class PdfLibraryService {
   /// Everything the app can see, newest first.
   ///
   /// Concurrent calls share one sweep rather than starting a second walk.
-  static Future<List<PdfFileEntry>> scan() {
+  static Future<List<LibraryEntry>> scan() {
     return _inFlight ??= _scan().whenComplete(() => _inFlight = null);
   }
 
-  static Future<List<PdfFileEntry>> _scan() async {
+  static Future<List<LibraryEntry>> _scan() async {
     final updates = ReceivePort();
     updates.listen((message) {
-      if (message case [final int folders, final int pdfs]) {
-        _progress.value = PdfScanProgress(folders: folders, pdfs: pdfs);
+      if (message case [final int folders, final int documents]) {
+        _progress.value = LibraryScanProgress(
+          folders: folders,
+          documents: documents,
+        );
       }
     });
-    _progress.value = const PdfScanProgress(folders: 0, pdfs: 0);
+    _progress.value = const LibraryScanProgress(folders: 0, documents: 0);
 
-    final List<PdfFileEntry> found;
+    final List<LibraryEntry> found;
     try {
       final appRoots = await _appRoots();
       final sharedRoots = await _sharedRoots();
@@ -224,8 +237,8 @@ class PdfLibraryService {
   }
 
   @visibleForTesting
-  static List<PdfFileEntry> reconcilePublicExports(
-    List<PdfFileEntry> files,
+  static List<LibraryEntry> reconcilePublicExports(
+    List<LibraryEntry> files,
     Map<String, String> exports,
   ) => reconcileDocuments(files, [
     for (final entry in exports.entries)
@@ -237,7 +250,7 @@ class PdfLibraryService {
   ]);
 
   static Map<String, String> documentAliases(
-    List<PdfFileEntry> files,
+    List<LibraryEntry> files,
     List<PdfDocumentRecord> documents,
   ) {
     final visible = files.map((entry) => entry.path).toSet();
@@ -256,8 +269,8 @@ class PdfLibraryService {
     return aliases;
   }
 
-  static List<PdfFileEntry> reconcileDocuments(
-    List<PdfFileEntry> files,
+  static List<LibraryEntry> reconcileDocuments(
+    List<LibraryEntry> files,
     List<PdfDocumentRecord> documents,
   ) {
     final aliases = documentAliases(files, documents);
@@ -266,7 +279,7 @@ class PdfLibraryService {
         if (!aliases.containsKey(entry.path) ||
             aliases[entry.path] == entry.path)
           if (aliases.containsKey(entry.path))
-            PdfFileEntry(
+            LibraryEntry(
               path: entry.path,
               name: entry.name,
               sizeBytes: entry.sizeBytes,
@@ -308,28 +321,28 @@ class PdfLibraryService {
 
   /// Kept apart from [_scan] so the isolate's closure can only capture
   /// sendable values, never the [ReceivePort] beside them.
-  static Future<List<PdfFileEntry>> _walkInBackground(
+  static Future<List<LibraryEntry>> _walkInBackground(
     _ScanRequest request,
     SendPort updates,
   ) => Isolate.run(
     () => _walk(
       request,
-      onProgress: (folders, pdfs) => updates.send([folders, pdfs]),
+      onProgress: (folders, documents) => updates.send([folders, documents]),
     ),
   );
 
   /// The previous scan, read from disk. Returns an empty list when there
   /// isn't one — this is a warm start, never an error path.
-  static Future<List<PdfFileEntry>> cached() async {
+  static Future<List<LibraryEntry>> cached() async {
     if (_memory != null) return _memory!;
     try {
       final file = File(await _cachePath());
       if (!await file.exists()) return const [];
       final decoded = jsonDecode(await file.readAsString());
       if (decoded is! Map || decoded['files'] is! List) return const [];
-      final entries = <PdfFileEntry>[];
+      final entries = <LibraryEntry>[];
       for (final raw in decoded['files'] as List) {
-        final entry = PdfFileEntry.fromJson(raw);
+        final entry = LibraryEntry.fromJson(raw);
         if (entry != null) entries.add(entry);
       }
       // Entries may name files that have since been deleted or moved. They
@@ -338,7 +351,7 @@ class PdfLibraryService {
       _memory = entries;
       return entries;
     } catch (e) {
-      logError('PdfLibraryService.cached', e);
+      logError('LibraryService.cached', e);
       return const [];
     }
   }
@@ -359,11 +372,11 @@ class PdfLibraryService {
   ///
   /// Uses the same complete walk as production against a real directory tree.
   @visibleForTesting
-  static List<PdfFileEntry> walkForTesting(
+  static List<LibraryEntry> walkForTesting(
     List<String> roots, {
     List<String> appRoots = const [],
     List<String> excludedRoots = const [],
-    void Function(int folders, int pdfs)? onProgress,
+    void Function(int folders, int documents)? onProgress,
   }) => _walk(
     _ScanRequest(
       sharedRoots: roots,
@@ -382,9 +395,18 @@ class PdfLibraryService {
         .any((root) => _isWithin(canonical, root));
   }
 
+  /// Whether [path] is inside this app's own storage (documents, support,
+  /// cache or app-specific external folders), which other apps cannot see
+  /// and which uninstalling removes.
+  static Future<bool> isAppStoragePath(String path) async {
+    final canonical = _canonicalRoot(path);
+    final roots = [...await _appRoots(), ...await _temporaryRoots()];
+    return roots.map(_canonicalRoot).any((root) => _isWithin(canonical, root));
+  }
+
   /// Drop cache entries whose file no longer exists.
-  static Future<List<PdfFileEntry>> prune(List<PdfFileEntry> entries) async {
-    final alive = <PdfFileEntry>[];
+  static Future<List<LibraryEntry>> prune(List<LibraryEntry> entries) async {
+    final alive = <LibraryEntry>[];
     for (final entry in entries) {
       if (await File(entry.path).exists()) alive.add(entry);
     }
@@ -396,19 +418,19 @@ class PdfLibraryService {
     final memory = _memory;
     if (memory == null) return;
     _memory = memory.where((e) => e.path != path).toList();
-    final snapshot = List<PdfFileEntry>.of(_memory!);
+    final snapshot = List<LibraryEntry>.of(_memory!);
     _cacheWrite = _cacheWrite.then((_) => _writeCache(snapshot));
     unawaited(_cacheWrite);
   }
 
   /// Add or replace a single entry (after a rename or a new export).
-  static Future<PdfFileEntry?> describe(String path) async {
+  static Future<LibraryEntry?> describe(String path) async {
     try {
       final file = File(path);
       if (!await file.exists()) return null;
       final stat = await file.stat();
       final appRoots = await _appRoots();
-      return PdfFileEntry(
+      return LibraryEntry(
         path: path,
         name: path.split(Platform.pathSeparator).last,
         sizeBytes: stat.size,
@@ -417,7 +439,7 @@ class PdfLibraryService {
         isAppOwned: appRoots.any((r) => _isWithin(path, r)),
       );
     } catch (e) {
-      logError('PdfLibraryService.describe', e);
+      logError('LibraryService.describe', e);
       return null;
     }
   }
@@ -474,7 +496,7 @@ class PdfLibraryService {
           roots.add(dir.path);
         }
       } catch (e) {
-        logError('PdfLibraryService._appRoots', e);
+        logError('LibraryService._appRoots', e);
       }
     }
     return roots.toList();
@@ -487,7 +509,7 @@ class PdfLibraryService {
     return '${dir.path}/$_cacheFileName';
   }
 
-  static Future<void> _writeCache(List<PdfFileEntry> entries) async {
+  static Future<void> _writeCache(List<LibraryEntry> entries) async {
     try {
       final file = File(await _cachePath());
       final staging = File('${file.path}.tmp');
@@ -500,7 +522,7 @@ class PdfLibraryService {
       );
       await staging.rename(file.path);
     } catch (e) {
-      logError('PdfLibraryService._writeCache', e);
+      logError('LibraryService._writeCache', e);
     }
   }
 }
@@ -557,11 +579,11 @@ const Duration _progressInterval = Duration(milliseconds: 100);
 /// file count, depth or time limit: every accessible branch is visited.
 /// [onProgress] receives running counts at most every [_progressInterval],
 /// and always once more with the final counts.
-List<PdfFileEntry> _walk(
+List<LibraryEntry> _walk(
   _ScanRequest request, {
-  void Function(int folders, int pdfs)? onProgress,
+  void Function(int folders, int documents)? onProgress,
 }) {
-  final results = <PdfFileEntry>[];
+  final results = <LibraryEntry>[];
   var folders = 0;
   final sinceReport = Stopwatch()..start();
   final seenFiles = <String>{};
@@ -609,13 +631,13 @@ List<PdfFileEntry> _walk(
           queue.add(_PendingDirectory(path, canonical));
         }
       } else if (child is File) {
-        if (!name.toLowerCase().endsWith('.pdf')) continue;
+        if (!DocKind.isListed(name)) continue;
         if (!seenFiles.add(canonical)) continue;
         try {
           final stat = child.statSync();
           if (stat.type != FileSystemEntityType.file) continue;
           results.add(
-            PdfFileEntry(
+            LibraryEntry(
               path: path,
               name: name,
               sizeBytes: stat.size,

@@ -124,7 +124,7 @@ class NotificationService {
     const AndroidNotificationDetails androidDetails =
         AndroidNotificationDetails(
           'pdf_helper_channel',
-          'PDF Helper',
+          'DocHelper',
           channelDescription: 'Notifications for PDF operations',
           importance: Importance.high,
           priority: Priority.high,

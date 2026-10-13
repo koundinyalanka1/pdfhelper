@@ -10,7 +10,7 @@ import 'package:pdfhelper/screens/pdf_viewer_screen.dart';
 import 'package:pdfhelper/screens/splash_screen.dart';
 import 'package:pdfhelper/services/recent_files_service.dart';
 import 'package:pdfhelper/widgets/banner_ad_widget.dart';
-import 'package:pdfhelper/widgets/pdf_intent_listener.dart';
+import 'package:pdfhelper/widgets/document_intent_listener.dart';
 import 'package:provider/provider.dart';
 import 'package:receive_intent/receive_intent.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -61,7 +61,7 @@ void main() {
   Widget app({bool splash = false}) {
     return ChangeNotifierProvider(
       create: (_) => ThemeProvider(),
-      child: PdfIntentListener(
+      child: DocumentIntentListener(
         navigatorKey: key,
         intentStream: intents.stream,
         resolvePdfPath: resolvePath,
@@ -109,7 +109,7 @@ void main() {
     tester,
   ) async {
     final path = pdf('Cold launch');
-    await tester.pumpWidget(PDFHelperApp(initialPdfPath: path));
+    await tester.pumpWidget(DocHelperApp(initialPdfPath: path));
     await frames(tester);
 
     expectViewerWithBanner();

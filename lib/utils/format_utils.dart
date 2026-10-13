@@ -1,3 +1,5 @@
+import '../models/doc_kind.dart';
+
 String formatFileSize(int? bytes) {
   if (bytes == null || bytes <= 0) return '0 B';
   const units = ['B', 'KB', 'MB', 'GB'];
@@ -18,6 +20,24 @@ String formatCount(int value) {
     (_) => ',',
   );
   return value < 0 ? '-$grouped' : grouped;
+}
+
+/// The name to show for a document, without the `intent_<n>_` prefix that
+/// copies handed over by "Open with" carry. Falls back to a description of
+/// the kind when the provider gave no name.
+String documentDisplayName(String path) {
+  final name = path.split(RegExp(r'[/\\]')).last;
+  final stripped = name.replaceFirst(RegExp(r'^intent_\d+_'), '');
+  final kind = DocKind.ofPath(name);
+  final fallback = switch (kind) {
+    DocKind.pdf => 'View PDF',
+    DocKind.other => 'Document',
+    _ => '${kind.label} file',
+  };
+  if (stripped.isEmpty) return fallback;
+  if (stripped == name && name.startsWith('intent_')) return fallback;
+  if (RegExp(r'^opened\.[a-z0-9]+$').hasMatch(stripped)) return fallback;
+  return stripped;
 }
 
 /// Gets a display title for a PDF path. Strips intent temp file prefix (intent_TIMESTAMP_)

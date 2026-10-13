@@ -1,11 +1,12 @@
-import '../services/pdf_library_service.dart';
+import '../services/library_service.dart';
+import 'doc_kind.dart';
 
 /// Which slice of the library is on screen.
 enum LibraryFilter { all, recent, starred, created }
 
 extension LibraryFilterLabel on LibraryFilter {
   String get label => switch (this) {
-    LibraryFilter.all => 'All PDFs',
+    LibraryFilter.all => 'All files',
     LibraryFilter.recent => 'Recent',
     LibraryFilter.starred => 'Starred',
     LibraryFilter.created => 'Created',
@@ -34,9 +35,13 @@ class LibraryQuery {
     this.search = '',
     this.recents = const [],
     this.starred = const {},
+    this.kind,
   });
 
   final LibraryFilter filter;
+
+  /// Only files of this kind; null for every kind.
+  final DocKind? kind;
   final LibrarySort sort;
   final String search;
 
@@ -44,8 +49,10 @@ class LibraryQuery {
   final List<String> recents;
   final Set<String> starred;
 
-  List<PdfFileEntry> apply(List<PdfFileEntry> entries) {
-    Iterable<PdfFileEntry> list = entries;
+  List<LibraryEntry> apply(List<LibraryEntry> entries) {
+    Iterable<LibraryEntry> list = entries;
+    final kind = this.kind;
+    if (kind != null) list = list.where((e) => e.kind == kind);
 
     switch (filter) {
       case LibraryFilter.all:
@@ -80,7 +87,7 @@ class LibraryQuery {
     return result;
   }
 
-  Iterable<PdfFileEntry> _search(Iterable<PdfFileEntry> list) {
+  Iterable<LibraryEntry> _search(Iterable<LibraryEntry> list) {
     final query = search.trim().toLowerCase();
     if (query.isEmpty) return list;
     return list.where(

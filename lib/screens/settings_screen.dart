@@ -165,7 +165,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         borderRadius: BorderRadius.circular(15),
                       ),
                       child: const Icon(
-                        Icons.picture_as_pdf_rounded,
+                        Icons.description_rounded,
                         color: Colors.white,
                         size: 35,
                       ),
@@ -175,7 +175,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const Text(
-                          'PDF Helper',
+                          'DocHelper',
                           style: TextStyle(
                             color: Colors.white,
                             fontSize: 22,

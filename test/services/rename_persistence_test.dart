@@ -3,7 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:pdfhelper/services/pdf_library_service.dart';
+import 'package:pdfhelper/services/library_service.dart';
 import 'package:pdfhelper/services/public_pdf_save_service.dart';
 import 'package:pdfhelper/services/recent_files_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -50,7 +50,7 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
     PublicPdfSaveService.resetForTesting();
-    PdfLibraryService.resetForTesting();
+    LibraryService.resetForTesting();
     RecentFilesService.resetCacheForTesting();
     root = Directory.systemTemp.createTempSync('rename_persistence');
     final paths = FakePathProvider.install(root);
@@ -91,7 +91,7 @@ void main() {
 
   tearDown(() async {
     messenger.setMockMethodCallHandler(channel, null);
-    await PdfLibraryService.settleForTesting();
+    await LibraryService.settleForTesting();
     FakePathProvider.restore();
     root.deleteSync(recursive: true);
     SharedPreferences.setMockInitialValues({});
@@ -100,8 +100,8 @@ void main() {
   Future<void> reloadCatalogue() async {
     await (await SharedPreferences.getInstance()).reload();
     PublicPdfSaveService.resetForTesting();
-    await PdfLibraryService.settleForTesting();
-    PdfLibraryService.resetForTesting();
+    await LibraryService.settleForTesting();
+    LibraryService.resetForTesting();
     RecentFilesService.resetCacheForTesting();
   }
 
@@ -124,7 +124,7 @@ void main() {
         final document = (await PublicPdfSaveService.documents()).single;
         expect(document.workingPath, working.path);
         expect(document.copies.single.path, renamedPublic);
-        expect((await PdfLibraryService.scan()).map((file) => file.path), [
+        expect((await LibraryService.scan()).map((file) => file.path), [
           renamedPublic,
         ]);
         expect(
@@ -157,7 +157,7 @@ void main() {
       expect(document.copies.single.path, renamedPublic);
       expect(working.existsSync(), isTrue);
       expect(File(renamedWorking).existsSync(), isFalse);
-      expect((await PdfLibraryService.scan()).map((file) => file.path), [
+      expect((await LibraryService.scan()).map((file) => file.path), [
         renamedPublic,
       ]);
     },
@@ -196,7 +196,7 @@ void main() {
       expect(working.existsSync(), isFalse);
       expect(public.existsSync(), isFalse);
       await reloadCatalogue();
-      expect(await PdfLibraryService.scan(), isEmpty);
+      expect(await LibraryService.scan(), isEmpty);
     },
   );
 }

@@ -130,6 +130,35 @@ val verifyPdfCore by tasks.registering {
 }
 tasks.named("preBuild").configure { dependsOn(verifyPdfCore) }
 
+// The per-format engines (one Rust library per kind of file; see PLAN.md).
+// Their binaries are not committed, so a fresh checkout must build them, and
+// a binary older than its Rust source is refused: it would be missing
+// functions the Dart side calls.
+val verifyEngines by tasks.registering {
+    doLast {
+        val shared = rootProject.file("../packages/doc_common/crates")
+        fun newestSource(dir: java.io.File): Long =
+            dir.walkTopDown()
+                .filter { it.isFile && (it.extension == "rs" || it.name == "Cargo.toml") }
+                .maxOfOrNull { it.lastModified() } ?: 0L
+        val sharedNewest = newestSource(shared)
+        for (engine in listOf("text")) {
+            val pkg = rootProject.file("../packages/flutter_${engine}_core")
+            val newest = maxOf(newestSource(pkg.resolve("rust/crates")), sharedNewest)
+            for (abi in listOf("arm64-v8a", "armeabi-v7a", "x86_64")) {
+                val lib = pkg.resolve("android/src/main/jniLibs/$abi/lib${engine}_ffi.so")
+                check(lib.isFile) {
+                    "The $engine engine is missing for $abi. Run bash scripts/build_engines.sh android before building."
+                }
+                check(lib.lastModified() >= newest) {
+                    "The $engine engine for $abi is older than its Rust source. Run bash scripts/build_engines.sh android before building."
+                }
+            }
+        }
+    }
+}
+tasks.named("preBuild").configure { dependsOn(verifyEngines) }
+
 val verifyReleaseSigning by tasks.registering {
     doLast {
         check(releaseKeystorePropertiesFile.isFile) {

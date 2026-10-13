@@ -3,7 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:pdfhelper/services/pdf_library_service.dart';
+import 'package:pdfhelper/services/library_service.dart';
 import 'package:pdfhelper/services/public_pdf_save_service.dart';
 import 'package:pdfhelper/services/recent_files_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -24,7 +24,7 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     PublicPdfSaveService.resetForTesting();
     RecentFilesService.resetCacheForTesting();
-    PdfLibraryService.resetForTesting();
+    LibraryService.resetForTesting();
     root = Directory.systemTemp.createTempSync('pdf_document_lifecycle');
     paths = FakePathProvider.install(root);
     working = File('${paths.documents.path}/Report.pdf')
@@ -36,7 +36,7 @@ void main() {
 
   tearDown(() async {
     messenger.setMockMethodCallHandler(channel, null);
-    await PdfLibraryService.settleForTesting();
+    await LibraryService.settleForTesting();
     FakePathProvider.restore();
     root.deleteSync(recursive: true);
   });
@@ -70,9 +70,9 @@ void main() {
         working.writeAsStringSync('%PDF-1.7 working');
         public.writeAsStringSync('%PDF-1.7 public');
         await seed();
-        final found = await PdfLibraryService.scan();
+        final found = await LibraryService.scan();
         expect(found.map((entry) => entry.path), [public.path]);
-        final result = await PdfLibraryService.deleteDocument(
+        final result = await LibraryService.deleteDocument(
           deletePublic ? public.path : working.path,
         );
         expect(result.completed, isTrue);
@@ -82,7 +82,7 @@ void main() {
         expect(await RecentFilesService.recents(), isEmpty);
         expect(await RecentFilesService.starred(), isEmpty);
         expect(
-          await PdfLibraryService.scan(),
+          await LibraryService.scan(),
           isEmpty,
           reason: 'working copy must never reappear',
         );
@@ -94,7 +94,7 @@ void main() {
     'rename migrates legacy records and survives a cold rescan without duplicates',
     () async {
       await seed();
-      final result = await PdfLibraryService.renameDocument(
+      final result = await LibraryService.renameDocument(
         public.path,
         'Paid.pdf',
       );
@@ -110,10 +110,10 @@ void main() {
       expect(document.workingPath, newWorking);
       expect(document.copies.single.path, newPublic);
       expect(document.copies.single.uri, Uri.file(newPublic).toString());
-      await PdfLibraryService.settleForTesting();
-      PdfLibraryService.resetForTesting();
+      await LibraryService.settleForTesting();
+      LibraryService.resetForTesting();
       RecentFilesService.resetCacheForTesting();
-      expect((await PdfLibraryService.scan()).map((entry) => entry.path), [
+      expect((await LibraryService.scan()).map((entry) => entry.path), [
         newPublic,
       ]);
       expect(await RecentFilesService.recents(), [newPublic]);
@@ -125,7 +125,7 @@ void main() {
     await seed();
     final other = File('${public.parent.path}/Paid.pdf')
       ..writeAsStringSync('important');
-    final result = await PdfLibraryService.renameDocument(
+    final result = await LibraryService.renameDocument(
       working.path,
       'Paid.pdf',
     );
@@ -154,8 +154,8 @@ void main() {
         expect(call.arguments, {'uri': uri, 'publicPath': public.path});
         return true;
       });
-      expect((await PdfLibraryService.scan()).single.path, working.path);
-      final result = await PdfLibraryService.deleteDocument(working.path);
+      expect((await LibraryService.scan()).single.path, working.path);
+      final result = await LibraryService.deleteDocument(working.path);
       expect(result.completed, isTrue);
       expect(calls, hasLength(1));
       expect(working.existsSync(), isFalse);
@@ -180,7 +180,7 @@ void main() {
         });
         return {'uri': uri, 'name': 'Paid (2).pdf', 'publicPath': newPublic};
       });
-      final result = await PdfLibraryService.renameDocument(
+      final result = await LibraryService.renameDocument(
         working.path,
         'Paid.pdf',
       );
@@ -190,7 +190,7 @@ void main() {
       expect(record.copies.single.path, newPublic);
       expect(record.copies.single.uri, uri);
       expect(File(record.workingPath).existsSync(), isTrue);
-      expect((await PdfLibraryService.scan()).single.path, record.workingPath);
+      expect((await LibraryService.scan()).single.path, record.workingPath);
       expect(await RecentFilesService.recents(), [record.workingPath]);
       expect(await RecentFilesService.starred(), {record.workingPath});
     },
@@ -209,8 +209,8 @@ void main() {
           );
         });
         final result = rename
-            ? await PdfLibraryService.renameDocument(working.path, 'Paid.pdf')
-            : await PdfLibraryService.deleteDocument(working.path);
+            ? await LibraryService.renameDocument(working.path, 'Paid.pdf')
+            : await LibraryService.deleteDocument(working.path);
         expect(result.completed, isFalse);
         expect(result.warning, contains('Access denied'));
         expect(result.removedPaths, isEmpty);
@@ -252,7 +252,7 @@ void main() {
         await File((call.arguments as Map)['publicPath'] as String).delete();
         return true;
       });
-      final partial = await PdfLibraryService.deleteDocument(public.path);
+      final partial = await LibraryService.deleteDocument(public.path);
       expect(partial.completed, isFalse);
       expect(partial.warning, contains('Some copies were deleted'));
       expect(working.existsSync(), isTrue);
@@ -260,7 +260,7 @@ void main() {
         (await PublicPdfSaveService.documents()).single.copies.single.uri,
         second,
       );
-      expect((await PdfLibraryService.scan()).single.path, another.path);
+      expect((await LibraryService.scan()).single.path, another.path);
       expect(
         await RecentFilesService.starred(),
         {another.path},
@@ -269,14 +269,14 @@ void main() {
       expect(await RecentFilesService.recents(), [another.path]);
       failSecond = false;
       expect(
-        (await PdfLibraryService.deleteDocument(working.path)).completed,
+        (await LibraryService.deleteDocument(working.path)).completed,
         isTrue,
       );
       expect(deleted, [
         first,
         second,
       ], reason: 'retry must not repeat a successful deletion');
-      expect(await PdfLibraryService.scan(), isEmpty);
+      expect(await LibraryService.scan(), isEmpty);
       expect(await PublicPdfSaveService.documents(), isEmpty);
     },
   );
@@ -306,7 +306,7 @@ void main() {
         await File(arguments['publicPath'] as String).rename(target);
         return {'uri': first, 'name': 'Paid.pdf', 'publicPath': target};
       });
-      final result = await PdfLibraryService.renameDocument(
+      final result = await LibraryService.renameDocument(
         working.path,
         'Paid.pdf',
       );
@@ -316,7 +316,7 @@ void main() {
       final record = (await PublicPdfSaveService.documents()).single;
       expect(record.copies.first.path, '${public.parent.path}/Paid.pdf');
       expect(record.copies.last.path, another.path);
-      expect(await PdfLibraryService.scan(), hasLength(1));
+      expect(await LibraryService.scan(), hasLength(1));
     },
   );
 
@@ -324,16 +324,16 @@ void main() {
     'aliases keep stars and recent order when storage visibility changes',
     () async {
       await seed();
-      expect((await PdfLibraryService.scan()).single.path, public.path);
+      expect((await LibraryService.scan()).single.path, public.path);
       expect(await RecentFilesService.recents(), [public.path]);
       expect(await RecentFilesService.starred(), {public.path});
       public
           .deleteSync(); // Simulate public path no longer available to the sweep.
-      expect((await PdfLibraryService.scan()).single.path, working.path);
+      expect((await LibraryService.scan()).single.path, working.path);
       expect(await RecentFilesService.recents(), [working.path]);
       expect(await RecentFilesService.starred(), {working.path});
       public.writeAsStringSync('visible again');
-      expect((await PdfLibraryService.scan()).single.path, public.path);
+      expect((await LibraryService.scan()).single.path, public.path);
       expect(await RecentFilesService.recents(), [public.path]);
       expect(await RecentFilesService.starred(), {public.path});
     },

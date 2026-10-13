@@ -204,7 +204,7 @@ class _ConvertScreenState extends State<ConvertScreen>
       permission: Permission.camera,
       rationaleTitle: 'Camera Access',
       rationaleMessage:
-          'PDF Helper needs camera access to scan documents and convert them to PDF.',
+          'DocHelper needs camera access to scan documents and convert them to PDF.',
       deniedTitle: 'Camera Permission Required',
       deniedMessage:
           'Camera access was denied. Please enable it in Settings to scan documents.',
@@ -650,7 +650,7 @@ class _ConvertScreenState extends State<ConvertScreen>
             Text(
               _cameraPermissionPermanentlyDenied
                   ? 'Camera permission was denied. Please enable it in Settings to scan documents.'
-                  : 'PDF Helper needs camera access to scan documents and convert them to PDF.',
+                  : 'DocHelper needs camera access to scan documents and convert them to PDF.',
               style: TextStyle(
                 color: Colors.white.withValues(alpha: 0.8),
                 fontSize: 15,

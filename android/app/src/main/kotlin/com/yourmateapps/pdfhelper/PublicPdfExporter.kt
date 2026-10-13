@@ -59,6 +59,34 @@ internal class PublicPdfExporter(private val context: Context) {
         return mapOf("uri" to target.toURI().toString(), "name" to target.name, "publicPath" to target.path)
     }
 
+    /** Replace the content of a public copy this app saved earlier, so that
+     * saving an edited document again updates its copy instead of adding
+     * "name (2)", "name (3)" and so on. */
+    fun update(uriString: String?, publicPath: String, sourcePath: String): Map<String, String> {
+        val source = File(sourcePath)
+        require(source.isFile) { "The document to save is missing" }
+        val uri = resolveOwnedUri(uriString, publicPath)
+        if (uri != null) {
+            val output = context.contentResolver.openOutputStream(uri, "wt")
+                ?: throw IOException("The saved copy could not be opened for writing")
+            output.use { target -> source.inputStream().use { it.copyTo(target) } }
+            return metadata(uri)
+        }
+        requireFilesystemAccess()
+        val file = File(publicPath)
+        require(file.isFile) { "The saved copy is missing" }
+        // Write beside it, then swap, so a failure never leaves half a file.
+        val staging = File(file.parentFile, ".${file.name}.saving")
+        try {
+            staging.outputStream().use { target -> source.inputStream().use { it.copyTo(target) } }
+            if (!staging.renameTo(file)) throw IOException("The saved copy could not be replaced")
+        } finally {
+            staging.delete()
+        }
+        MediaScannerConnection.scanFile(context, arrayOf(file.path), null, null)
+        return mapOf("uri" to file.toURI().toString(), "name" to file.name, "publicPath" to file.path)
+    }
+
     @Suppress("DEPRECATION")
     private fun requireFilesystemAccess() {
         val allowed = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -108,15 +136,20 @@ internal class PublicPdfExporter(private val context: Context) {
     }
 
     @Suppress("DEPRECATION")
-    fun save(sourcePath: String, displayName: String, location: String): Map<String, String> {
+    fun save(
+        sourcePath: String,
+        displayName: String,
+        location: String,
+        mimeType: String = "application/pdf",
+    ): Map<String, String> {
         require(location == "Downloads" || location == "Documents") { "Unknown save location" }
         require(displayName.isNotBlank() && displayName != "." && displayName != ".." &&
             !displayName.contains('/') && !displayName.contains('\\')) { "Invalid file name" }
         val source = File(sourcePath)
-        require(source.isFile && source.length() > 0) { "The PDF to save is missing or empty" }
+        require(source.isFile) { "The document to save is missing" }
         val directory = if (location == "Documents") Environment.DIRECTORY_DOCUMENTS
             else Environment.DIRECTORY_DOWNLOADS
-        val relativePath = "$directory/PDFHelper/"
+        val relativePath = "$directory/DocHelper/"
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val resolver = context.contentResolver
             // Downloads only accepts Download/. Generic Files also accepts Documents/.
@@ -125,7 +158,7 @@ internal class PublicPdfExporter(private val context: Context) {
             else MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
             val values = ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
-                put(MediaStore.MediaColumns.MIME_TYPE, "application/pdf")
+                put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
                 put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
                 put(MediaStore.MediaColumns.IS_PENDING, 1)
             }
@@ -173,8 +206,8 @@ internal class PublicPdfExporter(private val context: Context) {
             PackageManager.PERMISSION_GRANTED) {
             throw SecurityException("Storage permission is needed to save to $location")
         }
-        val folder = File(Environment.getExternalStoragePublicDirectory(directory), "PDFHelper")
-        if (!folder.isDirectory && !folder.mkdirs()) throw IOException("Could not create $location/PDFHelper")
+        val folder = File(Environment.getExternalStoragePublicDirectory(directory), "DocHelper")
+        if (!folder.isDirectory && !folder.mkdirs()) throw IOException("Could not create $location/DocHelper")
         val base = displayName.substringBeforeLast('.', displayName)
         val extension = displayName.substringAfterLast('.', "")
         var file = File(folder, displayName)
@@ -185,7 +218,7 @@ internal class PublicPdfExporter(private val context: Context) {
         }
         try {
             file.outputStream().use { target -> source.inputStream().use { it.copyTo(target) } }
-            MediaScannerConnection.scanFile(context, arrayOf(file.absolutePath), arrayOf("application/pdf"), null)
+            MediaScannerConnection.scanFile(context, arrayOf(file.absolutePath), arrayOf(mimeType), null)
             return mapOf("uri" to file.toURI().toString(), "name" to file.name, "publicPath" to file.absolutePath)
         } catch (error: Exception) {
             file.delete()

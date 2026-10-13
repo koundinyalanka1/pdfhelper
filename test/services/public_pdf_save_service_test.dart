@@ -5,7 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pdfhelper/providers/theme_provider.dart';
 import 'package:pdfhelper/screens/pdf_preview_screen.dart';
-import 'package:pdfhelper/services/pdf_library_service.dart';
+import 'package:pdfhelper/services/library_service.dart';
 import 'package:pdfhelper/services/public_pdf_save_service.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -85,7 +85,7 @@ void main() {
         'uri': 'content://media/external_primary/downloads/42',
         'name': 'Report (2).pdf',
         'publicPath':
-            '/storage/emulated/0/${args['location']}/PDFHelper/Report (2).pdf',
+            '/storage/emulated/0/${args['location']}/DocHelper/Report (2).pdf',
       };
     });
     messenger.setMockMethodCallHandler(permissions, (call) async {
@@ -131,6 +131,7 @@ void main() {
           'sourcePath': source.path,
           'displayName': 'Report 2026.pdf',
           'location': location,
+          'mimeType': 'application/pdf',
         });
         expect(
           requested,
@@ -144,7 +145,7 @@ void main() {
             'copies': [
               {
                 'path':
-                    '/storage/emulated/0/$location/PDFHelper/Report (2).pdf',
+                    '/storage/emulated/0/$location/DocHelper/Report (2).pdf',
                 'uri': 'content://media/external_primary/downloads/42',
               },
             ],
@@ -152,7 +153,7 @@ void main() {
         });
         expect(
           provider.saveLocationDescription,
-          '$location/PDFHelper (device storage)',
+          '$location/DocHelper (device storage)',
         );
       },
     );
@@ -204,7 +205,7 @@ void main() {
           'uri': 'content://media/external_primary/downloads/$id',
           'name': 'Report ($id).pdf',
           'publicPath':
-              '/storage/emulated/0/Download/PDFHelper/Report ($id).pdf',
+              '/storage/emulated/0/Download/DocHelper/Report ($id).pdf',
         };
       });
       final provider = await settings();
@@ -244,7 +245,7 @@ void main() {
         SharedPreferencesStorePlatform.instance = _FailingExportStore();
         const uri = 'content://media/external_primary/downloads/123';
         const publicPath =
-            '/storage/emulated/0/Download/PDFHelper/Report (2).pdf';
+            '/storage/emulated/0/Download/DocHelper/Report (2).pdf';
         final calls = <MethodCall>[];
         messenger.setMockMethodCallHandler(channel, (call) async {
           calls.add(call);
@@ -432,19 +433,19 @@ void main() {
     expect(source.existsSync(), isTrue);
   });
 
-  PdfFileEntry entry(String path, {bool appOwned = false}) => PdfFileEntry(
+  LibraryEntry entry(String path, {bool appOwned = false}) => LibraryEntry(
     path: path,
     name: 'Report.pdf',
     sizeBytes: 100,
     modifiedMs: 1,
-    folder: 'PDFHelper',
+    folder: 'DocHelper',
     isAppOwned: appOwned,
   );
 
   test(
     'public files replace their mirrors and remain app-created in Files',
     () {
-      final files = PdfLibraryService.reconcilePublicExports(
+      final files = LibraryService.reconcilePublicExports(
         [
           entry('/private/report.pdf', appOwned: true),
           entry('/public/report.pdf'),
@@ -464,7 +465,7 @@ void main() {
   test(
     'restricted storage or a moved public file leaves working copy visible',
     () {
-      final files = PdfLibraryService.reconcilePublicExports(
+      final files = LibraryService.reconcilePublicExports(
         [entry('/private/report.pdf', appOwned: true)],
         {'/private/report.pdf': '/public/report.pdf'},
       );

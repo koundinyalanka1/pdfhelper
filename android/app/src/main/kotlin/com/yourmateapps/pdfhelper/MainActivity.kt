@@ -43,10 +43,26 @@ class MainActivity : FlutterActivity() {
                             val source = call.argument<String>("sourcePath")
                             val name = call.argument<String>("displayName")
                             val location = call.argument<String>("location")
-                            require(source != null && name != null && location != null) { "Missing PDF save details" }
+                            // Any kind of document; PDF unless the caller says otherwise.
+                            val mimeType = call.argument<String>("mimeType") ?: "application/pdf"
+                            require(source != null && name != null && location != null) { "Missing save details" }
                             pdfIo.execute {
                                 try {
-                                    val saved = PublicPdfExporter(applicationContext).save(source, name, location)
+                                    val saved = PublicPdfExporter(applicationContext).save(source, name, location, mimeType)
+                                    runOnUiThread { result.success(saved) }
+                                } catch (e: Exception) {
+                                    runOnUiThread { result.error("PUBLIC_SAVE_FAILED", e.message, null) }
+                                }
+                            }
+                        }
+                        "updatePublicFile" -> {
+                            val source = call.argument<String>("sourcePath")
+                            val path = call.argument<String>("publicPath")
+                            val uri = call.argument<String>("uri")
+                            require(source != null && !path.isNullOrBlank()) { "Missing save details" }
+                            pdfIo.execute {
+                                try {
+                                    val saved = PublicPdfExporter(applicationContext).update(uri, path, source)
                                     runOnUiThread { result.success(saved) }
                                 } catch (e: Exception) {
                                     runOnUiThread { result.error("PUBLIC_SAVE_FAILED", e.message, null) }
@@ -165,16 +181,32 @@ class MainActivity : FlutterActivity() {
         pdfIo.execute {
             try {
                 val path = resolveUriToPath(uriString)
-                    ?: throw IllegalArgumentException("Only local PDF files can be opened")
+                    ?: throw IllegalArgumentException("Only local documents can be opened")
                 runOnUiThread {
                     result.success(if (asIntent) mapOf("path" to path, "action" to "view") else path)
                 }
             } catch (e: Exception) {
                 runOnUiThread {
-                    result.error("RESOLVE_ERROR", "This PDF could not be opened. Choose the file again from its source app.", null)
+                    result.error("RESOLVE_ERROR", "This document could not be opened. Choose the file again from its source app.", null)
                 }
             }
         }
+    }
+
+    /** The extension DocHelper opens a document as, from its name or, when
+     * the name has none it knows, its MIME type. Null for kinds it does not
+     * open (yet). Keep in step with the intent filters in the manifest. */
+    private fun documentExtension(name: String?, mimeType: String?): String? {
+        val fromName = name?.substringAfterLast('.', "")?.lowercase()
+        if (fromName != null && fromName in OPENABLE_EXTENSIONS) return fromName
+        val type = mimeType?.lowercase()?.substringBefore(';')?.trim() ?: return null
+        return MIME_EXTENSIONS[type] ?: if (type.startsWith("text/")) "txt" else null
+    }
+
+    /** PDFs must look like PDFs. Text has no signature; the text engine
+     * reads any bytes, and says so when they look binary. */
+    private fun requireDocumentContent(extension: String, header: ByteArray) {
+        if (extension == "pdf") requirePdfHeader(header)
     }
 
     private fun resolveUriToPath(uriString: String): String? {
@@ -186,7 +218,10 @@ class MainActivity : FlutterActivity() {
                 val privateRoot = File(applicationInfo.dataDir).canonicalPath
                 require(!file.path.startsWith("$privateRoot/"))
                 require(file.isFile && file.canRead())
-                file.inputStream().use { input -> requirePdfHeader(readHeader(input)) }
+                val extension = documentExtension(file.name, intent?.type)
+                    ?: throw IllegalArgumentException("DocHelper cannot open this kind of file")
+                require(file.extension.lowercase() == extension) { "The file name does not match its type" }
+                file.inputStream().use { input -> requireDocumentContent(extension, readHeader(input)) }
                 file.path
             }
             "content" -> copyContentToTemp(uri)
@@ -212,7 +247,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun copyContentToTemp(uri: Uri): String {
-        var fileName = "opened.pdf"
+        var fileName: String? = null
         try {
             contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
                 if (cursor.moveToFirst()) {
@@ -223,17 +258,21 @@ class MainActivity : FlutterActivity() {
         } catch (_: Exception) {
             // Providers are allowed to omit display names.
         }
+        val mimeType = try { contentResolver.getType(uri) } catch (_: Exception) { null }
+        val extension = documentExtension(fileName, mimeType ?: intent?.type)
+            ?: throw IllegalArgumentException("DocHelper cannot open this kind of file")
         // Display names are untrusted provider input, never path components.
-        fileName = fileName.replace(Regex("[\\\\/\\p{Cntrl}]"), "_").take(60)
-        if (!fileName.endsWith(".pdf", ignoreCase = true)) fileName += ".pdf"
-        val directory = File(cacheDir, "opened_pdfs").apply { mkdirs() }
-        val tempFile = File.createTempFile("intent_", "_$fileName", directory)
+        var safeName = (fileName ?: "opened.$extension")
+            .replace(Regex("[\\\\/\\p{Cntrl}]"), "_").take(60)
+        if (!safeName.endsWith(".$extension", ignoreCase = true)) safeName += ".$extension"
+        val directory = File(cacheDir, "opened_documents").apply { mkdirs() }
+        val tempFile = File.createTempFile("intent_", "_$safeName", directory)
         try {
             val input = contentResolver.openInputStream(uri)
                 ?: throw IllegalArgumentException("The document provider returned no data")
             input.use {
                 val header = readHeader(it)
-                requirePdfHeader(header)
+                requireDocumentContent(extension, header)
                 FileOutputStream(tempFile).use { output ->
                     output.write(header)
                     val buffer = ByteArray(64 * 1024)
@@ -242,7 +281,7 @@ class MainActivity : FlutterActivity() {
                         val count = it.read(buffer)
                         if (count < 0) break
                         total += count
-                        require(total <= 512L * 1024 * 1024) { "PDF exceeds the 512 MB import limit" }
+                        require(total <= 512L * 1024 * 1024) { "The document exceeds the 512 MB import limit" }
                         output.write(buffer, 0, count)
                     }
                 }
@@ -252,6 +291,21 @@ class MainActivity : FlutterActivity() {
             tempFile.delete()
             throw e
         }
+    }
+
+    companion object {
+        /** Extensions DocHelper opens from other apps. */
+        private val OPENABLE_EXTENSIONS = setOf(
+            "pdf", "txt", "text", "log", "md", "markdown", "json",
+        )
+
+        private val MIME_EXTENSIONS = mapOf(
+            "application/pdf" to "pdf",
+            "text/plain" to "txt",
+            "text/markdown" to "md",
+            "text/x-markdown" to "md",
+            "application/json" to "json",
+        )
     }
 
     override fun onDestroy() {

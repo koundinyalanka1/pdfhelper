@@ -75,10 +75,14 @@ class PublicPdfSaveService {
     return result;
   }
 
+  /// Publish a copy of [sourcePath] as [displayName] in `[location]/DocHelper`
+  /// and link it to the working file. [mimeType] says what kind of document
+  /// it is (PDF unless given).
   static Future<void> save({
     required String sourcePath,
     required String displayName,
     required String location,
+    String mimeType = 'application/pdf',
   }) => _mutate(() async {
     try {
       // Validate and persist the existing catalogue before publishing another
@@ -93,14 +97,13 @@ class PublicPdfSaveService {
           'Your working PDF has been kept in the app.',
         );
       }
-      final saved = await _channel.invokeMapMethod<String, dynamic>(
-        'savePublicPdf',
-        {
-          'sourcePath': sourcePath,
-          'displayName': displayName,
-          'location': location,
-        },
-      );
+      final saved = await _channel
+          .invokeMapMethod<String, dynamic>('savePublicPdf', {
+            'sourcePath': sourcePath,
+            'displayName': displayName,
+            'location': location,
+            'mimeType': mimeType,
+          });
       final copy = _confirmedCopy(saved);
       final beforeRecords = List<PdfDocumentRecord>.of(records);
       try {
@@ -150,7 +153,7 @@ class PublicPdfSaveService {
       }
     } on PlatformException catch (error) {
       throw PublicPdfSaveException(
-        'Could not save to $location/PDFHelper: '
+        'Could not save to $location/DocHelper: '
         '${error.message ?? 'Storage is unavailable'}. '
         'Your working PDF has been kept in the app.',
       );
@@ -221,6 +224,38 @@ class PublicPdfSaveService {
       );
     }
   }
+
+  /// The most recent public copy of [workingPath], if it was ever saved.
+  static Future<PublicPdfCopy?> latestCopy(String workingPath) async {
+    for (final record in await documents()) {
+      if (record.workingPath == workingPath && record.copies.isNotEmpty) {
+        return record.copies.last;
+      }
+    }
+    return null;
+  }
+
+  /// Write [sourcePath]'s current content over a public copy saved earlier,
+  /// so saving an edited document again updates its copy rather than adding
+  /// another one.
+  static Future<PublicPdfCopy> updateCopy({
+    required String sourcePath,
+    required PublicPdfCopy copy,
+  }) => _mutate(() async {
+    try {
+      final saved = await _channel.invokeMapMethod<String, dynamic>(
+        'updatePublicFile',
+        {'sourcePath': sourcePath, 'publicPath': copy.path, 'uri': copy.uri},
+      );
+      return _confirmedCopy(saved);
+    } on PlatformException catch (error) {
+      throw PublicPdfSaveException(
+        'Could not update ${copy.path.split('/').last}: '
+        '${error.message ?? 'Storage is unavailable'}. '
+        'Your edited file has been kept in the app.',
+      );
+    }
+  });
 
   /// Compatibility API for callers interested only in the latest export.
   static Future<Map<String, String>> exportedCopies() async => {

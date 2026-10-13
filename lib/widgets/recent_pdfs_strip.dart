@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../models/doc_kind.dart';
 import '../providers/theme_provider.dart';
-import '../services/pdf_library_service.dart';
+import '../services/library_service.dart';
 import '../services/recent_files_service.dart';
 import '../utils/format_utils.dart';
 
@@ -44,7 +45,7 @@ class RecentPdfsStrip extends StatefulWidget {
 }
 
 class _RecentPdfsStripState extends State<RecentPdfsStrip> {
-  List<PdfFileEntry> _entries = const [];
+  List<LibraryEntry> _entries = const [];
   bool _loaded = false;
 
   @override
@@ -55,12 +56,15 @@ class _RecentPdfsStripState extends State<RecentPdfsStrip> {
 
   Future<void> _load() async {
     final paths = await RecentFilesService.recents();
-    final entries = <PdfFileEntry>[];
+    final entries = <LibraryEntry>[];
     for (final path in paths) {
       if (entries.length >= widget.maxItems) break;
+      // Recent files include every kind the app opens; merge and split take
+      // PDFs only.
+      if (DocKind.ofPath(path) != DocKind.pdf) continue;
       // describe() returns null for a file that has since been deleted or
       // moved, which is exactly the filter wanted here.
-      final entry = await PdfLibraryService.describe(path);
+      final entry = await LibraryService.describe(path);
       if (entry != null) entries.add(entry);
     }
     if (!mounted) return;
@@ -88,7 +92,11 @@ class _RecentPdfsStripState extends State<RecentPdfsStrip> {
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
             child: Row(
               children: [
-                Icon(Icons.history_rounded, size: 15, color: colors.textTertiary),
+                Icon(
+                  Icons.history_rounded,
+                  size: 15,
+                  color: colors.textTertiary,
+                ),
                 const SizedBox(width: 6),
                 Text(
                   'Recent',
@@ -109,8 +117,7 @@ class _RecentPdfsStripState extends State<RecentPdfsStrip> {
               padding: const EdgeInsets.symmetric(horizontal: 20),
               itemCount: visible.length,
               separatorBuilder: (_, _) => const SizedBox(width: 8),
-              itemBuilder: (context, index) =>
-                  _chip(colors, visible[index]),
+              itemBuilder: (context, index) => _chip(colors, visible[index]),
             ),
           ),
         ],
@@ -118,7 +125,7 @@ class _RecentPdfsStripState extends State<RecentPdfsStrip> {
     );
   }
 
-  Widget _chip(AppColors colors, PdfFileEntry entry) {
+  Widget _chip(AppColors colors, LibraryEntry entry) {
     return Semantics(
       button: true,
       label: 'Use recent PDF ${entry.title}',
@@ -133,9 +140,7 @@ class _RecentPdfsStripState extends State<RecentPdfsStrip> {
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: widget.accent.withValues(alpha: 0.25),
-              ),
+              border: Border.all(color: widget.accent.withValues(alpha: 0.25)),
             ),
             child: Row(
               children: [

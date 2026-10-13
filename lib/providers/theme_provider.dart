@@ -40,7 +40,7 @@ class ThemeProvider extends ChangeNotifier {
   String get saveLocation => _saveLocation;
   bool get usesPublicStorage => Platform.isAndroid;
   String get saveLocationDescription => usesPublicStorage
-      ? '$_saveLocation/PDFHelper (device storage)'
+      ? '$_saveLocation/DocHelper (device storage)'
       : 'app storage (PDFHelper/$_saveLocation)';
   String get outputQuality => _outputQuality;
 

@@ -1,7 +1,8 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:pdfhelper/services/pdf_library_service.dart';
+import 'package:pdfhelper/models/doc_kind.dart';
+import 'package:pdfhelper/services/library_service.dart';
 import 'package:pdfhelper/services/recent_files_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -27,11 +28,11 @@ void main() {
     root = Directory.systemTemp.createTempSync('pdf_library_test');
     // Static sweep state is process-wide; without this a later test would
     // read the previous test's results out of memory.
-    PdfLibraryService.resetForTesting();
+    LibraryService.resetForTesting();
   });
 
   tearDown(() async {
-    await PdfLibraryService.settleForTesting();
+    await LibraryService.settleForTesting();
     if (root.existsSync()) root.deleteSync(recursive: true);
     FakePathProvider.restore();
   });
@@ -44,7 +45,7 @@ void main() {
       Directory('${root.path}/empty').createSync();
       final reports = <(int, int)>[];
 
-      PdfLibraryService.walkForTesting([
+      LibraryService.walkForTesting([
         root.path,
       ], onProgress: (folders, pdfs) => reports.add((folders, pdfs)));
 
@@ -57,7 +58,7 @@ void main() {
       _pdf('${root.path}/UPPER.PDF');
       _pdf('${root.path}/Mixed.Pdf');
 
-      final found = PdfLibraryService.walkForTesting([root.path]);
+      final found = LibraryService.walkForTesting([root.path]);
 
       expect(found.map((e) => e.name).toSet(), {
         'lower.pdf',
@@ -66,14 +67,44 @@ void main() {
       });
     });
 
-    test('ignores non-PDF files', () {
+    test('lists documents of every kind and nothing else', () {
       _pdf('${root.path}/keep.pdf');
-      File('${root.path}/notes.txt').writeAsStringSync('hello');
-      File('${root.path}/archive.pdf.zip').writeAsStringSync('hello');
+      for (final name in [
+        'letter.docx',
+        'old letter.doc',
+        'accounts.xlsx',
+        'list.csv',
+        'talk.pptx',
+        'report.odt',
+        'notes.txt',
+        'readme.md',
+        'photo.jpg',
+        'archive.pdf.zip',
+        'script.py',
+        'data.json',
+      ]) {
+        File('${root.path}/$name').writeAsStringSync('hello');
+      }
 
-      final found = PdfLibraryService.walkForTesting([root.path]);
+      final found = LibraryService.walkForTesting([root.path]);
 
-      expect(found.map((e) => e.name), ['keep.pdf']);
+      expect(found.map((e) => e.name).toSet(), {
+        'keep.pdf',
+        'letter.docx',
+        'old letter.doc',
+        'accounts.xlsx',
+        'list.csv',
+        'talk.pptx',
+        'report.odt',
+        'notes.txt',
+        'readme.md',
+      });
+      final kinds = {for (final e in found) e.name: e.kind};
+      expect(kinds['letter.docx'], DocKind.word);
+      expect(kinds['list.csv'], DocKind.sheet);
+      expect(kinds['talk.pptx'], DocKind.slides);
+      expect(kinds['notes.txt'], DocKind.text);
+      expect(found.firstWhere((e) => e.name == 'old letter.doc').title, 'old letter');
     });
 
     test(
@@ -82,7 +113,7 @@ void main() {
         _pdf('${root.path}/real.pdf');
         File('${root.path}/empty.pdf').writeAsStringSync('');
 
-        final found = PdfLibraryService.walkForTesting([root.path]);
+        final found = LibraryService.walkForTesting([root.path]);
 
         expect(found.map((e) => e.name).toSet(), {'real.pdf', 'empty.pdf'});
       },
@@ -93,7 +124,7 @@ void main() {
       _pdf('${root.path}/.secret.pdf');
       _pdf('${root.path}/.hidden/inside.pdf');
 
-      final found = PdfLibraryService.walkForTesting([root.path]);
+      final found = LibraryService.walkForTesting([root.path]);
 
       expect(found.map((e) => e.name).toSet(), {
         'visible.pdf',
@@ -109,7 +140,7 @@ void main() {
       _pdf('${root.path}/lost+found/orphan.pdf');
       _pdf('${root.path}/node_modules/dep/doc.pdf');
 
-      final found = PdfLibraryService.walkForTesting([root.path]);
+      final found = LibraryService.walkForTesting([root.path]);
 
       expect(found.map((e) => e.name).toSet(), {
         'keep.pdf',
@@ -127,7 +158,7 @@ void main() {
       _pdf('${root.path}/Android/obb/com.example/blob.pdf');
       _pdf('${root.path}/Android/media/com.whatsapp/Documents/invoice.pdf');
 
-      final found = PdfLibraryService.walkForTesting([root.path]);
+      final found = LibraryService.walkForTesting([root.path]);
 
       expect(found.map((e) => e.name).toSet(), {
         'private.pdf',
@@ -145,7 +176,7 @@ void main() {
       _pdf('${root.path}/shallow.pdf');
 
       expect(
-        PdfLibraryService.walkForTesting([
+        LibraryService.walkForTesting([
           root.path,
         ]).map((e) => e.name).toSet(),
         {'shallow.pdf', 'deep.pdf'},
@@ -158,7 +189,7 @@ void main() {
       }
       _pdf('${root.path}/sdcard/Documents/on-card.pdf');
 
-      final found = PdfLibraryService.walkForTesting([
+      final found = LibraryService.walkForTesting([
         '${root.path}/internal',
         '${root.path}/sdcard',
       ]);
@@ -179,7 +210,7 @@ void main() {
         );
         _pdf('${root.path}/Documents/Android/data/backup.pdf');
 
-        final found = PdfLibraryService.walkForTesting(
+        final found = LibraryService.walkForTesting(
           [root.path],
           appRoots: [own],
         );
@@ -202,7 +233,7 @@ void main() {
       _pdf('${volume.path}/Download/one.pdf');
       final alias = Link('${root.path}/sdcard')..createSync(volume.path);
 
-      final found = PdfLibraryService.walkForTesting([alias.path, volume.path]);
+      final found = LibraryService.walkForTesting([alias.path, volume.path]);
 
       expect(found, hasLength(1));
       expect(found.single.path, '${alias.path}/Download/one.pdf');
@@ -217,7 +248,7 @@ void main() {
       _pdf('${volume.path}/Android/data/pdfhelper/cache-backup/Backup.pdf');
       final alias = Link('${root.path}/sdcard')..createSync(volume.path);
 
-      final found = PdfLibraryService.walkForTesting(
+      final found = LibraryService.walkForTesting(
         [alias.path, volume.path],
         excludedRoots: [cache],
       );
@@ -234,7 +265,7 @@ void main() {
       _pdf('${root.path}/storage/emulated/10/Download/work.pdf');
       _pdf('${root.path}/storage/emulated/0/Download/personal.pdf');
 
-      final found = PdfLibraryService.walkForTesting([
+      final found = LibraryService.walkForTesting([
         '${root.path}/storage/emulated/10',
       ]);
 
@@ -245,7 +276,7 @@ void main() {
       _pdf('${root.path}/docs/a.pdf');
       Link('${root.path}/docs/loop').createSync(root.path);
 
-      final found = PdfLibraryService.walkForTesting([root.path]);
+      final found = LibraryService.walkForTesting([root.path]);
 
       expect(found.map((e) => e.name), ['a.pdf']);
     });
@@ -257,7 +288,7 @@ void main() {
       Process.runSync('chmod', ['000', locked.path]);
 
       try {
-        final found = PdfLibraryService.walkForTesting([root.path]);
+        final found = LibraryService.walkForTesting([root.path]);
         expect(found.map((e) => e.name), contains('readable.pdf'));
       } finally {
         Process.runSync('chmod', ['755', locked.path]);
@@ -267,7 +298,7 @@ void main() {
     test('records size, folder and modified time', () {
       final file = _pdf('${root.path}/Reports/Q3.pdf', body: '%PDF-1.7 xxxxx');
 
-      final found = PdfLibraryService.walkForTesting([root.path]);
+      final found = LibraryService.walkForTesting([root.path]);
 
       expect(found, hasLength(1));
       final entry = found.single;
@@ -283,7 +314,7 @@ void main() {
       _pdf('${root.path}/appdir-backup/not-mine.pdf');
       _pdf('${root.path}/appdir/mine.pdf');
 
-      final found = PdfLibraryService.walkForTesting(
+      final found = LibraryService.walkForTesting(
         [root.path],
         appRoots: ['${root.path}/appdir'],
       );
@@ -297,7 +328,7 @@ void main() {
     test('never returns the same file twice from overlapping roots', () {
       _pdf('${root.path}/docs/a.pdf');
 
-      final found = PdfLibraryService.walkForTesting([
+      final found = LibraryService.walkForTesting([
         root.path,
         '${root.path}/docs',
       ]);
@@ -306,14 +337,14 @@ void main() {
     });
 
     test('returns nothing for a root that does not exist', () {
-      final found = PdfLibraryService.walkForTesting(['${root.path}/nope']);
+      final found = LibraryService.walkForTesting(['${root.path}/nope']);
       expect(found, isEmpty);
     });
 
     test('an unavailable volume does not prevent scanning the next one', () {
       _pdf('${root.path}/mounted/Download/keep.pdf');
 
-      final found = PdfLibraryService.walkForTesting([
+      final found = LibraryService.walkForTesting([
         '${root.path}/unmounted',
         '${root.path}/mounted',
       ]);
@@ -322,9 +353,9 @@ void main() {
     });
   });
 
-  group('PdfFileEntry serialization', () {
+  group('LibraryEntry serialization', () {
     test('round-trips through JSON', () {
-      const entry = PdfFileEntry(
+      const entry = LibraryEntry(
         path: '/a/b/Report.pdf',
         name: 'Report.pdf',
         sizeBytes: 4096,
@@ -333,7 +364,7 @@ void main() {
         isAppOwned: true,
       );
 
-      final restored = PdfFileEntry.fromJson(entry.toJson())!;
+      final restored = LibraryEntry.fromJson(entry.toJson())!;
 
       expect(restored.path, entry.path);
       expect(restored.name, entry.name);
@@ -344,14 +375,14 @@ void main() {
     });
 
     test('rejects malformed records instead of throwing', () {
-      expect(PdfFileEntry.fromJson(null), isNull);
-      expect(PdfFileEntry.fromJson('nonsense'), isNull);
-      expect(PdfFileEntry.fromJson({'n': 'no path.pdf'}), isNull);
-      expect(PdfFileEntry.fromJson({'p': '/a.pdf'}), isNull);
+      expect(LibraryEntry.fromJson(null), isNull);
+      expect(LibraryEntry.fromJson('nonsense'), isNull);
+      expect(LibraryEntry.fromJson({'n': 'no path.pdf'}), isNull);
+      expect(LibraryEntry.fromJson({'p': '/a.pdf'}), isNull);
     });
 
     test('tolerates missing optional fields', () {
-      final entry = PdfFileEntry.fromJson({'p': '/a.pdf', 'n': 'a.pdf'})!;
+      final entry = LibraryEntry.fromJson({'p': '/a.pdf', 'n': 'a.pdf'})!;
       expect(entry.sizeBytes, 0);
       expect(entry.modifiedMs, 0);
       expect(entry.folder, '');
@@ -359,7 +390,7 @@ void main() {
     });
 
     test('title strips only a trailing .pdf', () {
-      PdfFileEntry named(String name) => PdfFileEntry(
+      LibraryEntry named(String name) => LibraryEntry(
         path: '/x/$name',
         name: name,
         sizeBytes: 1,
@@ -381,8 +412,8 @@ void main() {
       _pdf('${fake.documents.path}/merged.pdf');
       _pdf('${fake.support.path}/notes/support.pdf');
 
-      final found = await PdfLibraryService.scan();
-      await PdfLibraryService.settleForTesting();
+      final found = await LibraryService.scan();
+      await LibraryService.settleForTesting();
 
       expect(found.map((e) => e.name).toSet(), {'merged.pdf', 'support.pdf'});
       expect(found.every((e) => e.isAppOwned), isTrue);
@@ -396,24 +427,24 @@ void main() {
     test('publishes progress while sweeping and clears it after', () async {
       final fake = FakePathProvider.install(root);
       _pdf('${fake.documents.path}/one.pdf');
-      final seen = <PdfScanProgress?>[];
-      void record() => seen.add(PdfLibraryService.progress.value);
-      PdfLibraryService.progress.addListener(record);
-      addTearDown(() => PdfLibraryService.progress.removeListener(record));
+      final seen = <LibraryScanProgress?>[];
+      void record() => seen.add(LibraryService.progress.value);
+      LibraryService.progress.addListener(record);
+      addTearDown(() => LibraryService.progress.removeListener(record));
 
-      expect(PdfLibraryService.progress.value, isNull);
-      await PdfLibraryService.scan();
+      expect(LibraryService.progress.value, isNull);
+      await LibraryService.scan();
 
       expect(seen.first, isNotNull, reason: 'a sweep announces itself');
-      expect(PdfLibraryService.progress.value, isNull);
+      expect(LibraryService.progress.value, isNull);
     });
 
     test('cached() returns the previous sweep', () async {
       final fake = FakePathProvider.install(root);
       _pdf('${fake.documents.path}/one.pdf');
 
-      await PdfLibraryService.scan();
-      final cached = await PdfLibraryService.cached();
+      await LibraryService.scan();
+      final cached = await LibraryService.cached();
 
       expect(cached.map((e) => e.name), contains('one.pdf'));
     });
@@ -423,11 +454,11 @@ void main() {
       final keep = _pdf('${fake.documents.path}/keep.pdf');
       final gone = _pdf('${fake.documents.path}/gone.pdf');
 
-      final scanned = await PdfLibraryService.scan();
+      final scanned = await LibraryService.scan();
       expect(scanned, hasLength(2));
 
       gone.deleteSync();
-      final alive = await PdfLibraryService.prune(scanned);
+      final alive = await LibraryService.prune(scanned);
 
       expect(alive.map((e) => e.path), [keep.path]);
     });
@@ -436,7 +467,7 @@ void main() {
       FakePathProvider.install(root);
       final outside = _pdf('${root.path}/elsewhere/external.pdf');
 
-      final entry = await PdfLibraryService.describe(outside.path);
+      final entry = await LibraryService.describe(outside.path);
 
       expect(entry, isNotNull);
       expect(entry!.name, 'external.pdf');
@@ -446,7 +477,7 @@ void main() {
 
     test('describe returns null for a missing file', () async {
       FakePathProvider.install(root);
-      expect(await PdfLibraryService.describe('${root.path}/nope.pdf'), isNull);
+      expect(await LibraryService.describe('${root.path}/nope.pdf'), isNull);
     });
 
     test('temporary files are recognized by directory identity', () async {
@@ -456,19 +487,19 @@ void main() {
       final alias = Link('${root.path}/temp-alias')
         ..createSync(paths.temporary.path);
 
-      expect(await PdfLibraryService.isTemporaryPath(temp.path), isTrue);
+      expect(await LibraryService.isTemporaryPath(temp.path), isTrue);
       expect(
-        await PdfLibraryService.isTemporaryPath(
+        await LibraryService.isTemporaryPath(
           '${alias.path}/opened_pdfs/report.pdf',
         ),
         isTrue,
       );
-      expect(await PdfLibraryService.isTemporaryPath(durable.path), isFalse);
+      expect(await LibraryService.isTemporaryPath(durable.path), isFalse);
     });
 
     test('access is app-only off Android', () async {
-      expect(await PdfLibraryService.access(), StorageAccess.appOnly);
-      expect(await PdfLibraryService.requestAccess(), StorageAccess.appOnly);
+      expect(await LibraryService.access(), StorageAccess.appOnly);
+      expect(await LibraryService.requestAccess(), StorageAccess.appOnly);
     });
   });
 }

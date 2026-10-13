@@ -1,0 +1,19 @@
+# Shared building blocks for DocHelper's document engines.
+#
+# This workspace exists to build and test the shared crates on their own. The
+# per-format libraries (flutter_sheet_core, flutter_word_core, ...) link them
+# through path dependencies, so each crate pins its own dependency versions
+# instead of inheriting them from here.
+[workspace]
+resolver = "2"
+members = [
+  "crates/doc_zip",
+  "crates/doc_xml",
+  "crates/doc_encoding",
+  "crates/doc_ffi",
+]
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "unwind"

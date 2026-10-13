@@ -1013,7 +1013,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen>
               dialog,
               _TextDestination.app,
               Icons.smartphone_rounded,
-              'Keep in PDF Helper',
+              'Keep in DocHelper',
               _password.isEmpty
                   ? 'Select and find it whenever you open this PDF here. '
                         'The file is not changed.'

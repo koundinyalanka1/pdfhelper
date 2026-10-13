@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Pdfhelper</string>
+	<string>DocHelper</string>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>
@@ -46,13 +46,13 @@
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>PDF Helper uses the camera to scan documents and convert them into PDFs.</string>
+	<string>DocHelper uses the camera to scan documents and convert them into PDFs.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>PDF Helper does not record audio. This entry exists because the camera plugin includes audio capability by default.</string>
+	<string>DocHelper does not record audio. This entry exists because the camera plugin includes audio capability by default.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>PDF Helper saves generated PDFs and scans to your photo library when you choose to share them.</string>
+	<string>DocHelper saves generated PDFs and scans to your photo library when you choose to share them.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>PDF Helper needs access to your photos to convert images into PDFs.</string>
+	<string>DocHelper needs access to your photos to convert images into PDFs.</string>
 	<key>SKAdNetworkItems</key>
 	<array>
 		<dict>

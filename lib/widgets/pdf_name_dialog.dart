@@ -5,7 +5,8 @@ import 'package:provider/provider.dart';
 import '../providers/theme_provider.dart';
 import '../utils/file_naming.dart';
 
-/// Ask what the PDF about to be written should be called.
+/// Ask what the file about to be written should be called. [extension] is
+/// shown after the name (`.pdf` unless given).
 ///
 /// Returns the sanitised base name (no extension), or `null` when the user
 /// backs out. Callers treat `null` as "cancel the whole operation", which is
@@ -17,6 +18,7 @@ Future<String?> askPdfName({
   String confirmLabel = 'Create',
   String? hint,
   Color accent = const Color(0xFF00D9FF),
+  String extension = '.pdf',
 }) {
   final colors = AppColors(context.read<ThemeProvider>().isDarkMode);
   return showDialog<String>(
@@ -28,6 +30,7 @@ Future<String?> askPdfName({
       hint: hint,
       accent: accent,
       colors: colors,
+      extension: extension,
     ),
   );
 }
@@ -43,6 +46,7 @@ class _PdfNameDialog extends StatefulWidget {
     required this.hint,
     required this.accent,
     required this.colors,
+    required this.extension,
   });
 
   final String initialName;
@@ -51,6 +55,7 @@ class _PdfNameDialog extends StatefulWidget {
   final String? hint;
   final Color accent;
   final AppColors colors;
+  final String extension;
 
   @override
   State<_PdfNameDialog> createState() => _PdfNameDialogState();
@@ -72,7 +77,15 @@ class _PdfNameDialogState extends State<_PdfNameDialog> {
     super.dispose();
   }
 
-  void _submit() => Navigator.pop(context, sanitizeFileName(_controller.text));
+  void _submit() {
+    // Typing the extension too ("notes.txt") must not double it.
+    var name = _controller.text.trim();
+    final extension = widget.extension.toLowerCase();
+    if (extension.isNotEmpty && name.toLowerCase().endsWith(extension)) {
+      name = name.substring(0, name.length - extension.length);
+    }
+    Navigator.pop(context, sanitizeFileName(name));
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -113,7 +126,7 @@ class _PdfNameDialogState extends State<_PdfNameDialog> {
             ],
             decoration: InputDecoration(
               counterText: '',
-              suffixText: '.pdf',
+              suffixText: widget.extension,
               suffixStyle: TextStyle(color: colors.textTertiary),
               filled: true,
               fillColor: colors.background,

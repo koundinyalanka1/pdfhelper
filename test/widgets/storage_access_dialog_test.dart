@@ -32,9 +32,9 @@ void main() {
     await tester.tap(find.text('ask'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Find PDFs on your phone'), findsOneWidget);
+    expect(find.text('Find documents on your phone'), findsOneWidget);
     // The three things a person actually wants to know.
-    expect(find.textContaining('Only PDFs are read'), findsOneWidget);
+    expect(find.textContaining('Only documents are listed'), findsOneWidget);
     expect(find.textContaining('stays on this'), findsOneWidget);
     expect(find.textContaining('turn this off'), findsOneWidget);
   });

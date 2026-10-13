@@ -5,7 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pdfhelper/providers/theme_provider.dart';
 import 'package:pdfhelper/screens/merge_pdf_screen.dart';
 import 'package:pdfhelper/screens/split_pdf_screen.dart';
-import 'package:pdfhelper/services/pdf_library_service.dart';
+import 'package:pdfhelper/services/library_service.dart';
 import 'package:pdfhelper/services/recent_files_service.dart';
 import 'package:pdfhelper/widgets/recent_pdfs_strip.dart';
 import 'package:provider/provider.dart';
@@ -26,7 +26,7 @@ void main() {
     paths = FakePathProvider.install(root);
     SharedPreferences.setMockInitialValues({});
     RecentFilesService.resetCacheForTesting();
-    PdfLibraryService.resetForTesting();
+    LibraryService.resetForTesting();
   });
 
   tearDown(() {

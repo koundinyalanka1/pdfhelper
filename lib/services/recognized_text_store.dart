@@ -30,7 +30,7 @@ class RecognizedText {
 }
 
 /// Text recognized in a scanned document that the reader chose to keep in
-/// the app ("Keep in PDF Helper") instead of saving a new PDF.
+/// the app ("Keep in DocHelper") instead of saving a new PDF.
 ///
 /// It is filed under the document's content, not its path. A PDF opened from
 /// another app arrives as a new temporary copy every time, and a library
