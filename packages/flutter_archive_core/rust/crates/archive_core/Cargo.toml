@@ -1,0 +1,12 @@
+[package]
+name = "archive_core"
+version = "0.1.0"
+edition = "2021"
+license = "Proprietary"
+description = "Archives: browse, extract and create ZIP files; read TAR, GZ and TAR.GZ."
+
+[dependencies]
+doc_zip = { path = "../../../../doc_common/crates/doc_zip" }
+# Raw deflate streams only; the gzip and TAR containers are implemented here.
+flate2 = "1"
+thiserror = "1"

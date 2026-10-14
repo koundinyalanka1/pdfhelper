@@ -32,6 +32,8 @@ dependencies:
     path: packages/flutter_slide_core
   flutter_word_core:
     path: packages/flutter_word_core
+  flutter_archive_core:
+    path: packages/flutter_archive_core
 
   # File handling
   file_picker: ^13.1.0

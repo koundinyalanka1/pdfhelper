@@ -4,10 +4,11 @@
 # kind of file (see PLAN.md). The PDF engine keeps its own script,
 # scripts/build_pdf_core.sh.
 #
-#   text   -> packages/flutter_text_core   (libtext_ffi)
-#   sheet  -> packages/flutter_sheet_core  (libsheet_ffi)
-#   word   -> packages/flutter_word_core   (libword_ffi)
-#   slide  -> packages/flutter_slide_core  (libslide_ffi)
+#   text    -> packages/flutter_text_core    (libtext_ffi)
+#   sheet   -> packages/flutter_sheet_core   (libsheet_ffi)
+#   word    -> packages/flutter_word_core    (libword_ffi)
+#   slide   -> packages/flutter_slide_core   (libslide_ffi)
+#   archive -> packages/flutter_archive_core (libarchive_ffi)
 #
 # Engines whose package does not exist yet are skipped.
 #
@@ -28,7 +29,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-ALL_ENGINES=(text sheet word slide)
+ALL_ENGINES=(text sheet word slide archive)
 
 if [[ -f "$HOME/.cargo/env" ]]; then
   # shellcheck disable=SC1091
@@ -48,7 +49,7 @@ while [[ $# -gt 0 ]]; do
     --host) HOST_ONLY=1; shift ;;
     --debug) DEBUG=1; shift ;;
     android|macos|host|test|env) PLATFORMS+=("$1"); shift ;;
-    -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
     *) echo "error: unknown argument '$1'"; exit 1 ;;
   esac
 done

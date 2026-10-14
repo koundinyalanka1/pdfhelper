@@ -10,7 +10,7 @@ import zipfile
 
 # Every native engine the app ships: the PDF engine and one library per
 # other kind of file (see PLAN.md).
-ENGINES = ('pdf', 'text', 'sheet', 'word', 'slide')
+ENGINES = ('pdf', 'text', 'sheet', 'word', 'slide', 'archive')
 
 
 def check(path):
