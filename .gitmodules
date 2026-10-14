@@ -13,3 +13,6 @@
 [submodule "packages/flutter_slide_core"]
 	path = packages/flutter_slide_core
 	url = https://github.com/koundinyalanka1/flutter_slide_core.git
+[submodule "packages/flutter_archive_core"]
+	path = packages/flutter_archive_core
+	url = https://github.com/koundinyalanka1/flutter_archive_core.git
