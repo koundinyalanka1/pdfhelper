@@ -73,11 +73,14 @@
              split and the rest are reached from the screen's own actions once
              the document is on screen.
 
-             It covers every kind DocHelper can open: PDFs, and plain text
-             (other kinds join as their editors arrive; keep this in step with
-             OPENABLE_EXTENSIONS in MainActivity). The component keeps its old
-             name: renaming it would reset the "Always open with" choices
-             people have made. -->
+             It covers every kind DocHelper can open: PDFs, Office and
+             OpenDocument files, plain text, web pages and archives (other
+             kinds join as their screens arrive; keep this in step with
+             OPENABLE_EXTENSIONS in MainActivity). Images are left out on
+             purpose: DocHelper would otherwise be offered for every photo;
+             Tools > Open a file opens one. The component keeps its old name:
+             renaming it would reset the "Always open with" choices people
+             have made. -->
         <activity-alias
             android:name=".ViewPdfAlias"
             android:targetActivity=".PdfIntentTrampolineActivity"
@@ -99,7 +102,9 @@
                 <data android:host="*"/>
                 <data android:pathPattern=".*\\.pdf"/>
             </intent-filter>
-            <!-- Plain text, Markdown and JSON. -->
+            <!-- Plain text, Markdown, JSON and saved web pages (local files
+                 only: with a MIME type and no scheme, a filter matches
+                 content: and file: addresses, never a web link). -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
@@ -108,6 +113,8 @@
                 <data android:mimeType="text/markdown"/>
                 <data android:mimeType="text/x-markdown"/>
                 <data android:mimeType="application/json"/>
+                <data android:mimeType="text/html"/>
+                <data android:mimeType="application/xhtml+xml"/>
             </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.VIEW"/>
@@ -118,6 +125,8 @@
                 <data android:pathPattern=".*\\.md"/>
                 <data android:pathPattern=".*\\.json"/>
                 <data android:pathPattern=".*\\.log"/>
+                <data android:pathPattern=".*\\.html"/>
+                <data android:pathPattern=".*\\.htm"/>
             </intent-filter>
             <!-- Spreadsheets: Excel, OpenDocument, CSV and TSV. -->
             <intent-filter>
@@ -128,6 +137,7 @@
                 <data android:mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.template"/>
                 <data android:mimeType="application/vnd.ms-excel.sheet.macroEnabled.12"/>
                 <data android:mimeType="application/vnd.oasis.opendocument.spreadsheet"/>
+                <data android:mimeType="application/vnd.oasis.opendocument.spreadsheet-flat-xml"/>
                 <data android:mimeType="application/vnd.ms-excel"/>
                 <data android:mimeType="text/csv"/>
                 <data android:mimeType="text/comma-separated-values"/>
@@ -143,6 +153,7 @@
                 <data android:pathPattern=".*\\.xlsm"/>
                 <data android:pathPattern=".*\\.xls"/>
                 <data android:pathPattern=".*\\.ods"/>
+                <data android:pathPattern=".*\\.fods"/>
                 <data android:pathPattern=".*\\.csv"/>
                 <data android:pathPattern=".*\\.tsv"/>
             </intent-filter>
@@ -157,6 +168,7 @@
                 <data android:mimeType="application/vnd.ms-word.template.macroEnabled.12"/>
                 <data android:mimeType="application/vnd.oasis.opendocument.text"/>
                 <data android:mimeType="application/vnd.oasis.opendocument.text-template"/>
+                <data android:mimeType="application/vnd.oasis.opendocument.text-flat-xml"/>
                 <data android:mimeType="application/rtf"/>
                 <data android:mimeType="text/rtf"/>
                 <data android:mimeType="application/msword"/>
@@ -171,6 +183,7 @@
                 <data android:pathPattern=".*\\.docm"/>
                 <data android:pathPattern=".*\\.dotx"/>
                 <data android:pathPattern=".*\\.odt"/>
+                <data android:pathPattern=".*\\.fodt"/>
                 <data android:pathPattern=".*\\.rtf"/>
                 <data android:pathPattern=".*\\.doc"/>
                 <data android:pathPattern=".*\\.wps"/>
@@ -188,6 +201,7 @@
                 <data android:mimeType="application/vnd.ms-powerpoint.template.macroEnabled.12"/>
                 <data android:mimeType="application/vnd.oasis.opendocument.presentation"/>
                 <data android:mimeType="application/vnd.oasis.opendocument.presentation-template"/>
+                <data android:mimeType="application/vnd.oasis.opendocument.presentation-flat-xml"/>
                 <data android:mimeType="application/vnd.ms-powerpoint"/>
                 <data android:mimeType="application/wps-office.dps"/>
             </intent-filter>
@@ -201,9 +215,33 @@
                 <data android:pathPattern=".*\\.ppsx"/>
                 <data android:pathPattern=".*\\.potx"/>
                 <data android:pathPattern=".*\\.odp"/>
+                <data android:pathPattern=".*\\.fodp"/>
                 <data android:pathPattern=".*\\.ppt"/>
                 <data android:pathPattern=".*\\.pps"/>
                 <data android:pathPattern=".*\\.dps"/>
+            </intent-filter>
+            <!-- Archives: ZIP, TAR and gzip (.tar.gz too). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:mimeType="application/zip"/>
+                <data android:mimeType="application/x-zip-compressed"/>
+                <data android:mimeType="application/gzip"/>
+                <data android:mimeType="application/x-gzip"/>
+                <data android:mimeType="application/x-tar"/>
+                <data android:mimeType="application/x-compressed-tar"/>
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:scheme="file"/>
+                <data android:host="*"/>
+                <data android:pathPattern=".*\\.zip"/>
+                <data android:pathPattern=".*\\.tar"/>
+                <data android:pathPattern=".*\\.gz"/>
+                <data android:pathPattern=".*\\.tgz"/>
+                <data android:pathPattern=".*\\.tar\\.gz"/>
             </intent-filter>
         </activity-alias>
 

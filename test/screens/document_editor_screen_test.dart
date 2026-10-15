@@ -7,6 +7,7 @@ import 'package:pdfhelper/providers/theme_provider.dart';
 import 'package:pdfhelper/screens/document_editor_screen.dart';
 import 'package:pdfhelper/screens/pdf_viewer_screen.dart';
 import 'package:pdfhelper/services/document_save_service.dart';
+import 'package:pdfhelper/services/recent_files_service.dart';
 import 'package:pdfhelper/widgets/word/para_controller.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -24,6 +25,9 @@ void main() {
     root = Directory.systemTemp.createTempSync('dochelper_document_editor');
     FakePathProvider.install(root);
     SharedPreferences.setMockInitialValues({});
+    // A save records the file in Recent; a record left waiting by an
+    // earlier test would hold this test's saves up behind it.
+    RecentFilesService.resetCacheForTesting();
     DocumentSaveService.publishOverride = false;
   });
 
@@ -44,6 +48,18 @@ void main() {
         () => Future<void>.delayed(const Duration(milliseconds: 40)),
       );
       await tester.pump(const Duration(milliseconds: 20));
+    }
+  }
+
+  /// Flushes until [finder] finds something: for steps that wait on the
+  /// engine and the file system, which take longer on a busy machine.
+  Future<void> until(
+    WidgetTester tester,
+    Finder finder, {
+    int rounds = 100,
+  }) async {
+    for (var i = 0; i < rounds && finder.evaluate().isEmpty; i++) {
+      await flush(tester, rounds: 1);
     }
   }
 
@@ -252,6 +268,92 @@ void main() {
     expect(paras.first, 'Dear Sir, please find the figures below.');
     expect(paras.last, 'Yours faithfully,');
     // The original is left as it was.
+    expect(File(path).readAsBytesSync(), original);
+  }, skip: !available);
+
+  testWidgets('a flat OpenDocument text is saved as a new .odt', (
+    tester,
+  ) async {
+    final path = '${root.path}/minutes.fodt';
+    File(path).writeAsStringSync(
+      '<?xml version="1.0" encoding="UTF-8"?>\n'
+      '<office:document '
+      'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" '
+      'xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" '
+      'office:version="1.3" '
+      'office:mimetype="application/vnd.oasis.opendocument.text">'
+      '<office:body><office:text><text:p>Hello flat</text:p></office:text>'
+      '</office:body></office:document>\n',
+    );
+    final original = File(path).readAsBytesSync();
+    await tester.pumpWidget(app(DocumentEditorScreen(path: path)));
+    await flush(tester);
+    expect(find.text('FODT'), findsOneWidget);
+    expect(
+      find.text(
+        'This file will be saved as an OpenDocument text file (.odt).',
+      ),
+      findsOneWidget,
+    );
+
+    // Save a copy offers the format saving writes.
+    await tester.tap(find.byTooltip('More'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Save a copy as…'));
+    await tester.pumpAndSettle();
+    expect(find.text('OpenDocument text (.odt)'), findsOneWidget);
+    expect(find.text('Word document (.docx)'), findsNothing);
+    await tester.tapAt(const Offset(400, 20));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.textContaining('Hello flat', findRichText: true));
+    await tester.pump();
+    final c = editor(tester);
+    c.select(c.plain.length);
+    c.insertText('!');
+    await tester.pump();
+    expect(find.text('FODT · Edited'), findsOneWidget);
+    await tester.tap(find.text('Save'));
+    await tester.pump();
+    // The button shows again once the save has finished.
+    await until(tester, find.text('Save'));
+
+    final edited = Directory('${root.path}/documents/Edited');
+    final saved = File('${edited.path}/minutes.odt');
+    expect(
+      saved.existsSync(),
+      isTrue,
+      reason: Directory(root.path).listSync(recursive: true).join('\n'),
+    );
+    late List<String> paras;
+    late String format;
+    await tester.runAsync(() async {
+      paras = await paragraphsOf(saved.path);
+      final doc = await WordCore.open(saved.path);
+      format = doc.info().format;
+      doc.close();
+    });
+    expect(format, 'odt');
+    expect(paras, ['Hello flat!']);
+    // The flat original is left exactly as it was.
+    expect(File(path).readAsBytesSync(), original);
+
+    // A second save goes to the same copy.
+    await tester.tap(find.textContaining('Hello flat', findRichText: true));
+    await tester.pump();
+    final again = editor(tester);
+    again.select(again.plain.length);
+    again.insertText('!');
+    await tester.pump();
+    await tester.tap(find.text('Save'));
+    await tester.pump();
+    await until(tester, find.text('Save'));
+    expect(
+      edited.listSync().map((e) => e.path.split('/').last).toList(),
+      ['minutes.odt'],
+    );
+    await tester.runAsync(() async => paras = await paragraphsOf(saved.path));
+    expect(paras, ['Hello flat!!']);
     expect(File(path).readAsBytesSync(), original);
   }, skip: !available);
 

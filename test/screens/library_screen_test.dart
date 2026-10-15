@@ -78,6 +78,22 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  /// Scrolls the row of filter chips to the chip labelled [label], which
+  /// may lie past the row's end and not be built yet.
+  Future<Finder> showChip(WidgetTester tester, String label) async {
+    final chip = find.widgetWithText(ChoiceChip, label);
+    await tester.scrollUntilVisible(
+      chip,
+      100,
+      // The chip row is the screen's one horizontal list.
+      scrollable: find.byWidgetPredicate(
+        (w) => w is Scrollable && w.axisDirection == AxisDirection.right,
+      ),
+    );
+    await tester.pumpAndSettle();
+    return chip;
+  }
+
   /// Pumps the screen and lets the real sweep finish.
   ///
   /// `runAsync` is required: the scan hands the directory walk to a background
@@ -587,11 +603,15 @@ void main() {
       seed('Letter.docx', body: 'PK');
       seed('Accounts.xlsx', body: 'PK');
       seed('notes.txt', body: 'hello');
+      seed('Statements.zip', body: 'PK');
+      seed('Backup.tar.gz', body: 'gz');
       await settle(tester);
 
-      for (final title in ['Report', 'Letter', 'Accounts', 'notes']) {
+      for (final title in ['Report', 'Letter', 'Accounts', 'notes', 'Statements']) {
         expect(find.text(title), findsOneWidget, reason: title);
       }
+      // TAR and gzip files are not listed.
+      expect(find.text('Backup.tar'), findsNothing);
 
       final excel = find.widgetWithText(ChoiceChip, 'Excel');
       await tester.ensureVisible(excel);
@@ -607,20 +627,39 @@ void main() {
       await tester.pump();
       expect(find.text('Report'), findsOneWidget);
       expect(find.text('Letter'), findsOneWidget);
+
+      await tester.tap(await showChip(tester, 'Archive'));
+      await tester.pump();
+      expect(find.text('Statements'), findsOneWidget);
+      expect(find.text('Report'), findsNothing);
+      expect(find.text('Accounts'), findsNothing);
     });
 
-    testWidgets('a kind without an editor offers another app', (tester) async {
-      seed('Old talk.fodp', body: 'old');
+    testWidgets('an archive filter with nothing in it says so', (tester) async {
+      seed('Report.pdf');
       await settle(tester);
 
-      await tester.tap(find.text('Old talk'));
+      await tester.tap(await showChip(tester, 'Archive'));
+      await tester.pump();
+      expect(find.text('No archives found on this device yet.'), findsOneWidget);
+    });
+
+    testWidgets('a format without an editor offers another app', (
+      tester,
+    ) async {
+      // 7-Zip files are not listed, but one opened before stays in Recent.
+      final archive = File('${paths.documents.path}/Holiday photos.7z')
+        ..writeAsStringSync('7z');
+      await tester.runAsync(() => RecentFilesService.markOpened(archive.path));
+      await settle(tester);
+      await tester.tap(find.text('Recent'));
+      await tester.pump();
+
+      await tester.tap(find.text('Holiday photos'));
       await flush(tester);
       await tester.pumpAndSettle();
       expect(find.text('Open with another app'), findsOneWidget);
-      expect(
-        find.textContaining('cannot open this PowerPoint format (.fodp) yet'),
-        findsOneWidget,
-      );
+      expect(find.textContaining('(.7z)'), findsOneWidget);
     });
 
     testWidgets('PDF-only actions are not offered for other kinds', (

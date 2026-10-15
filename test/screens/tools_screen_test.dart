@@ -1,10 +1,74 @@
+import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pdfhelper/models/home_tabs.dart';
 import 'package:pdfhelper/config/features.dart';
 import 'package:pdfhelper/providers/theme_provider.dart';
+import 'package:pdfhelper/screens/image_viewer_screen.dart';
+import 'package:pdfhelper/screens/make_zip_screen.dart';
+import 'package:pdfhelper/screens/text_editor_screen.dart';
 import 'package:pdfhelper/screens/tools_screen.dart';
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart' show XFile;
+import 'package:shared_preferences/shared_preferences.dart';
+
+/// A file on this machine, as the picker hands it over.
+final class _Picked extends PlatformFile {
+  _Picked(this.file);
+
+  final File file;
+
+  @override
+  String get name => file.uri.pathSegments.last;
+
+  @override
+  Uri get uri => file.uri;
+
+  @override
+  XFile get xFile => XFile(file.path);
+
+  @override
+  int? lengthSync() => file.lengthSync();
+
+  @override
+  Future<int?> length() => file.length();
+
+  @override
+  Future<Uint8List> readAsBytes() => file.readAsBytes();
+
+  @override
+  Stream<Uint8List> readAsByteStream() =>
+      file.openRead().map(Uint8List.fromList);
+}
+
+/// Picks [file] whatever is asked for, and records what was asked.
+class _FakePicker extends FilePickerPlatform {
+  File? file;
+  final types = <FileType>[];
+
+  @override
+  Future<PlatformFile?> pickFile({
+    String? dialogTitle,
+    String? initialDirectory,
+    FileType type = FileType.any,
+    List<String>? allowedExtensions,
+    Function(FilePickerStatus)? onFileLoading,
+    int compressionQuality = 0,
+    AndroidOptions androidOptions = const AndroidOptions(),
+    DarwinOptions darwinOptions = const DarwinOptions(),
+    WindowsOptions windowsOptions = const WindowsOptions(),
+    LinuxOptions linuxOptions = const LinuxOptions(),
+    WebOptions webOptions = const WebOptions(),
+  }) async {
+    types.add(type);
+    final picked = file;
+    return picked == null ? null : _Picked(picked);
+  }
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -72,6 +136,9 @@ void main() {
       'Open in viewer',
       'Extract text',
       'Recognize text (OCR)',
+      'Open a file',
+      'Make a ZIP',
+      'Open a ZIP',
     ]) {
       expect(find.text(tool), findsOneWidget, reason: '$tool is missing');
     }
@@ -100,6 +167,7 @@ void main() {
       'Fill, sign & mark up',
       'Edit document',
       'Read & extract',
+      'Files',
     ]) {
       expect(find.text(section), findsOneWidget);
     }
@@ -133,4 +201,86 @@ void main() {
 
     expect(sent, [(DocHandoff.split, null)]);
   });
+
+  testWidgets('Make a ZIP opens its screen without a PDF chosen', (
+    tester,
+  ) async {
+    // The Files section is below the first screenful, which a list does
+    // not build.
+    await pumpTall(tester);
+    await tapTool(tester, 'Make a ZIP');
+
+    expect(find.byType(MakeZipScreen), findsOneWidget);
+    expect(sent, isEmpty);
+  });
+
+  group('Open a file', () {
+    late Directory root;
+    late _FakePicker picker;
+    late FilePickerPlatform original;
+
+    setUp(() {
+      SharedPreferences.setMockInitialValues({});
+      root = Directory.systemTemp.createTempSync('dochelper_open_file');
+      original = FilePickerPlatform.instance;
+      picker = _FakePicker();
+      FilePickerPlatform.instance = picker;
+    });
+
+    tearDown(() {
+      FilePickerPlatform.instance = original;
+      root.deleteSync(recursive: true);
+    });
+
+    /// Taps the tool. The screen it opens shows a spinner while it reads
+    /// the file, so the test pumps by time rather than until it settles.
+    Future<void> openFile(WidgetTester tester) async {
+      await tester.ensureVisible(find.text('Open a file'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Open a file'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+    }
+
+    testWidgets('opens a picture from the phone in the picture viewer', (
+      tester,
+    ) async {
+      // A picture never shows in Files, so this is its way in.
+      picker.file = File('${root.path}/photo.png')
+        ..writeAsBytesSync(base64Decode(_png));
+      await pumpTall(tester);
+      await openFile(tester);
+
+      expect(picker.types, [FileType.any]);
+      final viewer = tester.widget<ImageViewerScreen>(
+        find.byType(ImageViewerScreen),
+      );
+      expect(viewer.path, picker.file!.path);
+      expect(viewer.title, 'photo.png');
+      expect(sent, isEmpty);
+    });
+
+    testWidgets('opens a web page in the text editor', (tester) async {
+      picker.file = File('${root.path}/page.html')
+        ..writeAsStringSync('<h1>Hello</h1>');
+      await pumpTall(tester);
+      await openFile(tester);
+
+      final editor = tester.widget<TextEditorScreen>(
+        find.byType(TextEditorScreen),
+      );
+      expect(editor.path, picker.file!.path);
+    });
+
+    testWidgets('does nothing when nothing is picked', (tester) async {
+      await pumpTall(tester);
+      await tapTool(tester, 'Open a file');
+      expect(find.byType(ToolsScreen), findsOneWidget);
+      expect(picker.types, [FileType.any]);
+    });
+  });
 }
+
+/// A 4 x 3 red PNG.
+const _png =
+    'iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAIAAAA7ljmRAAAAEElEQVR4nGP4z8AARww4OQD1MQv1NXv7ggAAAABJRU5ErkJggg==';

@@ -5,6 +5,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_text_core/flutter_text_core.dart';
 import 'package:pdfhelper/providers/theme_provider.dart';
 import 'package:pdfhelper/screens/text_editor_screen.dart';
+import 'package:pdfhelper/widgets/json_tree_view.dart';
+import 'package:pdfhelper/widgets/markup_view.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -45,6 +47,22 @@ void main() {
 
   String editorText(WidgetTester tester) =>
       tester.widget<TextField>(find.byType(TextField).last).controller!.text;
+
+  /// Let isolate work finish until [finder] shows.
+  Future<void> until(WidgetTester tester, Finder finder) async {
+    for (var i = 0; i < 150 && finder.evaluate().isEmpty; i++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 40)),
+      );
+      await tester.pump(const Duration(milliseconds: 20));
+    }
+    expect(finder, findsWidgets);
+  }
+
+  /// Text drawn anywhere, including inside a page's styled paragraphs.
+  Finder shows(String text) => find.textContaining(text, findRichText: true);
+
+  final toggle = find.byKey(const ValueKey('text-preview-toggle'));
 
   final available = TextCore.isAvailable;
 
@@ -201,5 +219,213 @@ void main() {
     expect(find.text('1 of 1'), findsOneWidget);
     await tester.pumpAndSettle();
     expect(find.text('line number 30000 of a big log'), findsOneWidget);
+  }, skip: !available);
+
+  testWidgets('opens Markdown as a page, and previews edits not yet saved', (
+    tester,
+  ) async {
+    final file = File('${root.path}/notes.md')
+      ..writeAsStringSync('# Shopping list\n\nBuy **milk** and eggs.\n');
+    await tester.pumpWidget(app(TextEditorScreen(path: file.path)));
+    await until(tester, find.byType(MarkupView));
+    expect(shows('Shopping list'), findsWidgets);
+    expect(find.byTooltip('Edit'), findsOneWidget);
+    // Editing-only tools stay out of the way while reading.
+    expect(find.byTooltip('Find'), findsNothing);
+    expect(find.byTooltip('Undo'), findsNothing);
+    expect(find.byType(TextField), findsNothing);
+
+    await tester.tap(toggle);
+    await tester.pump();
+    expect(find.byType(MarkupView), findsNothing);
+    expect(find.byTooltip('Preview'), findsOneWidget);
+    expect(find.byTooltip('Find'), findsOneWidget);
+    expect(editorText(tester), '# Shopping list\n\nBuy **milk** and eggs.\n');
+
+    await tester.enterText(
+      find.byType(TextField).last,
+      '# Groceries\n\n- rice\n- dal\n',
+    );
+    await tester.pump();
+    await tester.tap(toggle);
+    await tester.pump();
+    expect(find.byKey(const ValueKey('text-preview-busy')), findsOneWidget);
+    await until(tester, shows('Groceries'));
+    expect(shows('Shopping list'), findsNothing);
+    expect(shows('dal'), findsWidgets);
+
+    // Unchanged text is not read again.
+    await tester.tap(toggle);
+    await tester.pump();
+    await tester.tap(toggle);
+    await tester.pump();
+    expect(find.byKey(const ValueKey('text-preview-busy')), findsNothing);
+    expect(shows('Groceries'), findsWidgets);
+
+    // Saving works from the preview too.
+    await tester.tap(find.text('Save'));
+    await flush(tester);
+    expect(file.readAsStringSync(), '# Groceries\n\n- rice\n- dal\n');
+  }, skip: !available);
+
+  testWidgets('opens an empty Markdown file for typing', (tester) async {
+    final file = File('${root.path}/empty.md')..writeAsStringSync('');
+    await tester.pumpWidget(app(TextEditorScreen(path: file.path)));
+    await flush(tester);
+    expect(find.byType(TextField), findsOneWidget);
+    expect(find.byTooltip('Preview'), findsOneWidget);
+  }, skip: !available);
+
+  testWidgets('shows HTML as a page with pictures next to it', (tester) async {
+    final file = File('${root.path}/page.html')
+      ..writeAsStringSync(
+        '<html><head><title>Hidden title</title>'
+        '<script>var hidden = 1;</script></head>'
+        '<body><h1>Welcome</h1><p>Hello <b>there</b></p>'
+        '<img src="logo.png" alt="Logo"></body></html>',
+      );
+    await tester.pumpWidget(app(TextEditorScreen(path: file.path)));
+    await until(tester, find.byType(MarkupView));
+    expect(shows('Welcome'), findsWidgets);
+    expect(shows('there'), findsWidgets);
+    expect(shows('hidden = 1'), findsNothing);
+    final view = tester.widget<MarkupView>(find.byType(MarkupView));
+    expect(view.baseDirectory, root.path);
+
+    await tester.tap(toggle);
+    await tester.pump();
+    expect(editorText(tester), contains('<h1>Welcome</h1>'));
+  }, skip: !available);
+
+  testWidgets('shows JSON as a tree, opening as text', (tester) async {
+    final file = File('${root.path}/data.json')
+      ..writeAsStringSync('{"name": "Asha", "items": [10, 20, 30]}');
+    await tester.pumpWidget(app(TextEditorScreen(path: file.path)));
+    await flush(tester);
+    expect(find.byType(TextField), findsOneWidget);
+    expect(find.byType(JsonTreeView), findsNothing);
+
+    await tester.tap(toggle);
+    await until(tester, find.byType(JsonTreeView));
+    expect(find.text('name'), findsOneWidget);
+    expect(find.text('"Asha"'), findsOneWidget);
+    expect(find.text('[3]'), findsOneWidget);
+
+    // A look at the text and back keeps what was opened in the tree.
+    await tester.tap(find.text('items'));
+    await tester.pump();
+    expect(find.text('20'), findsOneWidget);
+    await tester.tap(toggle);
+    await tester.pump();
+    expect(find.text('20'), findsNothing);
+    await tester.tap(toggle);
+    await tester.pump();
+    expect(find.text('20'), findsOneWidget);
+
+    // Formatting is an edit, so it waits for the text.
+    await tester.tap(find.byTooltip('More'));
+    await tester.pumpAndSettle();
+    expect(find.text('Format JSON'), findsNothing);
+    expect(find.text('Share'), findsOneWidget);
+  }, skip: !available);
+
+  testWidgets('a JSON mistake goes to its line in the text', (tester) async {
+    const text = '{\n  "a": 1,\n  "b": ,\n  "c": 3\n}\n';
+    final file = File('${root.path}/broken.json')..writeAsStringSync(text);
+    await tester.pumpWidget(app(TextEditorScreen(path: file.path)));
+    await flush(tester);
+    await tester.tap(toggle);
+    await until(tester, find.byKey(const ValueKey('text-preview-problem')));
+    expect(find.text('This is not valid JSON'), findsOneWidget);
+    expect(shows("Unexpected ',' at line 3, column 8."), findsWidgets);
+
+    await tester.tap(find.byKey(const ValueKey('text-preview-go-to-line')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    final field = tester.widget<TextField>(find.byType(TextField).last);
+    final offset = field.controller!.selection.baseOffset;
+    expect(text[offset], ',');
+    expect(text.substring(0, offset).split('\n').length, 3);
+    expect(field.focusNode!.hasFocus, isTrue);
+    expect(find.byTooltip('Preview'), findsOneWidget);
+
+    // Fixed, the tree shows.
+    await tester.enterText(
+      find.byType(TextField).last,
+      '{"a": 1, "b": 2, "c": 3}',
+    );
+    await tester.pump();
+    await tester.tap(toggle);
+    await until(tester, find.byType(JsonTreeView));
+    expect(find.text('This is not valid JSON'), findsNothing);
+  }, skip: !available);
+
+  testWidgets('a large Markdown file opens as a page, its text read-only', (
+    tester,
+  ) async {
+    final sections = [
+      for (var i = 0; i < 6000; i++)
+        '## Section $i\n\nSome words about section $i of a long file.\n',
+    ];
+    final file = File('${root.path}/long.md')
+      ..writeAsStringSync(sections.join('\n'));
+    expect(file.lengthSync(), greaterThan(TextEditorScreen.editableLimit));
+    await tester.pumpWidget(app(TextEditorScreen(path: file.path)));
+    await until(tester, find.byType(MarkupView));
+    expect(shows('Section 0'), findsWidgets);
+    expect(find.text('Save'), findsNothing);
+
+    await tester.tap(toggle);
+    await tester.pump();
+    expect(find.textContaining('opens read-only'), findsOneWidget);
+    expect(find.text('## Section 0'), findsOneWidget);
+  }, skip: !available);
+
+  testWidgets('a Markdown file too large to read as a page opens as text', (
+    tester,
+  ) async {
+    // A quarter of a million list items would take hundreds of megabytes.
+    final file = File('${root.path}/huge.md')
+      ..writeAsStringSync('- a\n' * 260000);
+    expect(
+      file.lengthSync(),
+      greaterThan(TextEditorScreen.markdownPreviewLimit),
+    );
+    await tester.pumpWidget(app(TextEditorScreen(path: file.path)));
+    await flush(tester);
+    expect(find.textContaining('opens read-only'), findsOneWidget);
+    expect(find.byType(MarkupView), findsNothing);
+    expect(toggle, findsNothing);
+  }, skip: !available);
+
+  testWidgets('a long Markdown page is read up to the engine\'s limit', (
+    tester,
+  ) async {
+    final file = File('${root.path}/tasks.md')
+      ..writeAsStringSync('- [ ] buy milk\n' * 40000);
+    expect(file.lengthSync(), lessThan(TextEditorScreen.markdownPreviewLimit));
+    await tester.pumpWidget(app(TextEditorScreen(path: file.path)));
+    await until(tester, find.byType(MarkupView));
+    // The view ends with a note saying so (see markup_view_test.dart).
+    final view = tester.widget<MarkupView>(find.byType(MarkupView));
+    expect(view.document.truncated, isTrue);
+    expect(shows('buy milk'), findsWidgets);
+  }, skip: !available);
+
+  testWidgets('a JSON mistake in a large file marks its line', (tester) async {
+    final rows = [for (var i = 0; i < 30000; i++) '  {"n": $i},'];
+    rows[20000] = '  {"n": 20000 x},';
+    final file = File('${root.path}/big.json')
+      ..writeAsStringSync('[\n${rows.join('\n')}\n  {}\n]\n');
+    await tester.pumpWidget(app(TextEditorScreen(path: file.path)));
+    await flush(tester);
+    expect(find.textContaining('opens read-only'), findsOneWidget);
+    await tester.tap(toggle);
+    await until(tester, find.byKey(const ValueKey('text-preview-go-to-line')));
+    expect(shows('line 20002'), findsWidgets);
+
+    await tester.tap(find.byKey(const ValueKey('text-preview-go-to-line')));
+    await tester.pumpAndSettle();
+    expect(find.text('  {"n": 20000 x},'), findsOneWidget);
   }, skip: !available);
 }

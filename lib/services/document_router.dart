@@ -4,7 +4,9 @@ import 'package:share_plus/share_plus.dart';
 
 import '../models/doc_kind.dart';
 import '../providers/theme_provider.dart';
+import '../screens/archive_screen.dart';
 import '../screens/document_editor_screen.dart';
+import '../screens/image_viewer_screen.dart';
 import '../screens/pdf_viewer_screen.dart';
 import '../screens/sheet_editor_screen.dart';
 import '../screens/slide_editor_screen.dart';
@@ -17,7 +19,7 @@ class DocumentRouter {
   DocumentRouter._();
 
   /// The screen that opens [path], or null when DocHelper cannot open its
-  /// kind yet.
+  /// kind or format yet (7-Zip and RAR archives, for example).
   static Widget? screenFor(String path, {String? title, String password = ''}) {
     final name = title ?? documentDisplayName(path);
     if (!DocKind.canOpenPath(path)) return null;
@@ -31,7 +33,9 @@ class DocumentRouter {
       DocKind.sheet => SheetEditorScreen(path: path, title: name),
       DocKind.word => DocumentEditorScreen(path: path, title: name),
       DocKind.slides => SlideEditorScreen(path: path, title: name),
-      _ => null,
+      DocKind.image => ImageViewerScreen(path: path, title: name),
+      DocKind.archive => ArchiveScreen(path: path, title: name),
+      DocKind.other => null,
     };
   }
 
@@ -124,7 +128,7 @@ class _UnsupportedFileSheet extends StatelessWidget {
                 kind == DocKind.other
                     ? 'DocHelper cannot open this kind of file.'
                     : kind.canOpen
-                    ? 'DocHelper cannot open this ${kind.label} format '
+                    ? 'DocHelper cannot open this ${_formatName(kind)} format '
                           '(.${DocKind.extensionOf(path)}) yet. Until then, you '
                           'can open it in another app or share it.'
                     : 'Opening ${kind.label} files in DocHelper is coming soon. '
@@ -183,6 +187,14 @@ class _UnsupportedFileSheet extends StatelessWidget {
     );
   }
 }
+
+/// How the sheet names a kind's formats: by product for Office and PDF
+/// ("this Excel format"), as a common noun otherwise ("this archive
+/// format").
+String _formatName(DocKind kind) => switch (kind) {
+  DocKind.text || DocKind.image || DocKind.archive => kind.label.toLowerCase(),
+  _ => kind.label,
+};
 
 /// A whole screen saying DocHelper cannot open a document yet, for when one
 /// arrives from another app with no other screen to show it on.

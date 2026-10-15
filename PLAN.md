@@ -7,7 +7,8 @@ who does real office work on a phone instead of a laptop.
 This file is the plan and the progress record. It is updated as work lands.
 See the [progress log](#progress-log) at the end.
 
-Last updated: 2026-10-13 (phases 0-4 done).
+Last updated: 2026-10-15 (phases 0-8 done; phase 9 written, waiting for an
+Android build and an emulator check).
 
 ## 1. What "done" looks like
 
@@ -73,7 +74,7 @@ damaging the files:
 | Word processing | `packages/flutter_word_core` | `libword_ffi` | `.docx .docm .dotx`, `.odt .fodt`, `.rtf`, `.doc`, WPS `.wps` | `WordCore` |
 | Presentations | `packages/flutter_slide_core` | `libslide_ffi` | `.pptx .ppsx .potx`, `.odp .fodp`, `.ppt`, WPS `.dps` | `SlideCore` |
 | Plain text | `packages/flutter_text_core` | `libtext_ffi` | `.txt .log .md .json .xml .html .ini .yaml`, source code, any text | `TextCore` |
-| Archives (later) | `packages/flutter_archive_core` | `libarchive_ffi` | `.zip` (browse, extract, create) | `ArchiveCore` |
+| Archives | `packages/flutter_archive_core` (submodule) | `libarchive_ffi` | `.zip`, `.tar`, `.tar.gz`/`.tgz`, `.gz` (browse, extract); `.zip` (create) | `ArchiveCore` |
 | Shared (Rust only) | `packages/doc_common` | linked into each | ZIP, XML, OLE2/CFB, text encodings; later fonts, layout, PDF writer, images | — |
 
 Crates inside each library follow one pattern:
@@ -292,8 +293,9 @@ editing in place, not from rebuilding the file:
 - **Search.**
   - Find and replace: plain, case-insensitive and whole-word.
   - Our own regex engine comes later.
-- **Formats.** JSON validation and pretty-printing. Syntax highlighting for
-  common formats comes later. Markdown preview comes later.
+- **Formats.** JSON validation and pretty-printing. Markdown and HTML read
+  as a page (the engine's own reader, `text_core::markup`) and JSON as a
+  tree. Syntax highlighting for common formats comes later.
 - **Screen.** Editor with word wrap, font size, line numbers, go-to-line,
   find and replace, and an encoding and line-ending picker; save and share.
 
@@ -364,7 +366,7 @@ Status: `[ ]` not started · `[~]` in progress · `[x]` done.
 | 6 | Fonts, layout and PDF writer: Word page view and export; sheet and slide export | [x] |
 | 7 | Legacy binaries through `doc_cfb`: XLS, DOC, PPT and WPS `.et/.wps/.dps` | [x] |
 | 8 | PDF editing: annotate, sign, fill forms, stamp, compress, convert pages to images | [x] |
-| 9 | Other files: images, ZIP archives, Markdown, HTML and JSON viewers, unknown files | [ ] |
+| 9 | Other files: images, ZIP archives, Markdown, HTML and JSON viewers, unknown files | [~] |
 | 10 | Hardening: a real-world corpus per format, fuzzing, memory and time limits, device runs, accessibility, release | [ ] |
 
 ### How each phase is verified
@@ -1072,10 +1074,52 @@ match:
     sharpness, pages; shared or published to `Download/DocHelper`), in the
     viewer's actions and in Tools.
 
+- **2026-10-14/15 (phase 9).** Other files: pictures, archives, Markdown,
+  HTML and JSON, and flat OpenDocument:
+  - Flat OpenDocument (`.fodt/.fods/.fodp`, one XML file) opens in the
+    word, sheet and slide engines (`doc_odf`). It cannot be written back,
+    so saving makes `Edited/<name>.odt/.ods/.odp` and says so.
+  - `text_core::markup` reads Markdown (CommonMark with GitHub's tables,
+    task lists, strikethrough and bare links) and real-world HTML into
+    one reading model: headings, styled runs, quotes, lists, code, rules,
+    tables and pictures. It is cut short at 100,000 parts (blocks, items,
+    cells and runs) and its trees at 300,000 nodes, with `truncated` set:
+    five megabytes of one-word list items took 2 GB and 20 s before.
+  - `packages/flutter_archive_core` (its own repository, a submodule):
+    ZIP (ZIP64, stored and deflate), TAR (ustar, GNU, pax), gzip and
+    `.tar.gz` listed, read and extracted; ZIP files made. Names are made
+    safe before anything is written (no `..`, absolute paths, devices or
+    links), a target's existing files and links are never replaced or
+    followed, and zip bombs and huge entries are refused before writing.
+    Cross-checked against Python's `zipfile`/`tarfile`, Info-ZIP and GNU
+    tar; fuzzed in review (100,000 mutated archives, nothing written
+    outside the target).
+  - The app: `ImageViewerScreen` (zoom, turn, details, share, make a
+    PDF), `ArchiveScreen` (folders, open/share/save one file, Extract all
+    into a folder, published to `Download/DocHelper/<folder>/...` in one
+    batch), `MakeZipScreen`, and in the text editor a page view of
+    Markdown and HTML (`MarkupView`, built lazily piece by piece, even
+    inside long lists and tables) and a tree of JSON (`JsonTreeView`,
+    numbers shown as the file writes them). Tools has a Files section:
+    Open a file (any kind, pictures included), Make a ZIP, Open a ZIP.
+    "Open with" covers archives, flat OpenDocument and HTML.
+  - Known gaps: the Kotlin and manifest changes are not yet compiled or
+    tried on a device; pictures are not listed in Files (Tools > Open a
+    file opens one); HEIC/AVIF go through the phone's own codec, untried
+    here; very large pictures are decoded downscaled; jumping far through
+    a page of tens of thousands of pieces lays out every piece between;
+    7-Zip and RAR are recognised but not opened; extracted files are kept
+    both in the app and as public copies, each linked in the public-copy
+    catalogue (about 360 bytes a file).
+
 ## Next steps (for the next session)
 
-1. Phase 9: other files: images, ZIP archives, Markdown, HTML and JSON
-   viewers, unknown files (and flat ODF `.fodt/.fods/.fodp`).
+1. Finish phase 9 on Android: a Gradle build (the Kotlin resolver and the
+   manifest changed), then on the emulator `pdfhelper_api36_16kb`: "Open
+   with" for `.zip`, `.tar.gz`, `.fodt` and `.html`; Tools > Open a file
+   with a JPEG and a HEIC photo; Extract all of a ZIP with nested folders
+   (public copies in `Download/DocHelper/<folder>/...`) on Android 10+ and
+   on an Android 9 image; Make a ZIP.
 2. Rebuild the PDF engine's macOS dylib and iOS XCFramework on the Mac
    (`bash scripts/build_pdf_core.sh ios macos`); the Android binaries are
    current.

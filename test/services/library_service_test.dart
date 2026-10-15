@@ -80,6 +80,9 @@ void main() {
         'readme.md',
         'photo.jpg',
         'archive.pdf.zip',
+        'backup.tar',
+        'backup.tar.gz',
+        'photos.7z',
         'script.py',
         'data.json',
       ]) {
@@ -98,13 +101,48 @@ void main() {
         'report.odt',
         'notes.txt',
         'readme.md',
+        'archive.pdf.zip',
       });
       final kinds = {for (final e in found) e.name: e.kind};
       expect(kinds['letter.docx'], DocKind.word);
       expect(kinds['list.csv'], DocKind.sheet);
       expect(kinds['talk.pptx'], DocKind.slides);
       expect(kinds['notes.txt'], DocKind.text);
+      expect(kinds['archive.pdf.zip'], DocKind.archive);
       expect(found.firstWhere((e) => e.name == 'old letter.doc').title, 'old letter');
+      expect(found.firstWhere((e) => e.name == 'archive.pdf.zip').title, 'archive.pdf');
+    });
+
+    test('lists ZIP files and flat OpenDocument files wherever they are', () {
+      for (final name in [
+        'Download/Statements 2026.zip',
+        'WhatsApp/Media/Documents/Photos.ZIP',
+        'Documents/Budget.fods',
+        'Documents/Letter.fodt',
+        'Documents/Talk.fodp',
+        'Android/media/app/cache.tar.gz',
+        'DCIM/Camera/IMG_0001.jpg',
+        'Pictures/scan.heic',
+      ]) {
+        File('${root.path}/$name')
+          ..createSync(recursive: true)
+          ..writeAsStringSync('hello');
+      }
+
+      final found = LibraryService.walkForTesting([root.path]);
+
+      expect(found.map((e) => e.name).toSet(), {
+        'Statements 2026.zip',
+        'Photos.ZIP',
+        'Budget.fods',
+        'Letter.fodt',
+        'Talk.fodp',
+      });
+      final zip = found.firstWhere((e) => e.name == 'Photos.ZIP');
+      expect(zip.kind, DocKind.archive);
+      expect(zip.title, 'Photos');
+      expect(zip.folder, 'Documents');
+      expect(found.firstWhere((e) => e.name == 'Budget.fods').kind, DocKind.sheet);
     });
 
     test(
@@ -447,6 +485,32 @@ void main() {
       final cached = await LibraryService.cached();
 
       expect(cached.map((e) => e.name), contains('one.pdf'));
+    });
+
+    test('a cold start reads back the ZIP files a sweep found', () async {
+      final fake = FakePathProvider.install(root);
+      _pdf('${fake.documents.path}/Report.pdf');
+      File('${fake.documents.path}/Statements.zip').writeAsStringSync('PK');
+
+      final scanned = await LibraryService.scan();
+      await LibraryService.settleForTesting();
+      expect(scanned.map((e) => e.name).toSet(), {
+        'Report.pdf',
+        'Statements.zip',
+      });
+
+      // Drop the sweep from memory, as a relaunch would.
+      LibraryService.resetForTesting();
+      final cached = await LibraryService.cached();
+
+      expect(cached.map((e) => e.name).toSet(), {
+        'Report.pdf',
+        'Statements.zip',
+      });
+      expect(
+        cached.firstWhere((e) => e.name == 'Statements.zip').kind,
+        DocKind.archive,
+      );
     });
 
     test('prune drops entries whose file is gone', () async {

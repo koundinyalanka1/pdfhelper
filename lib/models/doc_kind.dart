@@ -70,34 +70,49 @@ enum DocKind {
     DocKind.text ||
     DocKind.sheet ||
     DocKind.word ||
-    DocKind.slides => true,
-    _ => false,
+    DocKind.slides ||
+    DocKind.image ||
+    DocKind.archive => true,
+    DocKind.other => false,
   };
 
   /// Extensions of kinds DocHelper opens only in some formats.
   static const Set<String> _openableSheetExtensions = {
-    'xlsx', 'xlsm', 'xltx', 'xltm', 'ods', 'ots', 'csv', 'tsv', 'xls', 'xlt',
-    'et', 'ett',
+    'xlsx', 'xlsm', 'xltx', 'xltm', 'ods', 'ots', 'fods', 'csv', 'tsv', 'xls',
+    'xlt', 'et', 'ett',
   };
 
   static const Set<String> _openableWordExtensions = {
-    'docx', 'docm', 'dotx', 'dotm', 'odt', 'ott', 'rtf', 'doc', 'dot', 'wps',
-    'wpt',
+    'docx', 'docm', 'dotx', 'dotm', 'odt', 'ott', 'fodt', 'rtf', 'doc', 'dot',
+    'wps', 'wpt',
   };
 
   static const Set<String> _openableSlideExtensions = {
-    'pptx', 'pptm', 'ppsx', 'ppsm', 'potx', 'potm', 'odp', 'otp', 'ppt', 'pps',
-    'pot', 'dps', 'dpt',
+    'pptx', 'pptm', 'ppsx', 'ppsm', 'potx', 'potm', 'odp', 'otp', 'fodp', 'ppt',
+    'pps', 'pot', 'dps', 'dpt',
+  };
+
+  static const Set<String> _openableImageExtensions = {
+    'jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'heic', 'heif',
+  };
+
+  /// 7-Zip and RAR are archives DocHelper cannot unpack: those offer
+  /// another app.
+  static const Set<String> _openableArchiveExtensions = {
+    'zip', 'tar', 'gz', 'tgz',
   };
 
   /// Whether DocHelper can open this particular file.
   static bool canOpenPath(String path) {
     final kind = ofPath(path);
     if (!kind.canOpen) return false;
+    final extension = extensionOf(path);
     return switch (kind) {
-      DocKind.sheet => _openableSheetExtensions.contains(extensionOf(path)),
-      DocKind.word => _openableWordExtensions.contains(extensionOf(path)),
-      DocKind.slides => _openableSlideExtensions.contains(extensionOf(path)),
+      DocKind.sheet => _openableSheetExtensions.contains(extension),
+      DocKind.word => _openableWordExtensions.contains(extension),
+      DocKind.slides => _openableSlideExtensions.contains(extension),
+      DocKind.image => _openableImageExtensions.contains(extension),
+      DocKind.archive => _openableArchiveExtensions.contains(extension),
       _ => true,
     };
   }
@@ -109,6 +124,7 @@ enum DocKind {
     DocKind.sheet,
     DocKind.slides,
     DocKind.text,
+    DocKind.archive,
   ];
 
   static const Map<String, DocKind> _byExtension = {
@@ -148,15 +164,20 @@ enum DocKind {
     'jpg': DocKind.image, 'jpeg': DocKind.image, 'png': DocKind.image,
     'webp': DocKind.image, 'gif': DocKind.image, 'bmp': DocKind.image,
     'heic': DocKind.image, 'heif': DocKind.image,
-    // Archives.
+    // Archives. A name ending `.tar.gz` has the extension `gz`.
     'zip': DocKind.archive, '7z': DocKind.archive, 'rar': DocKind.archive,
-    'tar': DocKind.archive, 'gz': DocKind.archive,
+    'tar': DocKind.archive, 'gz': DocKind.archive, 'tgz': DocKind.archive,
   };
 
   /// Text extensions worth listing in the Files tab. Source code and data
   /// files are left out: a phone holds thousands of them inside app folders,
   /// and they would bury the documents.
   static const Set<String> _listedTextExtensions = {'txt', 'md', 'markdown'};
+
+  /// Archives worth listing: ZIP files, which people send and receive.
+  /// TAR and gzip files are mostly backups and app data, and photos are left
+  /// out because a phone holds thousands.
+  static const Set<String> _listedArchiveExtensions = {'zip'};
 
   /// The lower-case extension of [path] without the dot, or `''`.
   static String extensionOf(String path) {
@@ -178,6 +199,7 @@ enum DocKind {
     return switch (kind) {
       DocKind.pdf || DocKind.word || DocKind.sheet || DocKind.slides => true,
       DocKind.text => _listedTextExtensions.contains(extension),
+      DocKind.archive => _listedArchiveExtensions.contains(extension),
       _ => false,
     };
   }
@@ -198,21 +220,29 @@ enum DocKind {
   /// The kind the first bytes of a file reveal, or null when they do not
   /// settle it. ZIP and OLE2 containers hold several kinds, so the extension
   /// decides between those.
+  ///
+  /// A kilobyte settles most files. Flat OpenDocument files need more:
+  /// office suites write the root's mimetype after its namespace
+  /// declarations, about 2 KB in, and a head that stops before it falls back
+  /// on the name.
   static DocKind? sniff(List<int> head, {String? name}) {
-    bool startsWith(List<int> magic) =>
-        head.length >= magic.length &&
-        List.generate(magic.length, (i) => head[i] == magic[i]).every((b) => b);
+    bool startsWith(List<int> magic) => _at(head, 0, magic);
     final byName = name == null ? null : ofPath(name);
+    // A TAR file's first entry may itself be a PDF, inside the kilobyte
+    // the PDF header is looked for in.
+    if (startsWith(const [0x1F, 0x8B]) || _at(head, 257, 'ustar'.codeUnits)) {
+      return DocKind.archive;
+    }
     if (_containsPdfHeader(head)) return DocKind.pdf;
-    if (startsWith([0x50, 0x4B, 0x03, 0x04]) ||
-        startsWith([0x50, 0x4B, 0x05, 0x06])) {
+    if (startsWith(const [0x50, 0x4B, 0x03, 0x04]) ||
+        startsWith(const [0x50, 0x4B, 0x05, 0x06])) {
       // OOXML, ODF and plain ZIP all start this way.
       return switch (byName) {
         DocKind.word || DocKind.sheet || DocKind.slides => byName,
         _ => DocKind.archive,
       };
     }
-    if (startsWith([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1])) {
+    if (startsWith(const [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1])) {
       // OLE2: legacy Word, Excel, PowerPoint and WPS files.
       return switch (byName) {
         DocKind.word || DocKind.sheet || DocKind.slides => byName,
@@ -220,13 +250,114 @@ enum DocKind {
       };
     }
     if (startsWith('{\\rtf'.codeUnits)) return DocKind.word;
-    if (startsWith([0xFF, 0xD8, 0xFF]) ||
-        startsWith([0x89, 0x50, 0x4E, 0x47]) ||
-        startsWith('GIF8'.codeUnits)) {
+    if (startsWith(const [0xFF, 0xD8, 0xFF]) ||
+        startsWith(const [0x89, 0x50, 0x4E, 0x47]) ||
+        startsWith('GIF8'.codeUnits) ||
+        (startsWith('RIFF'.codeUnits) && _at(head, 8, 'WEBP'.codeUnits)) ||
+        _looksLikeBmp(head)) {
       return DocKind.image;
     }
-    return null;
+    return _sniffFlatOpenDocument(head, byName);
   }
+
+  /// Whether [head] holds [magic] at [offset].
+  static bool _at(List<int> head, int offset, List<int> magic) {
+    if (head.length < offset + magic.length) return false;
+    for (var i = 0; i < magic.length; i++) {
+      if (head[offset + i] != magic[i]) return false;
+    }
+    return true;
+  }
+
+  /// A BMP starts `BM`, but so does plenty of text: its header must also
+  /// give a known size for the bitmap header that follows, with the pixels
+  /// after both.
+  static bool _looksLikeBmp(List<int> head) {
+    if (head.length < 18 || !_at(head, 0, 'BM'.codeUnits)) return false;
+    int u32(int at) =>
+        head[at] | head[at + 1] << 8 | head[at + 2] << 16 | head[at + 3] << 24;
+    final infoSize = u32(14);
+    return const {12, 16, 40, 52, 56, 64, 108, 124}.contains(infoSize) &&
+        u32(10) >= 14 + infoSize;
+  }
+
+  /// How far into a head a flat OpenDocument file's root is looked for.
+  static const int _flatHead = 64 * 1024;
+
+  /// The kind a flat OpenDocument file (`.fodt`, `.fods`, `.fodp`: one XML
+  /// file) names in its root, `<office:document ...
+  /// office:mimetype="application/vnd.oasis.opendocument.text">`. Other XML
+  /// (SVG, XHTML, a package's own parts) is null, as is a root whose
+  /// mimetype is not a document DocHelper opens. When the head stops before
+  /// the root's start tag ends, a flat root is taken for the kind its name
+  /// says.
+  static DocKind? _sniffFlatOpenDocument(List<int> head, DocKind? byName) {
+    final limit = head.length < _flatHead ? head.length : _flatHead;
+    bool isSpace(int c) => c == 0x20 || c == 0x09 || c == 0x0A || c == 0x0D;
+    // Past the end of [close] after [from], or -1.
+    int skipPast(int from, List<int> close) {
+      for (var i = from; i + close.length <= limit; i++) {
+        if (_at(head, i, close)) return i + close.length;
+      }
+      return -1;
+    }
+
+    // The prolog: whitespace, the XML declaration and comments.
+    var i = _at(head, 0, const [0xEF, 0xBB, 0xBF]) ? 3 : 0;
+    while (i >= 0) {
+      while (i < limit && isSpace(head[i])) {
+        i++;
+      }
+      if (_at(head, i, '<?'.codeUnits)) {
+        i = skipPast(i + 2, '?>'.codeUnits);
+      } else if (_at(head, i, '<!--'.codeUnits)) {
+        i = skipPast(i + 4, '-->'.codeUnits);
+      } else {
+        break;
+      }
+    }
+    const root = '<office:document';
+    if (i < 0 || !_at(head, i, root.codeUnits)) return null;
+    final fromName = switch (byName) {
+      DocKind.word || DocKind.sheet || DocKind.slides => byName,
+      _ => null,
+    };
+    const quotes = [0x22, 0x27]; // " and '
+    const tagEnd = 0x3E; // >
+    const emptyTagEnd = 0x2F; // /
+    // `<office:document-content` and the like are parts of a package.
+    final attributes = i + root.length;
+    if (attributes >= limit) return fromName;
+    final next = head[attributes];
+    if (!isSpace(next) && next != tagEnd && next != emptyTagEnd) return null;
+    // The start tag ends at the first `>` outside an attribute's quotes.
+    var end = -1;
+    int? quote;
+    for (var j = attributes; j < limit; j++) {
+      final c = head[j];
+      if (quote != null) {
+        if (c == quote) quote = null;
+      } else if (quotes.contains(c)) {
+        quote = c;
+      } else if (c == tagEnd) {
+        end = j;
+        break;
+      }
+    }
+    final tag = String.fromCharCodes(head, attributes, end < 0 ? limit : end);
+    final mimetype = _flatMimetype.firstMatch(tag);
+    if (mimetype == null) return end < 0 ? fromName : null;
+    // Templates (`text-template`) are read as their documents.
+    return switch (mimetype[1]) {
+      'text' => DocKind.word,
+      'spreadsheet' => DocKind.sheet,
+      _ => DocKind.slides,
+    };
+  }
+
+  static final RegExp _flatMimetype = RegExp(
+    r'''\soffice:mimetype\s*=\s*["']\s*application/vnd\.oasis\.opendocument\.(text|spreadsheet|presentation)''',
+  );
 
   static bool _containsPdfHeader(List<int> head) {
     // The header may follow up to 1 KB of junk, as viewers allow.
@@ -251,19 +382,44 @@ enum DocKind {
       'pdf': 'application/pdf',
       'docx':
           'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'docm': 'application/vnd.ms-word.document.macroEnabled.12',
+      'dotx':
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.template',
+      'dotm': 'application/vnd.ms-word.template.macroEnabled.12',
       'doc': 'application/msword',
+      'dot': 'application/msword',
       'odt': 'application/vnd.oasis.opendocument.text',
+      'ott': 'application/vnd.oasis.opendocument.text-template',
+      'fodt': 'application/vnd.oasis.opendocument.text-flat-xml',
       'rtf': 'application/rtf',
       'xlsx':
           'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'xlsm': 'application/vnd.ms-excel.sheet.macroEnabled.12',
+      'xltx':
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.template',
+      'xltm': 'application/vnd.ms-excel.template.macroEnabled.12',
       'xls': 'application/vnd.ms-excel',
+      'xlt': 'application/vnd.ms-excel',
       'ods': 'application/vnd.oasis.opendocument.spreadsheet',
+      'ots': 'application/vnd.oasis.opendocument.spreadsheet-template',
+      'fods': 'application/vnd.oasis.opendocument.spreadsheet-flat-xml',
       'csv': 'text/csv',
       'tsv': 'text/tab-separated-values',
       'pptx':
           'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      'pptm': 'application/vnd.ms-powerpoint.presentation.macroEnabled.12',
+      'ppsx':
+          'application/vnd.openxmlformats-officedocument.presentationml.slideshow',
+      'ppsm': 'application/vnd.ms-powerpoint.slideshow.macroEnabled.12',
+      'potx':
+          'application/vnd.openxmlformats-officedocument.presentationml.template',
+      'potm': 'application/vnd.ms-powerpoint.template.macroEnabled.12',
       'ppt': 'application/vnd.ms-powerpoint',
+      'pps': 'application/vnd.ms-powerpoint',
+      'pot': 'application/vnd.ms-powerpoint',
       'odp': 'application/vnd.oasis.opendocument.presentation',
+      'otp': 'application/vnd.oasis.opendocument.presentation-template',
+      'fodp': 'application/vnd.oasis.opendocument.presentation-flat-xml',
       'txt': 'text/plain',
       'md': 'text/markdown',
       'json': 'application/json',
@@ -275,7 +431,15 @@ enum DocKind {
       'png': 'image/png',
       'webp': 'image/webp',
       'gif': 'image/gif',
+      'bmp': 'image/bmp',
+      'heic': 'image/heic',
+      'heif': 'image/heif',
       'zip': 'application/zip',
+      'tar': 'application/x-tar',
+      'gz': 'application/gzip',
+      'tgz': 'application/gzip',
+      '7z': 'application/x-7z-compressed',
+      'rar': 'application/vnd.rar',
     };
     final extension = extensionOf(path);
     return types[extension] ??

@@ -135,21 +135,37 @@ internal class PublicPdfExporter(private val context: Context) {
         } ?: throw IOException("Could not read the public PDF location")
     }
 
+    /** A folder below DocHelper must be a plain relative path, as the Dart
+     * side checks too: names separated by '/', none empty, "." or "..",
+     * longer than 100 characters or holding a backslash or control
+     * character, and at most 16 of them. */
+    private fun requireValidSubfolder(subfolder: String) {
+        val names = subfolder.split('/')
+        require(subfolder.isNotEmpty() && !subfolder.startsWith('/') && names.size <= 16 &&
+            names.all { name ->
+                name.isNotEmpty() && name != "." && name != ".." && name.length <= 100 &&
+                    name.none { it == '\\' || Character.isISOControl(it) }
+            }) { "Invalid folder name" }
+    }
+
     @Suppress("DEPRECATION")
     fun save(
         sourcePath: String,
         displayName: String,
         location: String,
         mimeType: String = "application/pdf",
+        subfolder: String? = null,
     ): Map<String, String> {
         require(location == "Downloads" || location == "Documents") { "Unknown save location" }
         require(displayName.isNotBlank() && displayName != "." && displayName != ".." &&
             !displayName.contains('/') && !displayName.contains('\\')) { "Invalid file name" }
+        if (subfolder != null) requireValidSubfolder(subfolder)
         val source = File(sourcePath)
         require(source.isFile) { "The document to save is missing" }
         val directory = if (location == "Documents") Environment.DIRECTORY_DOCUMENTS
             else Environment.DIRECTORY_DOWNLOADS
-        val relativePath = "$directory/DocHelper/"
+        val folderPath = if (subfolder == null) "DocHelper" else "DocHelper/$subfolder"
+        val relativePath = "$directory/$folderPath/"
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val resolver = context.contentResolver
             // Downloads only accepts Download/. Generic Files also accepts Documents/.
@@ -206,8 +222,8 @@ internal class PublicPdfExporter(private val context: Context) {
             PackageManager.PERMISSION_GRANTED) {
             throw SecurityException("Storage permission is needed to save to $location")
         }
-        val folder = File(Environment.getExternalStoragePublicDirectory(directory), "DocHelper")
-        if (!folder.isDirectory && !folder.mkdirs()) throw IOException("Could not create $location/DocHelper")
+        val folder = File(Environment.getExternalStoragePublicDirectory(directory), folderPath)
+        if (!folder.isDirectory && !folder.mkdirs()) throw IOException("Could not create $location/$folderPath")
         val base = displayName.substringBeforeLast('.', displayName)
         val extension = displayName.substringAfterLast('.', "")
         var file = File(folder, displayName)

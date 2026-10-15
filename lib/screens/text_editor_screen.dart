@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_text_core/flutter_text_core.dart';
@@ -14,6 +15,8 @@ import '../services/document_save_service.dart';
 import '../services/public_pdf_save_service.dart';
 import '../services/recent_files_service.dart';
 import '../utils/format_utils.dart';
+import '../widgets/json_tree_view.dart';
+import '../widgets/markup_view.dart';
 
 /// Opens, edits and saves a plain-text file through the text engine
 /// (`flutter_text_core`).
@@ -21,6 +24,10 @@ import '../utils/format_utils.dart';
 /// The engine keeps the file's encoding, byte-order mark and line endings,
 /// so saving changes only what was edited. Files too large to edit
 /// comfortably on a phone open read-only, a page of lines at a time.
+///
+/// Markdown and HTML files can also be read as a page, and JSON as a tree.
+/// Markdown and HTML open that way; a button switches between the preview
+/// and the text.
 class TextEditorScreen extends StatefulWidget {
   const TextEditorScreen({super.key, required this.path, this.title});
 
@@ -31,6 +38,18 @@ class TextEditorScreen extends StatefulWidget {
   /// re-lays out all of its text on every keystroke.
   static const int editableLimit = 300000;
 
+  /// Bigger files (in UTF-16 code units, about 5 MB of text) get no
+  /// preview: a page or tree of that much would be slow to build and of
+  /// little use on a phone.
+  static const int previewLimit = 5000000;
+
+  /// Bigger Markdown files (about 1 MB) get no preview. Markdown is dense:
+  /// a megabyte of one-word list items is a quarter of a million of them,
+  /// and reading it takes hundreds of megabytes before the engine cuts the
+  /// page short. HTML is mostly tags and scripts, and the engine stops
+  /// building its tree in time.
+  static const int markdownPreviewLimit = 1000000;
+
   @override
   State<TextEditorScreen> createState() => _TextEditorScreenState();
 }
@@ -38,6 +57,9 @@ class TextEditorScreen extends StatefulWidget {
 enum _UnsavedChoice { save, discard }
 
 enum _EncodingChoice { utf8, saveAnyway }
+
+/// How a file's text can be shown other than as text.
+enum _PreviewKind { markdown, html, json }
 
 class _TextEditorScreenState extends State<TextEditorScreen> {
   static const _fontSizeKey = 'textEditor.fontSize';
@@ -80,6 +102,31 @@ class _TextEditorScreenState extends State<TextEditorScreen> {
   final Map<int, List<String>> _pages = {};
   final _lineScroll = ScrollController();
 
+  /// A line (0-based) marked in the read-only view by "Go to line".
+  int _markedLine = -1;
+
+  /// Counts changes to the text, so the preview is rebuilt only when the
+  /// text changed since it was last built.
+  int _textVersion = 0;
+
+  /// Showing the preview instead of the text.
+  bool _previewing = false;
+
+  /// The [_textVersion] the preview was built from; null when there is no
+  /// preview yet, or building it failed.
+  int? _previewVersion;
+
+  /// The [_textVersion] the preview is being built from; null when idle.
+  int? _parsingVersion;
+  bool get _parsing => _parsingVersion != null;
+
+  /// Counts preview builds, so one that finishes after a newer one started
+  /// is dropped.
+  int _previewRun = 0;
+  MarkupDocument? _markup;
+  JsonParseResult? _json;
+  String? _previewError;
+
   AppColors _colors = AppColors(false);
 
   String get _name => widget.title ?? documentDisplayName(widget.path);
@@ -87,6 +134,30 @@ class _TextEditorScreenState extends State<TextEditorScreen> {
   bool get _monospace {
     const prose = {'txt', 'text', 'md', 'markdown', 'srt', 'vtt', 'nfo'};
     return !prose.contains(DocKind.extensionOf(widget.path));
+  }
+
+  /// How this file can be previewed, or null when it is plain text.
+  late final _PreviewKind? _previewKind = switch (DocKind.extensionOf(
+    widget.path,
+  )) {
+    'md' || 'markdown' => _PreviewKind.markdown,
+    'html' || 'htm' => _PreviewKind.html,
+    'json' => _PreviewKind.json,
+    _ => null,
+  };
+
+  /// Whether the preview button is offered for the file as it is now.
+  bool get _canPreview {
+    final kind = _previewKind;
+    final info = _info;
+    if (kind == null || info == null || _doc == null) return false;
+    // An engine built before Markdown and HTML reading cannot make pages.
+    if (kind != _PreviewKind.json && !TextCore.canReadMarkup) return false;
+    final length = _readOnly ? (info.length ?? 0) : _controller.text.length;
+    return length <=
+        (kind == _PreviewKind.markdown
+            ? TextEditorScreen.markdownPreviewLimit
+            : TextEditorScreen.previewLimit);
   }
 
   @override
@@ -135,6 +206,14 @@ class _TextEditorScreenState extends State<TextEditorScreen> {
         _info = info;
         _loading = false;
       });
+      // Markdown and HTML are mostly read, so they open as a page. An empty
+      // file is for typing into, and JSON opens as text, as it always has.
+      if (_canPreview &&
+          _previewKind != _PreviewKind.json &&
+          !info.binary &&
+          (_readOnly || _lastText.trim().isNotEmpty)) {
+        _togglePreview();
+      }
     } on TextCoreException catch (e) {
       if (mounted) {
         setState(() {
@@ -158,6 +237,7 @@ class _TextEditorScreenState extends State<TextEditorScreen> {
     final text = _controller.text;
     if (text == _lastText) return; // Only the selection moved.
     _lastText = text;
+    _textVersion++;
     _engineStale = true;
     if (!_dirty) setState(() => _dirty = true);
     if (_searchOpen && _queryController.text.isNotEmpty) {
@@ -349,6 +429,7 @@ class _TextEditorScreenState extends State<TextEditorScreen> {
     setState(() {
       _matches = matches;
       _current = current;
+      _markedLine = -1;
     });
     _controller.setMatches(_readOnly ? const [] : matches, current);
     if (!keepPosition && current >= 0) _reveal(matches[current]);
@@ -365,20 +446,29 @@ class _TextEditorScreenState extends State<TextEditorScreen> {
   /// Scroll a match into view.
   void _reveal(TextMatch match) {
     if (_readOnly) {
-      if (_lineScroll.hasClients) {
-        final extent = _lineExtent;
-        _lineScroll.animateTo(
-          (match.line * extent - 3 * extent).clamp(
-            0,
-            _lineScroll.position.maxScrollExtent,
-          ),
-          duration: const Duration(milliseconds: 250),
-          curve: Curves.easeOut,
-        );
-      }
-      return;
+      _revealLine(match.line);
+    } else {
+      _revealOffset(match.start);
     }
-    // Lay the text out the way the field does to find the match's height.
+  }
+
+  /// Scroll the read-only view to [line] (0-based).
+  void _revealLine(int line) {
+    if (!_lineScroll.hasClients) return;
+    final extent = _lineExtent;
+    _lineScroll.animateTo(
+      (line * extent - 3 * extent).clamp(
+        0,
+        _lineScroll.position.maxScrollExtent,
+      ),
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeOut,
+    );
+  }
+
+  /// Scroll the editor to the text at [offset].
+  void _revealOffset(int offset) {
+    // Lay the text out the way the field does to find the offset's height.
     final box = context.findRenderObject() as RenderBox?;
     if (box == null || !_scroll.hasClients) return;
     final width = box.size.width - 32;
@@ -387,7 +477,7 @@ class _TextEditorScreenState extends State<TextEditorScreen> {
       textDirection: TextDirection.ltr,
     )..layout(maxWidth: width);
     final caret = painter.getOffsetForCaret(
-      TextPosition(offset: match.start),
+      TextPosition(offset: offset),
       Rect.zero,
     );
     painter.dispose();
@@ -495,11 +585,13 @@ class _TextEditorScreenState extends State<TextEditorScreen> {
           _controller.addListener(_onTextChanged);
         }
         _pages.clear();
+        _textVersion++;
       } else {
         doc.setFormat(encoding: chosen);
         _dirty = true;
       }
       setState(() => _info = doc.info(withStats: true));
+      if (_previewing) unawaited(_updatePreview());
     } on TextCoreException catch (e) {
       _snack(e.message);
     }
@@ -653,6 +745,106 @@ class _TextEditorScreenState extends State<TextEditorScreen> {
     );
   }
 
+  // ---------------------------------------------------------------- preview
+
+  /// Switch between the text and the preview.
+  void _togglePreview() {
+    if (_previewing) {
+      setState(() => _previewing = false);
+      return;
+    }
+    // Find, the caret and the keyboard belong to the text.
+    if (_searchOpen) _toggleSearch();
+    _focus.unfocus();
+    setState(() => _previewing = true);
+    unawaited(_updatePreview());
+  }
+
+  /// Build the preview from the text as it is now, unless it was already
+  /// built from this text.
+  Future<void> _updatePreview() async {
+    final kind = _previewKind;
+    final doc = _doc;
+    if (kind == null || doc == null) return;
+    final version = _textVersion;
+    if (_previewVersion == version || _parsingVersion == version) return;
+    // A large file is not in the text field. Nothing is edited there, so
+    // the engine has the text.
+    final text = _readOnly ? doc.text : _controller.text;
+    final run = ++_previewRun;
+    setState(() => _parsingVersion = version);
+    MarkupDocument? markup;
+    JsonParseResult? json;
+    String? error;
+    try {
+      switch (kind) {
+        case _PreviewKind.markdown:
+          markup = await TextCore.markdownAsync(text);
+        case _PreviewKind.html:
+          markup = await TextCore.htmlAsync(text);
+        case _PreviewKind.json:
+          json = await parseJsonForTree(text);
+      }
+    } on TextCoreException catch (e) {
+      error = e.message;
+    } catch (e) {
+      error = 'The preview could not be made: $e';
+    }
+    if (!mounted || run != _previewRun) return;
+    setState(() {
+      _parsingVersion = null;
+      _markup = markup;
+      _json = json;
+      _previewError = error;
+      _previewVersion = error == null ? version : null;
+    });
+  }
+
+  /// Show the text at [line] and [column] (both 1-based), where the JSON
+  /// preview found a problem.
+  void _goToLine(int line, int column) {
+    setState(() {
+      _previewing = false;
+      if (_readOnly) _markedLine = line - 1;
+    });
+    if (_readOnly) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _revealLine(line - 1);
+      });
+      return;
+    }
+    final offset = _offsetOf(_controller.text, line, column);
+    _controller.selection = TextSelection.collapsed(offset: offset);
+    // The field takes focus once it is back on screen: while hidden it
+    // cannot.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _focus.requestFocus();
+      _revealOffset(offset);
+    });
+  }
+
+  /// Where [line] and [column] are in [text], counted as [parseJsonForTree]
+  /// counts them: after a byte-order mark, with CR LF or a lone CR as one
+  /// line break. A column past the end of its line means the line's end.
+  static int _offsetOf(String text, int line, int column) {
+    var at = text.isNotEmpty && text.codeUnitAt(0) == 0xFEFF ? 1 : 0;
+    for (var current = 1; current < line && at < text.length;) {
+      final unit = text.codeUnitAt(at++);
+      if (unit == 0x0D && at < text.length && text.codeUnitAt(at) == 0x0A) {
+        at++;
+      }
+      if (unit == 0x0A || unit == 0x0D) current++;
+    }
+    var end = at;
+    while (end < text.length) {
+      final unit = text.codeUnitAt(end);
+      if (unit == 0x0A || unit == 0x0D) break;
+      end++;
+    }
+    return math.min(at + math.max(column - 1, 0), end);
+  }
+
   // ------------------------------------------------------------------ build
 
   TextStyle get _textStyle => TextStyle(
@@ -716,6 +908,15 @@ class _TextEditorScreenState extends State<TextEditorScreen> {
         ],
       ),
       actions: [
+        if (_previewing || _canPreview)
+          IconButton(
+            key: const ValueKey('text-preview-toggle'),
+            tooltip: _previewing ? 'Edit' : 'Preview',
+            icon: Icon(
+              _previewing ? Icons.edit_rounded : Icons.visibility_rounded,
+            ),
+            onPressed: _togglePreview,
+          ),
         if (!_readOnly)
           TextButton(
             onPressed: _dirty && !_saving ? _save : null,
@@ -757,9 +958,12 @@ class _TextEditorScreenState extends State<TextEditorScreen> {
                 value: 'endings',
                 child: Text('Line endings'),
               ),
-            const PopupMenuItem(value: 'size', child: Text('Text size')),
-            if (!_readOnly && DocKind.extensionOf(widget.path) == 'json')
-              const PopupMenuItem(value: 'json', child: Text('Format JSON')),
+            // The text's size and layout are not what the preview shows.
+            if (!_previewing) ...[
+              const PopupMenuItem(value: 'size', child: Text('Text size')),
+              if (!_readOnly && DocKind.extensionOf(widget.path) == 'json')
+                const PopupMenuItem(value: 'json', child: Text('Format JSON')),
+            ],
             const PopupMenuItem(value: 'info', child: Text('File info')),
           ],
         ),
@@ -801,21 +1005,24 @@ class _TextEditorScreenState extends State<TextEditorScreen> {
       );
     }
     final info = _info!;
+    final garbled = info.decodeErrors > 0 || !info.confident;
     return Column(
       children: [
         if (_searchOpen) _buildSearchBar(),
-        if (info.binary)
+        // While previewing only a doubt about the letters matters: the
+        // preview shows the same letters.
+        if (info.binary && !_previewing)
           _notice(
             Icons.warning_amber_rounded,
             'This file may not be text. Saving it here could damage it.',
           )
-        else if (_readOnly)
+        else if (_readOnly && !_previewing)
           _notice(
             Icons.lock_outline_rounded,
             'This file is large (${formatCount(info.lines)} lines), so it '
             'opens read-only.',
           )
-        else if (info.decodeErrors > 0 || !info.confident)
+        else if (garbled)
           _notice(
             Icons.translate_rounded,
             info.decodeErrors > 0
@@ -824,9 +1031,147 @@ class _TextEditorScreenState extends State<TextEditorScreen> {
                 : 'The encoding (${info.encoding}) was a guess. If letters '
                       'look wrong, use "Fix garbled text" in the menu.',
           ),
-        Expanded(child: _readOnly ? _buildLines(info) : _buildEditor()),
-        _buildToolbar(),
+        Expanded(
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              // Both stay built while the other shows, so the text's undo
+              // history and each one's place are there on coming back.
+              Visibility(
+                visible: !_previewing,
+                maintainState: true,
+                child: _readOnly ? _buildLines(info) : _buildEditor(),
+              ),
+              if (_previewing || _hasPreview)
+                Visibility(
+                  visible: _previewing,
+                  maintainState: true,
+                  child: _buildPreview(),
+                ),
+            ],
+          ),
+        ),
+        if (!_previewing) _buildToolbar(),
       ],
+    );
+  }
+
+  /// The preview, with a spinner over it while it is being made from new
+  /// text. The one before stays underneath, so the page keeps its place.
+  Widget _buildPreview() {
+    final content = _previewContent;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        ?content,
+        if (_parsing)
+          Align(
+            key: const ValueKey('text-preview-busy'),
+            alignment: content == null
+                ? Alignment.center
+                : const Alignment(0, -0.9),
+            child: Material(
+              color: _colors.cardBackground,
+              shape: const CircleBorder(),
+              elevation: content == null ? 0 : 2,
+              child: const Padding(
+                padding: EdgeInsets.all(10),
+                child: SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.5,
+                    color: _accent,
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  bool get _hasPreview =>
+      _markup != null || _json != null || _previewError != null;
+
+  /// What the preview shows once made; null before then.
+  Widget? get _previewContent {
+    final error = _previewError;
+    if (error != null) {
+      return _previewProblem(
+        Icons.error_outline_rounded,
+        'The preview could not be made',
+        error,
+      );
+    }
+    final markup = _markup;
+    if (markup != null) {
+      return MarkupView(
+        key: const ValueKey('text-preview'),
+        document: markup,
+        // Pictures are found next to the file, not next to a saved copy.
+        baseDirectory: File(widget.path).parent.path,
+      );
+    }
+    final json = _json;
+    if (json == null) return null;
+    if (json.ok) {
+      return JsonTreeView(
+        key: const ValueKey('text-preview'),
+        value: json.value,
+      );
+    }
+    final line = json.line;
+    return _previewProblem(
+      Icons.data_object_rounded,
+      'This is not valid JSON',
+      json.error!,
+      action: line == null
+          ? null
+          : FilledButton.icon(
+              key: const ValueKey('text-preview-go-to-line'),
+              style: FilledButton.styleFrom(backgroundColor: _accent),
+              icon: const Icon(Icons.arrow_forward_rounded),
+              label: const Text('Go to line'),
+              onPressed: () => _goToLine(line, json.column ?? 1),
+            ),
+    );
+  }
+
+  Widget _previewProblem(
+    IconData icon,
+    String title,
+    String message, {
+    Widget? action,
+  }) {
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          key: const ValueKey('text-preview-problem'),
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 48, color: _colors.textTertiary),
+            const SizedBox(height: 12),
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: _colors.textPrimary,
+                fontSize: 17,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 6),
+            SelectableText(
+              message,
+              textAlign: TextAlign.center,
+              style: TextStyle(color: _colors.textSecondary),
+            ),
+            if (action != null) ...[const SizedBox(height: 16), action],
+          ],
+        ),
+      ),
     );
   }
 
@@ -942,7 +1287,7 @@ class _TextEditorScreenState extends State<TextEditorScreen> {
           return GestureDetector(
             onLongPress: () => _showLine(index + 1, line),
             child: Container(
-              color: index == current
+              color: index == current || index == _markedLine
                   ? Colors.orange.withValues(alpha: 0.25)
                   : null,
               child: Text(

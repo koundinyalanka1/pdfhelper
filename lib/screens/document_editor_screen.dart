@@ -132,8 +132,8 @@ class _DocumentEditorScreenState extends State<DocumentEditorScreen> {
       setState(() => _loading = false);
       final warnings = _info!.warnings;
       if (warnings.isNotEmpty) _snack(warnings.first);
-      if (!_info!.writesBack) {
-        _snack('This file will be saved as a Word document (.docx).');
+      if (_savesAsNewFile) {
+        _snack('This file will be saved as $_saveFormatPhrase.');
       }
       if (widget.isNew) {
         final first = _block(0);
@@ -795,8 +795,8 @@ class _DocumentEditorScreenState extends State<DocumentEditorScreen> {
     final location = context.read<ThemeProvider>().saveLocation;
     setState(() => _saving = true);
     try {
-      final target = !_info!.writesBack
-          ? _convertedPath ??= await _newWordPath()
+      final target = _savesAsNewFile
+          ? _convertedPath ??= await _newCopyPath()
           : _neverSaved
           ? _workingPath
           : await DocumentSaveService.workingPathFor(_workingPath);
@@ -822,20 +822,38 @@ class _DocumentEditorScreenState extends State<DocumentEditorScreen> {
     }
   }
 
-  /// Where a document read from a format that is not written back (RTF,
-  /// text) is saved as Word: a new file in the app's storage, which then
-  /// gets its public copy.
+  /// Whether saving writes a new file instead of the one opened: formats
+  /// the engine reads but cannot write back (RTF, text, Word 97-2003, WPS)
+  /// are saved as Word documents, and flat OpenDocument texts (`.fodt`) as
+  /// packaged ones (`.odt`). A `.fodt` file is never written to, whatever
+  /// the engine found in it.
+  bool get _savesAsNewFile =>
+      !_info!.writesBack || DocKind.extensionOf(widget.path) == 'fodt';
+
+  /// Whether saving writes OpenDocument text rather than Word.
+  bool get _savesOpenDocument =>
+      const {'odt', 'ott'}.contains(_info!.saveFormat);
+
+  /// What saving writes, for messages: "a Word document (.docx)".
+  String get _saveFormatPhrase => _savesOpenDocument
+      ? 'an OpenDocument text file (.${_info!.saveFormat})'
+      : 'a Word document (.${_info!.saveFormat})';
+
+  /// Where a document that is not written back is saved: a new file in
+  /// the app's storage, in the engine's save format, which then gets its
+  /// public copy.
   String? _convertedPath;
 
-  Future<String> _newWordPath() async {
+  Future<String> _newCopyPath() async {
     final dir = Directory(
       '${(await getApplicationDocumentsDirectory()).path}/Edited',
     );
     await dir.create(recursive: true);
     final title = DocKind.titleOf(documentDisplayName(_workingPath));
-    var file = File('${dir.path}/$title.docx');
+    final extension = _info!.saveFormat;
+    var file = File('${dir.path}/$title.$extension');
     for (var n = 2; await file.exists(); n++) {
-      file = File('${dir.path}/$title ($n).docx');
+      file = File('${dir.path}/$title ($n).$extension');
     }
     return file.path;
   }
@@ -915,7 +933,11 @@ class _DocumentEditorScreenState extends State<DocumentEditorScreen> {
             ),
             ListTile(
               leading: const Icon(Icons.description_outlined),
-              title: Text('Word document (.${_info!.saveFormat})'),
+              title: Text(
+                _savesOpenDocument
+                    ? 'OpenDocument text (.${_info!.saveFormat})'
+                    : 'Word document (.${_info!.saveFormat})',
+              ),
               onTap: () => Navigator.pop(ctx, _info!.saveFormat),
             ),
             ListTile(

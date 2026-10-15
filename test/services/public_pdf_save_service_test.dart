@@ -32,6 +32,22 @@ class _FailingExportStore extends InMemorySharedPreferencesStore {
   }
 }
 
+/// Counts writes of the export catalogue, and fails the [failAt]th.
+class _CountingExportStore extends InMemorySharedPreferencesStore {
+  _CountingExportStore({this.failAt}) : super.empty();
+
+  final int? failAt;
+  int exportWrites = 0;
+
+  @override
+  Future<bool> setValue(String valueType, String key, Object value) {
+    if (key == 'flutter.publicPdfExports' && ++exportWrites == failAt) {
+      return Future.value(false);
+    }
+    return super.setValue(valueType, key, value);
+  }
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   const channel = MethodChannel('com.yourmateapps.pdfhelper/storage');
@@ -183,6 +199,253 @@ void main() {
       expect(await PublicPdfSaveService.documents(), isEmpty);
     },
   );
+
+  test('saves into a folder below DocHelper when given one', () async {
+    await PublicPdfSaveService.save(
+      sourcePath: source.path,
+      displayName: 'Report.pdf',
+      location: 'Downloads',
+      subfolder: 'Ölfeld/2024 Reports/日本語',
+    );
+    expect(saves.single.arguments, {
+      'sourcePath': source.path,
+      'displayName': 'Report.pdf',
+      'location': 'Downloads',
+      'mimeType': 'application/pdf',
+      'subfolder': 'Ölfeld/2024 Reports/日本語',
+    });
+    final record = (await PublicPdfSaveService.documents()).single;
+    expect(record.workingPath, source.path);
+    expect(record.copies.single.uri, isNotNull);
+  });
+
+  test('a failed save into a folder names that folder', () async {
+    failSave = true;
+    await expectLater(
+      PublicPdfSaveService.save(
+        sourcePath: source.path,
+        displayName: 'Report.pdf',
+        location: 'Documents',
+        subfolder: 'Photos/2024',
+      ),
+      throwsA(
+        isA<PublicPdfSaveException>().having(
+          (e) => e.message,
+          'message',
+          allOf(
+            contains('Documents/DocHelper/Photos/2024'),
+            contains('Disk full'),
+          ),
+        ),
+      ),
+    );
+    expect(await PublicPdfSaveService.documents(), isEmpty);
+  });
+
+  test('accepts plain relative folders up to the limits', () {
+    final deepest = List.generate(16, (i) => 'level$i').join('/');
+    for (final folder in [
+      'Photos',
+      'Photos/2024',
+      'रिपोर्ट/日本語/Ölfeld',
+      'a.b/..c/name.',
+      deepest,
+      'x' * 100,
+      '${'😀' * 50}/inner',
+    ]) {
+      expect(
+        PublicPdfSaveService.isValidSubfolder(folder),
+        isTrue,
+        reason: folder,
+      );
+    }
+  });
+
+  final invalidFolders = <String, String>{
+    'empty': '',
+    'absolute': '/Photos',
+    'trailing slash': 'Photos/',
+    'empty name': 'Photos//2024',
+    'dot': 'Photos/./2024',
+    'dot dot': '../Photos',
+    'nested dot dot': 'Photos/../../x',
+    'backslash': r'Photos\2024',
+    'NUL': 'Photos${String.fromCharCode(0)}x',
+    'tab': 'Photos\tx',
+    'newline': 'Photos\nx',
+    'DEL': 'Photos${String.fromCharCode(0x7F)}',
+    'C1 control': 'Photos${String.fromCharCode(0x85)}',
+    'long name': 'x' * 101,
+    'too deep': List.generate(17, (i) => 'level$i').join('/'),
+  };
+  for (final MapEntry(key: what, value: folder) in invalidFolders.entries) {
+    test('refuses a folder with $what before publishing anything', () async {
+      expect(PublicPdfSaveService.isValidSubfolder(folder), isFalse);
+      await expectLater(
+        PublicPdfSaveService.save(
+          sourcePath: source.path,
+          displayName: 'Report.pdf',
+          location: 'Downloads',
+          subfolder: folder,
+        ),
+        throwsA(isA<PublicPdfSaveException>()),
+      );
+      expect(saves, isEmpty);
+      expect(await PublicPdfSaveService.documents(), isEmpty);
+      expect(source.existsSync(), isTrue);
+    });
+  }
+
+  group('saving many files at once', () {
+    /// Publishes each file with its own content address, as MediaStore
+    /// would; [failOn] (1-based) fails that file. Records deletions.
+    late List<Map<String, dynamic>> published;
+    late List<Map<String, dynamic>> deleted;
+    void answer({int? failOn}) {
+      published = [];
+      deleted = [];
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        switch (call.method) {
+          case 'getStorageInfo':
+            return {'sdkInt': 36, 'hasFullAccess': false, 'roots': <String>[]};
+          case 'deletePublicPdf':
+            deleted.add(Map<String, dynamic>.from(call.arguments as Map));
+            return true;
+        }
+        expect(call.method, 'savePublicPdf');
+        final args = Map<String, dynamic>.from(call.arguments as Map);
+        if (published.length + 1 == failOn) {
+          throw PlatformException(code: 'PUBLIC_SAVE_FAILED', message: 'Full');
+        }
+        published.add(args);
+        final folder = args['subfolder'] ?? '';
+        return {
+          'uri':
+              'content://media/external_primary/downloads/'
+              '${published.length}',
+          'publicPath':
+              '/storage/emulated/0/Download/DocHelper/$folder/'
+              '${args['displayName']}',
+        };
+      });
+    }
+
+    List<PublicFileRequest> requests(int count) => [
+      for (var i = 0; i < count; i++)
+        PublicFileRequest(
+          sourcePath: '${root.path}/Photos/$i.jpg',
+          displayName: '$i.jpg',
+          mimeType: 'image/jpeg',
+          subfolder: 'Photos/${i ~/ 100}',
+        ),
+    ];
+
+    test('writes the catalogue a few times, not once per file', () async {
+      final store = _CountingExportStore();
+      SharedPreferencesStorePlatform.instance = store;
+      answer();
+      final progress = <int>[];
+      final count = await PublicPdfSaveService.saveAll(
+        files: requests(1000),
+        location: 'Downloads',
+        onProgress: progress.add,
+      );
+      expect(count, 1000);
+      expect(published, hasLength(1000));
+      expect(published[250], {
+        'sourcePath': '${root.path}/Photos/250.jpg',
+        'displayName': '250.jpg',
+        'location': 'Downloads',
+        'mimeType': 'image/jpeg',
+        'subfolder': 'Photos/2',
+      });
+      // One write to check the catalogue, then at 64, 128, 256 and 512
+      // files, and the rest at the end; one write per file made a
+      // thousand-photo ZIP cost minutes.
+      expect(store.exportWrites, 6);
+      expect(progress, List.generate(1000, (i) => i + 1));
+
+      final records = await PublicPdfSaveService.documents();
+      expect(records, hasLength(1000));
+      expect(records[999].workingPath, '${root.path}/Photos/999.jpg');
+      expect(
+        records[999].copies.single.path,
+        '/storage/emulated/0/Download/DocHelper/Photos/9/999.jpg',
+      );
+      expect(
+        records[999].copies.single.uri,
+        'content://media/external_primary/downloads/1000',
+      );
+    });
+
+    test('keeps what was published before a file fails, linked', () async {
+      answer(failOn: 3);
+      await expectLater(
+        PublicPdfSaveService.saveAll(files: requests(5), location: 'Downloads'),
+        throwsA(
+          isA<PublicPdfBatchException>()
+              .having((e) => e.published, 'published', 2)
+              .having(
+                (e) => e.message,
+                'message',
+                allOf(contains('2.jpg'), contains('Full')),
+              ),
+        ),
+      );
+      expect(published, hasLength(2));
+      expect(deleted, isEmpty);
+      expect(
+        (await PublicPdfSaveService.documents()).map((r) => r.workingPath),
+        ['${root.path}/Photos/0.jpg', '${root.path}/Photos/1.jpg'],
+      );
+    });
+
+    test('removes the copies it cannot record', () async {
+      // The first write checks the catalogue; the second records the
+      // three copies, and fails.
+      SharedPreferencesStorePlatform.instance = _CountingExportStore(failAt: 2);
+      answer();
+      await expectLater(
+        PublicPdfSaveService.saveAll(files: requests(3), location: 'Downloads'),
+        throwsA(
+          isA<PublicPdfBatchException>()
+              .having((e) => e.published, 'published', 0)
+              .having(
+                (e) => e.message,
+                'message',
+                contains('The last 3 public copies were removed again.'),
+              ),
+        ),
+      );
+      expect(published, hasLength(3));
+      expect(deleted.map((d) => d['uri']), [
+        'content://media/external_primary/downloads/1',
+        'content://media/external_primary/downloads/2',
+        'content://media/external_primary/downloads/3',
+      ]);
+      expect(await PublicPdfSaveService.documents(), isEmpty);
+    });
+
+    test('checks every folder before publishing anything', () async {
+      answer();
+      await expectLater(
+        PublicPdfSaveService.saveAll(
+          files: [
+            ...requests(3),
+            const PublicFileRequest(
+              sourcePath: '/x/evil.txt',
+              displayName: 'evil.txt',
+              subfolder: 'Photos/../..',
+            ),
+          ],
+          location: 'Downloads',
+        ),
+        throwsA(isA<PublicPdfSaveException>()),
+      );
+      expect(published, isEmpty);
+      expect(await PublicPdfSaveService.documents(), isEmpty);
+    });
+  });
 
   test('auto-save disabled does not create a public copy', () async {
     final provider = await settings();

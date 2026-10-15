@@ -42,9 +42,9 @@ whenever work lands.
     branches.
   - Commit messages are one plain imperative sentence that says what the
     change does for the user (see `git log`), without a type prefix.
-  - The PDF, text, sheet, word and slide engines are git submodules.
-    Commit and push inside them first, then commit the updated gitlink in
-    the app.
+  - The PDF, text, sheet, word, slide and archive engines are git
+    submodules. Commit and push inside them first, then commit the updated
+    gitlink in the app.
   - Each package gets its own GitHub repository (`koundinyalanka1/<package>`)
     and becomes a submodule of the app once its phase is done. Until then it
     lives in the app's tree. To move one: `git subtree split` its history
@@ -71,12 +71,15 @@ whenever work lands.
 | `lib/services/document_router.dart` | Which screen opens a path; the "open with another app" sheet for kinds without one |
 | `lib/services/document_save_service.dart` | Save policy: in place when writable shared storage; otherwise publish/update a public copy in `Download/DocHelper` or `Documents/DocHelper` |
 | `lib/services/library_service.dart` | The Files tab's storage sweep (every listed kind), cache and linked copies |
-| `lib/screens/text_editor_screen.dart` | The text editor |
+| `lib/screens/text_editor_screen.dart` | The text editor; Markdown and HTML preview as a page (`lib/widgets/markup_view.dart`, built lazily piece by piece), JSON as a tree (`lib/widgets/json_tree_view.dart`) |
+| `lib/screens/image_viewer_screen.dart` | Pictures: zoom, turn, details, share, make a PDF |
+| `lib/screens/archive_screen.dart`, `make_zip_screen.dart` | Browse an archive (open, share or save a file, Extract all, published in one batch with `PublicPdfSaveService.saveAll`); make a ZIP |
 | `lib/screens/sheet_editor_screen.dart`, `lib/widgets/sheet/` | The spreadsheet screen and its custom-painted grid |
 | `lib/screens/document_editor_screen.dart`, `lib/widgets/word/` | The document screen: reflowing paragraphs and tables, one paragraph edited at a time (`ParaController`) |
 | `packages/flutter_pdf_core` | PDF engine (git submodule; commits its Android/Apple binaries); `pdf_edit` fills forms, annotates and stamps, saving incremental updates; `pdf_compress` makes smaller copies and page pictures |
-| `packages/doc_common` | Shared Rust crates: `doc_zip`, `doc_xml`, `doc_encoding`, `doc_opc`, `doc_ffi`; for PDF export `doc_image`, `doc_font`, `doc_pdf`, `doc_layout`; for Office 97-2003 files `doc_cfb` and `doc_art`; `doc_metafile` draws WMF and EMF pictures |
-| `packages/flutter_text_core` | Text engine (`text_core`, `text_ffi`, Dart `TextCore`) |
+| `packages/doc_common` | Shared Rust crates: `doc_zip`, `doc_xml`, `doc_encoding`, `doc_opc`, `doc_ffi`; for PDF export `doc_image`, `doc_font`, `doc_pdf`, `doc_layout`; for Office 97-2003 files `doc_cfb` and `doc_art`; `doc_metafile` draws WMF and EMF pictures; `doc_odf` turns flat OpenDocument (`.fodt/.fods/.fodp`) into packages |
+| `packages/flutter_text_core` | Text engine (`text_core`, `text_ffi`, Dart `TextCore`); `text_core::markup` reads Markdown and HTML into blocks to draw (`TextCore.markdown`/`html`, Dart `MarkupDocument`), cut short at `MAX_PARTS` |
+| `packages/flutter_archive_core` | Archive engine (git submodule, its own repository): `archive_core`, `archive_ffi`, Dart `ArchiveCore`; ZIP, TAR, gzip and `.tar.gz` listed and extracted safely, ZIP files made; `cargo run --example archivecli` tries real files |
 | `packages/flutter_sheet_core` | Spreadsheet engine (`sheet_core`, `sheet_ffi`, Dart `SheetCore`; `cargo run --example sheetcli` tries real files) |
 | `packages/flutter_word_core` | Word-processing engine (git submodule, a private repository): `word_core`, `word_ffi`, Dart `WordCore`; DOCX and ODT in place, RTF/TXT/MD and Word 97-2003 imported; `cargo run --example wordcli` tries real files |
 | `packages/flutter_slide_core` | Presentation engine (git submodule, its own repository): `slide_core`, `slide_ffi`, Dart `SlideCore`; PowerPoint and OpenDocument decks as scenes to draw, edited in place, PowerPoint 97-2003 imported; `cargo run --example slidecli` tries real files |
@@ -93,12 +96,13 @@ whenever work lands.
 git submodule update --init --recursive
 flutter pub get
 # Rust 1.88 or newer (the code uses slice::as_chunks).
-bash scripts/build_engines.sh host     # text + sheet engines for this machine; on Linux also libpdf_ffi.so
+bash scripts/build_engines.sh host     # text, sheet, word, slide and archive engines for this machine; on Linux also libpdf_ffi.so
 eval "$(bash scripts/build_engines.sh env)"   # exports *_CORE_LIB_PATH for flutter test
 flutter analyze
-flutter test                           # the app (about 540 tests)
+flutter test                           # the app (about 700 tests)
 (cd packages/flutter_text_core && flutter test)
-bash scripts/build_engines.sh test     # cargo tests: doc_common, text, sheet, word, slide
+(cd packages/flutter_archive_core && flutter test)
+bash scripts/build_engines.sh test     # cargo tests: doc_common, text, sheet, word, slide, archive
 (cd packages/flutter_pdf_core/rust && cargo test --workspace --release)   # PDF engine, about 510 tests
 ```
 

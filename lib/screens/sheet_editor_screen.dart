@@ -1101,21 +1101,32 @@ class _SheetEditorScreenState extends State<SheetEditorScreen> {
 
   // ----------------------------------------------------------------- saving
 
-  SheetFormat get _saveFormat => SheetFormat.forName(_workingPath) ?? SheetFormat.xlsx;
+  /// The format saving writes: the file's own, or for one saved as a new
+  /// file, the engine's choice ([WorkbookInfo.saveFormat]).
+  SheetFormat get _saveFormat => _savesAsNewFile
+      ? _info?.saveFormat ?? SheetFormat.xlsx
+      : SheetFormat.forName(_workingPath) ?? SheetFormat.xlsx;
 
-  /// Formats read but never written back (Excel 97-2003, WPS): saved as a
-  /// new Excel workbook next to the app's other edited files.
-  bool get _legacy => const {'xls', 'xlt', 'et', 'ett'}.contains(DocKind.extensionOf(_workingPath));
+  /// Whether saving writes a new file instead of the one opened: formats
+  /// the engine reads but cannot write back are saved as a new file in its
+  /// save format, next to the app's other edited files. Excel 97-2003 and
+  /// WPS workbooks become Excel workbooks (`.xlsx`), and flat OpenDocument
+  /// spreadsheets (`.fods`) packaged ones (`.ods`). Files with those names
+  /// are never written to, whatever the engine found in them.
+  bool get _savesAsNewFile =>
+      const {'xls', 'xlt', 'et', 'ett', 'fods'}.contains(DocKind.extensionOf(_workingPath)) ||
+      !(_info?.writesBack ?? true);
 
   String? _convertedPath;
 
-  Future<String> _newXlsxPath() async {
+  Future<String> _newCopyPath() async {
     final dir = Directory('${(await getApplicationDocumentsDirectory()).path}/Edited');
     await dir.create(recursive: true);
     final title = DocKind.titleOf(documentDisplayName(_workingPath));
-    var file = File('${dir.path}/$title.xlsx');
+    final extension = _saveFormat.code;
+    var file = File('${dir.path}/$title.$extension');
     for (var n = 2; await file.exists(); n++) {
-      file = File('${dir.path}/$title ($n).xlsx');
+      file = File('${dir.path}/$title ($n).$extension');
     }
     return file.path;
   }
@@ -1127,8 +1138,8 @@ class _SheetEditorScreenState extends State<SheetEditorScreen> {
     final location = context.read<ThemeProvider>().saveLocation;
     setState(() => _saving = true);
     try {
-      final target = _legacy
-          ? _convertedPath ??= await _newXlsxPath()
+      final target = _savesAsNewFile
+          ? _convertedPath ??= await _newCopyPath()
           : _neverSaved
           ? _workingPath
           : await DocumentSaveService.workingPathFor(_workingPath);

@@ -28,7 +28,7 @@ enum StorageAccess {
 }
 
 /// One document found on the device: a PDF, Word, Excel, PowerPoint or
-/// text file (see [DocKind.isListed]).
+/// text file, or a ZIP archive (see [DocKind.isListed]).
 class LibraryEntry {
   const LibraryEntry({
     required this.path,
@@ -107,7 +107,7 @@ class LibraryScanProgress {
 }
 
 /// Finds every document the app is allowed to read, the way a file manager
-/// does: PDFs, Word, Excel, PowerPoint and text files.
+/// does: PDFs, Word, Excel, PowerPoint and text files, and ZIP archives.
 ///
 /// The walk runs on a background isolate — a full sweep of shared storage
 /// touches thousands of directories and would drop frames for seconds on the

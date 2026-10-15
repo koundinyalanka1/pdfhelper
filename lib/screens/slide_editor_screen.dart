@@ -998,27 +998,36 @@ class _SlideEditorScreenState extends State<SlideEditorScreen> {
 
   // ---------------------------------------------------------------- saving
 
-  /// Formats read but never written back (PowerPoint 97-2003, WPS):
-  /// saved as a new PowerPoint deck next to the app's other edited files.
-  bool get _legacy => const {
-    'ppt',
-    'pps',
-    'pot',
-    'dps',
-    'dpt',
-  }.contains(DocKind.extensionOf(_workingPath));
+  /// Whether saving writes a new file instead of the one opened: formats
+  /// the engine reads but cannot write back are saved as a new file in its
+  /// save format ([SlideDeckInfo.saveFormat]), next to the app's other
+  /// edited files. PowerPoint 97-2003 and WPS decks become PowerPoint decks
+  /// (`.pptx`), and flat OpenDocument presentations (`.fodp`) packaged ones
+  /// (`.odp`). Files with those names are never written to, whatever the
+  /// engine found in them.
+  bool get _savesAsNewFile =>
+      const {
+        'ppt',
+        'pps',
+        'pot',
+        'dps',
+        'dpt',
+        'fodp',
+      }.contains(DocKind.extensionOf(_workingPath)) ||
+      !(_info?.writesBack ?? true);
 
   String? _convertedPath;
 
-  Future<String> _newPptxPath() async {
+  Future<String> _newCopyPath() async {
     final dir = Directory(
       '${(await getApplicationDocumentsDirectory()).path}/Edited',
     );
     await dir.create(recursive: true);
     final title = DocKind.titleOf(documentDisplayName(_workingPath));
-    var file = File('${dir.path}/$title.pptx');
+    final extension = _extension;
+    var file = File('${dir.path}/$title.$extension');
     for (var n = 2; await file.exists(); n++) {
-      file = File('${dir.path}/$title ($n).pptx');
+      file = File('${dir.path}/$title ($n).$extension');
     }
     return file.path;
   }
@@ -1029,8 +1038,8 @@ class _SlideEditorScreenState extends State<SlideEditorScreen> {
     final location = context.read<ThemeProvider>().saveLocation;
     setState(() => _saving = true);
     try {
-      final target = _legacy
-          ? _convertedPath ??= await _newPptxPath()
+      final target = _savesAsNewFile
+          ? _convertedPath ??= await _newCopyPath()
           : _neverSaved
           ? _workingPath
           : await DocumentSaveService.workingPathFor(_workingPath);
@@ -1056,9 +1065,11 @@ class _SlideEditorScreenState extends State<SlideEditorScreen> {
     }
   }
 
+  /// The extension of the format saving writes.
   String get _extension {
+    if (_savesAsNewFile) return _info?.saveFormat ?? 'pptx';
     final ext = DocKind.extensionOf(_workingPath);
-    return ext.isEmpty || _legacy ? 'pptx' : ext;
+    return ext.isEmpty ? 'pptx' : ext;
   }
 
   /// Write a copy in a format: the deck's own, `txt` or `pdf`.
@@ -1110,7 +1121,7 @@ class _SlideEditorScreenState extends State<SlideEditorScreen> {
             ListTile(
               leading: const Icon(Icons.slideshow_outlined),
               title: Text(
-                _info?.format == 'odp'
+                const {'odp', 'otp'}.contains(_extension)
                     ? 'OpenDocument presentation (.$_extension)'
                     : 'PowerPoint (.$_extension)',
               ),

@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pdfhelper/providers/theme_provider.dart';
 import 'package:pdfhelper/screens/sheet_editor_screen.dart';
 import 'package:pdfhelper/services/document_save_service.dart';
+import 'package:pdfhelper/services/recent_files_service.dart';
 import 'package:pdfhelper/widgets/sheet/sheet_grid.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -23,6 +24,9 @@ void main() {
     root = Directory.systemTemp.createTempSync('dochelper_sheet_editor');
     FakePathProvider.install(root);
     SharedPreferences.setMockInitialValues({});
+    // A save records the file in Recent; a record left waiting by an
+    // earlier test would hold this test's saves up behind it.
+    RecentFilesService.resetCacheForTesting();
     DocumentSaveService.publishOverride = false;
   });
 
@@ -43,6 +47,18 @@ void main() {
         () => Future<void>.delayed(const Duration(milliseconds: 40)),
       );
       await tester.pump(const Duration(milliseconds: 20));
+    }
+  }
+
+  /// Flushes until [finder] finds something: for steps that wait on the
+  /// engine and the file system, which take longer on a busy machine.
+  Future<void> until(
+    WidgetTester tester,
+    Finder finder, {
+    int rounds = 100,
+  }) async {
+    for (var i = 0; i < rounds && finder.evaluate().isEmpty; i++) {
+      await flush(tester, rounds: 1);
     }
   }
 
@@ -137,6 +153,98 @@ void main() {
     await tester.tap(find.text('Save'));
     await flush(tester);
     expect(File(path).existsSync(), isTrue);
+  }, skip: !available);
+
+  testWidgets('a flat OpenDocument spreadsheet is saved as a new .ods', (
+    tester,
+  ) async {
+    final path = '${root.path}/bills.fods';
+    File(path).writeAsStringSync(
+      '<?xml version="1.0" encoding="UTF-8"?>\n'
+      '<office:document '
+      'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" '
+      'xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" '
+      'xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" '
+      'office:version="1.3" '
+      'office:mimetype="application/vnd.oasis.opendocument.spreadsheet">'
+      '<office:body><office:spreadsheet><table:table table:name="Bills">'
+      '<table:table-row><table:table-cell office:value-type="float" '
+      'office:value="12"><text:p>12</text:p></table:table-cell>'
+      '</table:table-row></table:table></office:spreadsheet></office:body>'
+      '</office:document>\n',
+    );
+    final original = File(path).readAsBytesSync();
+    await tester.pumpWidget(app(SheetEditorScreen(path: path)));
+    await flush(tester);
+    expect(find.text('Bills'), findsOneWidget);
+    expect(
+      find.textContaining(
+        'It will be saved as an OpenDocument spreadsheet (.ods).',
+      ),
+      findsOneWidget,
+    );
+
+    await tapCell(tester, 0, 1);
+    expect(find.text('B1'), findsOneWidget);
+    await tester.tap(find.byType(TextField).first);
+    await tester.pump();
+    await tester.enterText(find.byType(TextField).first, '=A1*2');
+    await tester.testTextInput.receiveAction(TextInputAction.next);
+    await tester.pump();
+    await tester.tap(find.byTooltip('Cancel'));
+    await tester.pump();
+    expect(find.text('ODS · Edited'), findsOneWidget);
+
+    await tester.tap(find.text('Save'));
+    await tester.pump();
+    // The button shows again once the save has finished.
+    await until(tester, find.text('Save'));
+
+    final edited = Directory('${root.path}/documents/Edited');
+    final saved = File('${edited.path}/bills.ods');
+    expect(
+      saved.existsSync(),
+      isTrue,
+      reason: Directory(root.path).listSync(recursive: true).join('\n'),
+    );
+    late String doubled;
+    late WorkbookInfo info;
+    await tester.runAsync(() async {
+      final book = await SheetCore.open(saved.path);
+      doubled = book.cell(0, 0, 1).text;
+      info = book.info();
+      book.close();
+    });
+    expect(doubled, '24');
+    expect(info.format, SheetFormat.ods);
+    expect(info.writesBack, isTrue);
+    // The flat original is left exactly as it was.
+    expect(File(path).readAsBytesSync(), original);
+
+    // A second save goes to the same copy.
+    await tapCell(tester, 0, 2);
+    await tester.tap(find.byType(TextField).first);
+    await tester.pump();
+    await tester.enterText(find.byType(TextField).first, 'paid');
+    await tester.testTextInput.receiveAction(TextInputAction.next);
+    await tester.pump();
+    await tester.tap(find.byTooltip('Cancel'));
+    await tester.pump();
+    await tester.tap(find.text('Save'));
+    await tester.pump();
+    await until(tester, find.text('Save'));
+    expect(
+      edited.listSync().map((e) => e.path.split('/').last).toList(),
+      ['bills.ods'],
+    );
+    late String note;
+    await tester.runAsync(() async {
+      final book = await SheetCore.open(saved.path);
+      note = book.cell(0, 0, 2).text;
+      book.close();
+    });
+    expect(note, 'paid');
+    expect(File(path).readAsBytesSync(), original);
   }, skip: !available);
 }
 

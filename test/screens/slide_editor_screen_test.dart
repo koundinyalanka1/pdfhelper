@@ -7,6 +7,7 @@ import 'package:pdfhelper/providers/theme_provider.dart';
 import 'package:pdfhelper/screens/slide_editor_screen.dart';
 import 'package:pdfhelper/screens/slide_show_screen.dart';
 import 'package:pdfhelper/services/document_save_service.dart';
+import 'package:pdfhelper/services/recent_files_service.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -24,6 +25,9 @@ void main() {
     root = Directory.systemTemp.createTempSync('dochelper_slide_editor');
     FakePathProvider.install(root);
     SharedPreferences.setMockInitialValues({});
+    // A save records the file in Recent; a record left waiting by an
+    // earlier test would hold this test's saves up behind it.
+    RecentFilesService.resetCacheForTesting();
     DocumentSaveService.publishOverride = false;
   });
 
@@ -62,6 +66,18 @@ void main() {
       Offset(box.left + box.width * fx, box.top + box.height * fy),
     );
     await settle(tester);
+  }
+
+  /// Flushes until [finder] finds something: for steps that wait on the
+  /// engine and the file system, which take longer on a busy machine.
+  Future<void> until(
+    WidgetTester tester,
+    Finder finder, {
+    int rounds = 100,
+  }) async {
+    for (var i = 0; i < rounds && finder.evaluate().isEmpty; i++) {
+      await flush(tester, rounds: 1);
+    }
   }
 
   final available = SlideCore.isAvailable;
@@ -233,6 +249,94 @@ void main() {
     expect(deck.notes(0), 'Say hello');
     deck.close();
     // The original is left as it was.
+    expect(File(path).readAsBytesSync(), original);
+  }, skip: !available);
+
+  testWidgets('a flat OpenDocument presentation is saved as a new .odp', (
+    tester,
+  ) async {
+    final path = '${root.path}/club.fodp';
+    File(path).writeAsStringSync(
+      '<?xml version="1.0" encoding="UTF-8"?>\n'
+      '<office:document '
+      'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" '
+      'xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" '
+      'xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" '
+      'xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" '
+      'office:version="1.3" '
+      'office:mimetype="application/vnd.oasis.opendocument.presentation">'
+      '<office:body><office:presentation><draw:page draw:name="p1">'
+      '<draw:frame svg:x="1cm" svg:y="1cm" svg:width="10cm" svg:height="2cm">'
+      '<draw:text-box><text:p>Garden club</text:p></draw:text-box></draw:frame>'
+      '</draw:page></office:presentation></office:body></office:document>\n',
+    );
+    final original = File(path).readAsBytesSync();
+    await tester.pumpWidget(app(SlideEditorScreen(path: path)));
+    await flush(tester);
+    expect(find.text('FODP · 1 slide'), findsOneWidget);
+    expect(
+      find.textContaining(
+        'It will be saved as an OpenDocument presentation (.odp).',
+      ),
+      findsOneWidget,
+    );
+
+    // Save a copy offers the format saving writes.
+    await tester.tap(find.byTooltip('More'));
+    await settle(tester);
+    await tester.tap(find.text('Save a copy as…'));
+    await settle(tester);
+    expect(find.text('OpenDocument presentation (.odp)'), findsOneWidget);
+    expect(find.text('OpenDocument presentation (.fodp)'), findsNothing);
+    expect(find.textContaining('PowerPoint ('), findsNothing);
+    await tester.tapAt(const Offset(400, 20));
+    await settle(tester);
+    // Let the message go: it covers the tools below the slide.
+    await tester.pump(const Duration(seconds: 4));
+    await settle(tester);
+
+    await tester.tap(find.text('Slide'));
+    await settle(tester);
+    await tester.tap(find.text('Duplicate'));
+    await settle(tester);
+    expect(find.text('FODP · 2 slides · Edited'), findsOneWidget);
+    await tester.tap(find.text('Save'));
+    await tester.pump();
+    // The button shows again once the save has finished.
+    await until(tester, find.text('Save'));
+
+    final edited = Directory('${root.path}/documents/Edited');
+    final saved = '${edited.path}/club.odp';
+    expect(
+      File(saved).existsSync(),
+      isTrue,
+      reason: Directory(root.path).listSync(recursive: true).join('\n'),
+    );
+    final deck = await tester.runAsync(() => SlideCore.open(saved));
+    expect(deck!.info().format, 'odp');
+    expect(deck.info().writesBack, isTrue);
+    expect(deck.info().slideCount, 2);
+    expect(deck.plainText(), contains('Garden club'));
+    deck.close();
+    // The flat original is left exactly as it was.
+    expect(File(path).readAsBytesSync(), original);
+    expect(find.text('ODP · 2 slides'), findsOneWidget);
+
+    // A second save goes to the same copy.
+    await tester.tap(find.text('Slide'));
+    await settle(tester);
+    await tester.tap(find.text('Duplicate'));
+    await settle(tester);
+    await tester.tap(find.text('Save'));
+    await tester.pump();
+    await until(tester, find.text('Save'));
+    expect(
+      edited.listSync().map((e) => e.path.split('/').last).toList(),
+      ['club.odp'],
+    );
+    final again = await tester.runAsync(() => SlideCore.open(saved));
+    expect(again!.info().slideCount, 3);
+    again.close();
     expect(File(path).readAsBytesSync(), original);
   }, skip: !available);
 

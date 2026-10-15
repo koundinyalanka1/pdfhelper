@@ -3,14 +3,18 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import '../models/doc_kind.dart';
 import '../models/home_tabs.dart';
 import '../providers/theme_provider.dart';
+import '../services/document_router.dart';
 import '../services/pdf_core_service.dart';
 import '../utils/format_utils.dart';
 import 'ai_models_screen.dart';
 import 'ai_screen.dart';
+import 'archive_screen.dart';
 import 'compress_screen.dart';
 import 'extract_text_screen.dart';
+import 'make_zip_screen.dart';
 import 'merge_pdf_screen.dart';
 import 'metadata_screen.dart';
 import 'ocr_screen.dart';
@@ -204,6 +208,42 @@ class _ToolsScreenState extends State<ToolsScreen>
         },
       ),
     );
+  }
+
+  /// Choose any file and open it the way the Files tab would: a picture in
+  /// the picture viewer, a web page or Markdown as a page, an archive in the
+  /// archive browser, and a kind DocHelper cannot open in another app. The
+  /// PDF chosen for the other tools stays chosen.
+  Future<void> _openFile() async {
+    try {
+      final picked = await FilePicker.pickFile();
+      final path = picked?.path;
+      if (picked == null || path == null || !mounted) return;
+      await DocumentRouter.open(context, path, title: picked.name);
+    } catch (e) {
+      if (mounted) setState(() => _error = 'Could not open that file: $e');
+    }
+  }
+
+  /// Choose an archive and browse it. Archives are not working documents:
+  /// the PDF chosen for the other tools stays chosen.
+  Future<void> _openArchive() async {
+    try {
+      final picked = await FilePicker.pickFile(
+        type: FileType.custom,
+        allowedExtensions: ['zip', 'tar', 'gz', 'tgz'],
+      );
+      final path = picked?.path;
+      if (picked == null || path == null || !mounted) return;
+      await Navigator.push(
+        context,
+        MaterialPageRoute<void>(
+          builder: (_) => ArchiveScreen(path: path, title: picked.name),
+        ),
+      );
+    } catch (e) {
+      if (mounted) setState(() => _error = 'Could not open that file: $e');
+    }
   }
 
   // ----------------------------------------------------------------- build
@@ -411,6 +451,33 @@ class _ToolsScreenState extends State<ToolsScreen>
             () => _runOnDocument((p, pw) => AiScreen(pdfPath: p, password: pw)),
             needsDocument: true,
           ),
+      ]),
+      // Files of any kind, not only PDFs.
+      _Section('Files', [
+        _Tool(
+          'Open a file',
+          'Pictures, web pages and any other file on the phone',
+          Icons.file_open_rounded,
+          DocKind.image.color,
+          _openFile,
+        ),
+        _Tool(
+          'Make a ZIP',
+          'Pack files of any kind into one ZIP to send',
+          Icons.folder_zip_rounded,
+          DocKind.archive.color,
+          () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const MakeZipScreen()),
+          ),
+        ),
+        _Tool(
+          'Open a ZIP',
+          'See what is inside, then open, share or save the files',
+          Icons.unarchive_rounded,
+          DocKind.archive.color,
+          _openArchive,
+        ),
       ]),
       if (Features.ai)
         _Section('On-device AI', [

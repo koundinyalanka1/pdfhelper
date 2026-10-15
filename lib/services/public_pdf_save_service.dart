@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -78,12 +80,23 @@ class PublicPdfSaveService {
   /// Publish a copy of [sourcePath] as [displayName] in `[location]/DocHelper`
   /// and link it to the working file. [mimeType] says what kind of document
   /// it is (PDF unless given).
+  ///
+  /// [subfolder] puts the copy in a folder below `DocHelper`, such as
+  /// `Photos/2024` for `Download/DocHelper/Photos/2024`. It must pass
+  /// [isValidSubfolder]; Android checks it again.
   static Future<void> save({
     required String sourcePath,
     required String displayName,
     required String location,
     String mimeType = 'application/pdf',
+    String? subfolder,
   }) => _mutate(() async {
+    if (subfolder != null && !isValidSubfolder(subfolder)) {
+      throw const PublicPdfSaveException('Invalid folder name.');
+    }
+    final folder = subfolder == null
+        ? '$location/DocHelper'
+        : '$location/DocHelper/$subfolder';
     try {
       // Validate and persist the existing catalogue before publishing another
       // copy. A corrupt or unwritable catalogue must not create orphan exports.
@@ -103,6 +116,7 @@ class PublicPdfSaveService {
             'displayName': displayName,
             'location': location,
             'mimeType': mimeType,
+            'subfolder': ?subfolder,
           });
       final copy = _confirmedCopy(saved);
       final beforeRecords = List<PdfDocumentRecord>.of(records);
@@ -153,12 +167,176 @@ class PublicPdfSaveService {
       }
     } on PlatformException catch (error) {
       throw PublicPdfSaveException(
-        'Could not save to $location/DocHelper: '
+        'Could not save to $folder: '
         '${error.message ?? 'Storage is unavailable'}. '
         'Your working PDF has been kept in the app.',
       );
     }
   });
+
+  /// Publish several files, each as [save] would, and link each to its
+  /// working file. Returns how many were published, which is all of them
+  /// unless it throws.
+  ///
+  /// The catalogue is read once and written only now and then, so a batch
+  /// costs time in proportion to its size: [save] reads and rewrites the
+  /// whole catalogue for every file, which grows with the square of the
+  /// count when thousands of files are extracted at once. It is written
+  /// once as many files have been published since the last write as were
+  /// recorded before it (and at least [batchCheckpoint]), and at the end.
+  ///
+  /// Every subfolder is checked before anything is published. Publishing
+  /// stops at the first file that fails: the files published before it
+  /// stay published and linked, and [PublicPdfBatchException.published]
+  /// says how many. If the catalogue cannot be written, the copies it
+  /// would have linked are removed again, as [save] does for one file.
+  /// [onProgress] is called with the count published so far.
+  static Future<int> saveAll({
+    required List<PublicFileRequest> files,
+    required String location,
+    void Function(int published)? onProgress,
+  }) => _mutate(() async {
+    for (final file in files) {
+      final subfolder = file.subfolder;
+      if (subfolder != null && !isValidSubfolder(subfolder)) {
+        throw const PublicPdfSaveException('Invalid folder name.');
+      }
+    }
+    if (files.isEmpty) return 0;
+    // As in save: a corrupt or unwritable catalogue must not create orphan
+    // exports. Keyed by working path, which the stored JSON is too.
+    final records = LinkedHashMap<String, PdfDocumentRecord>.fromIterable(
+      await documents(),
+      key: (record) => (record as PdfDocumentRecord).workingPath,
+    );
+    await _store(records.values.toList());
+    var stored = Map<String, PdfDocumentRecord>.of(records);
+    final storage = await AndroidStorageService.read();
+    if (storage.sdkInt < 29 && !await Permission.storage.request().isGranted) {
+      throw const PublicPdfBatchException(
+        'Allow storage access to save files in a public folder. '
+        'They have been kept in the app.',
+        published: 0,
+      );
+    }
+
+    var recorded = 0;
+    final pending = <PublicPdfCopy>[];
+
+    /// Write the catalogue with the copies published since it was last
+    /// written. On failure those copies are removed again.
+    Future<void> checkpoint() async {
+      if (pending.isEmpty) return;
+      try {
+        await _store(records.values.toList());
+      } catch (error) {
+        final kept = <PublicPdfCopy>[];
+        for (final copy in pending) {
+          try {
+            await _deletePublic(copy);
+          } catch (_) {
+            kept.add(copy);
+          }
+        }
+        // SharedPreferences updates its memory cache before platform writes.
+        // Restore the last stored catalogue even if the store stays full.
+        records
+          ..clear()
+          ..addAll(stored);
+        try {
+          await _store(records.values.toList());
+        } catch (_) {
+          // The catalogue failure is already included in the error below.
+        }
+        final removal = kept.isEmpty
+            ? 'The last ${pending.length} public copies were removed again.'
+            : '${kept.length} public copies could not be removed again; '
+                  'one is ${kept.first.path}.';
+        throw PublicPdfBatchException(
+          'Could not record the saved files: ${_message(error)} $removal '
+          'The files are safe in the app. Free some device storage and try '
+          'again.',
+          published: recorded,
+        );
+      }
+      recorded += pending.length;
+      pending.clear();
+      stored = Map<String, PdfDocumentRecord>.of(records);
+    }
+
+    for (final file in files) {
+      final subfolder = file.subfolder;
+      final folder = subfolder == null
+          ? '$location/DocHelper'
+          : '$location/DocHelper/$subfolder';
+      final PublicPdfCopy copy;
+      try {
+        copy = _confirmedCopy(
+          await _channel.invokeMapMethod<String, dynamic>('savePublicPdf', {
+            'sourcePath': file.sourcePath,
+            'displayName': file.displayName,
+            'location': location,
+            'mimeType': file.mimeType,
+            'subfolder': ?subfolder,
+          }),
+        );
+      } catch (error) {
+        // Link what was published before this file, then report it.
+        await checkpoint();
+        final reason = _message(error);
+        throw PublicPdfBatchException(
+          'Could not save ${file.displayName} to $folder: '
+          '$reason${reason.endsWith('.') ? '' : '.'} '
+          'The files are safe in the app.',
+          published: recorded,
+        );
+      }
+      final before = records.remove(file.sourcePath);
+      records[file.sourcePath] = PdfDocumentRecord(
+        id: before?.id ?? file.sourcePath,
+        workingPath: file.sourcePath,
+        copies: [
+          ...?before?.copies.where((existing) => existing.uri != copy.uri),
+          copy,
+        ],
+      );
+      pending.add(copy);
+      if (pending.length >= math.max(batchCheckpoint, recorded)) {
+        await checkpoint();
+      }
+      onProgress?.call(recorded + pending.length);
+    }
+    await checkpoint();
+    return recorded;
+  });
+
+  /// The fewest files [saveAll] publishes between writes of the catalogue.
+  static const int batchCheckpoint = 64;
+
+  /// Deepest folder [save] makes below `DocHelper`.
+  static const int maxSubfolderDepth = 16;
+
+  /// Longest name of one of those folders, in UTF-16 code units.
+  static const int maxSubfolderNameLength = 100;
+
+  /// Whether [subfolder] is a plain relative path below `DocHelper`: names
+  /// separated by `/`, none empty, `.` or `..`, none longer than
+  /// [maxSubfolderNameLength], no backslash or control characters, and at
+  /// most [maxSubfolderDepth] of them.
+  static bool isValidSubfolder(String subfolder) {
+    if (subfolder.isEmpty || subfolder.startsWith('/')) return false;
+    final names = subfolder.split('/');
+    if (names.length > maxSubfolderDepth) return false;
+    final forbidden = RegExp(r'[\\\x00-\x1F\x7F-\x9F]');
+    return names.every(
+      (name) =>
+          name.isNotEmpty &&
+          name != '.' &&
+          name != '..' &&
+          name.length <= maxSubfolderNameLength &&
+          !forbidden.hasMatch(name),
+    );
+  }
 
   static PublicPdfCopy _confirmedCopy(Map<String, dynamic>? saved) {
     final path = saved?['publicPath'];
@@ -478,4 +656,28 @@ class PublicPdfSaveException implements Exception {
   final String message;
   @override
   String toString() => message;
+}
+
+/// One file for [PublicPdfSaveService.saveAll] to publish, with the same
+/// meaning as the arguments of [PublicPdfSaveService.save].
+class PublicFileRequest {
+  const PublicFileRequest({
+    required this.sourcePath,
+    required this.displayName,
+    this.mimeType = 'application/pdf',
+    this.subfolder,
+  });
+
+  final String sourcePath;
+  final String displayName;
+  final String mimeType;
+  final String? subfolder;
+}
+
+/// [PublicPdfSaveService.saveAll] stopped partway. The first [published]
+/// files are published and linked; the rest are not.
+class PublicPdfBatchException extends PublicPdfSaveException {
+  const PublicPdfBatchException(super.message, {required this.published});
+
+  final int published;
 }
