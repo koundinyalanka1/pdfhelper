@@ -22,9 +22,9 @@ CORPUS = [
     # 1. ALL LANGUAGES (Global Script Coverage)
     # -------------------------------------------------------------
     # Latin (English, German, French, Spanish)
-    ("languages", "lang_en_w3c_dummy.pdf",
-     "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
-     "English - W3C Standard Accessibility Sample"),
+    ("languages", "lang_en_english_sample.pdf",
+     "https://raw.githubusercontent.com/py-pdf/sample-files/main/004-pdflatex-4-pages/pdflatex-4-pages.pdf",
+     "English - four-page pdfLaTeX document"),
     ("languages", "lang_de_german_progit.pdf",
      "https://github.com/progit/progit2-de/releases/download/2.1.308/progit.pdf",
      "German - Full Pro Git Book with Umlauts (ä, ö, ü, ß)"),
