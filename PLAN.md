@@ -7,8 +7,8 @@ who does real office work on a phone instead of a laptop.
 This file is the plan and the progress record. It is updated as work lands.
 See the [progress log](#progress-log) at the end.
 
-Last updated: 2026-10-15 (phases 0-8 done; phase 9 written, waiting for an
-Android build and an emulator check).
+Last updated: 2026-10-15 (phases 0-9 done; phase 9 still to be tried on the
+emulator).
 
 ## 1. What "done" looks like
 
@@ -366,7 +366,7 @@ Status: `[ ]` not started · `[~]` in progress · `[x]` done.
 | 6 | Fonts, layout and PDF writer: Word page view and export; sheet and slide export | [x] |
 | 7 | Legacy binaries through `doc_cfb`: XLS, DOC, PPT and WPS `.et/.wps/.dps` | [x] |
 | 8 | PDF editing: annotate, sign, fill forms, stamp, compress, convert pages to images | [x] |
-| 9 | Other files: images, ZIP archives, Markdown, HTML and JSON viewers, unknown files | [~] |
+| 9 | Other files: images, ZIP archives, Markdown, HTML and JSON viewers, unknown files | [x] |
 | 10 | Hardening: a real-world corpus per format, fuzzing, memory and time limits, device runs, accessibility, release | [ ] |
 
 ### How each phase is verified
@@ -1103,8 +1103,12 @@ match:
     numbers shown as the file writes them). Tools has a Files section:
     Open a file (any kind, pictures included), Make a ZIP, Open a ZIP.
     "Open with" covers archives, flat OpenDocument and HTML.
-  - Known gaps: the Kotlin and manifest changes are not yet compiled or
-    tried on a device; pictures are not listed in Files (Tools > Open a
+  - Checked: about 700 app tests (the only failures are the corpus sweep's,
+    as `test_corpus/` was absent), the engines' Rust and Dart tests, and a
+    debug APK built on Linux, whose six engines pass
+    `check_android_native.py` (16 KB pages) and whose merged manifest has
+    the new filters.
+  - Known gaps: nothing was tried on a device or emulator yet; pictures are not listed in Files (Tools > Open a
     file opens one); HEIC/AVIF go through the phone's own codec, untried
     here; very large pictures are decoded downscaled; jumping far through
     a page of tens of thousands of pieces lays out every piece between;
@@ -1114,10 +1118,10 @@ match:
 
 ## Next steps (for the next session)
 
-1. Finish phase 9 on Android: a Gradle build (the Kotlin resolver and the
-   manifest changed), then on the emulator `pdfhelper_api36_16kb`: "Open
-   with" for `.zip`, `.tar.gz`, `.fodt` and `.html`; Tools > Open a file
-   with a JPEG and a HEIC photo; Extract all of a ZIP with nested folders
+1. Try phase 9 on the emulator `pdfhelper_api36_16kb` (the debug APK builds;
+   the Kotlin resolver and the manifest changed): "Open with" for `.zip`,
+   `.tar.gz`, `.fodt` and `.html`; Tools > Open a file with a JPEG and a
+   HEIC photo; Extract all of a ZIP with nested folders
    (public copies in `Download/DocHelper/<folder>/...`) on Android 10+ and
    on an Android 9 image; Make a ZIP.
 2. Rebuild the PDF engine's macOS dylib and iOS XCFramework on the Mac

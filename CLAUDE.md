@@ -121,6 +121,17 @@ bash scripts/build_engines.sh test     # cargo tests: doc_common, text, sheet, w
   `dl.google.com/android/repository/android-ndk-r27c-linux.zip`; then
   `ANDROID_NDK_HOME=<ndk> bash scripts/build_pdf_core.sh android`. Apple
   binaries need the Mac.
+- **An APK on a Linux cloud machine.** Unzip the command-line tools from
+  `dl.google.com/android/repository/commandlinetools-linux-<n>_latest.zip`
+  into `<sdk>/cmdline-tools/latest`, accept the licences with
+  `sdkmanager --licenses`, add `sdk.dir=<sdk>` to `android/local.properties`
+  (git-ignored), build every engine for Android, then
+  `flutter build apk --debug` and check it with
+  `python3 scripts/check_android_native.py <apk>`. Maven Central answers
+  429 to the shared address; a Gradle init script in `~/.gradle/init.d`
+  that points `repo.maven.apache.org` at
+  `maven-central.storage-download.googleapis.com/maven2/` gets round it.
+  There is no KVM, so no emulator.
 - **Engine tests skip themselves** when their native library cannot be
   loaded (`skip: !TextCore.isAvailable`). A suite that "passes" without
   the env exports has tested less than it seems.
