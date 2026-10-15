@@ -9,7 +9,8 @@ text files) on a phone instead of a laptop.
 
 **Start every session by reading [PLAN.md](PLAN.md).** Its phase table,
 progress log and "Next steps" say exactly where work stands. Update it
-whenever work lands.
+whenever work lands. Phase 10 (hardening and release) works through the
+batches in [docs/PHASE10_PLAN.md](docs/PHASE10_PLAN.md).
 
 ## The owner's standing rules
 
@@ -142,6 +143,11 @@ bash scripts/build_engines.sh test     # cargo tests: doc_common, text, sheet, w
   - The office script lists directories through the GitHub API, which
     allows 60 requests an hour without a token, so set `GITHUB_TOKEN`.
   - Wikimedia throttles hard; the diverse script honours `Retry-After`.
+    From a cloud machine it often answers 429 for hours, so the epics,
+    the 143 MB directory and some language PDFs may stay missing; the
+    sweep's failures for them are missing files, not engine bugs.
+  - The GitHub API also rate-limits the office script from a shared
+    address, even with a token.
   - `test/pvs_pdf_test.dart` sweeps every corpus folder as PDFs, except the
     ones it names (including `office`).
 

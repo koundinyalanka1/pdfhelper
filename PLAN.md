@@ -7,8 +7,8 @@ who does real office work on a phone instead of a laptop.
 This file is the plan and the progress record. It is updated as work lands.
 See the [progress log](#progress-log) at the end.
 
-Last updated: 2026-10-15 (phases 0-9 done; phase 9 still to be tried on the
-emulator).
+Last updated: 2026-10-15 (phases 0-9 done; phase 10 surveyed and planned in
+[docs/PHASE10_PLAN.md](docs/PHASE10_PLAN.md), its fixes not started).
 
 ## 1. What "done" looks like
 
@@ -367,7 +367,7 @@ Status: `[ ]` not started · `[~]` in progress · `[x]` done.
 | 7 | Legacy binaries through `doc_cfb`: XLS, DOC, PPT and WPS `.et/.wps/.dps` | [x] |
 | 8 | PDF editing: annotate, sign, fill forms, stamp, compress, convert pages to images | [x] |
 | 9 | Other files: images, ZIP archives, Markdown, HTML and JSON viewers, unknown files | [x] |
-| 10 | Hardening: a real-world corpus per format, fuzzing, memory and time limits, device runs, accessibility, release | [ ] |
+| 10 | Hardening: a real-world corpus per format, fuzzing, memory and time limits, device runs, accessibility, release | [~] |
 
 ### How each phase is verified
 
@@ -1116,22 +1116,91 @@ match:
     both in the app and as public copies, each linked in the public-copy
     catalogue (about 360 bytes a file).
 
+- **2026-10-15 (phase 10, planning).** Six surveys read every engine and
+  the app for release blockers, building hostile files and measuring them
+  on this Linux machine. Their findings, merged into about 70 work items in
+  ten batches, are in [docs/PHASE10_PLAN.md](docs/PHASE10_PLAN.md). The
+  worst, all reproduced:
+  - Crashes `catch_unwind` cannot catch (the app dies): a 1 KB PDF whose
+    object stream declares a huge `/N` asks for 32 GB; an 88-byte WMF and
+    a 196-byte EMF ask for gigabytes; operator chains in a formula, deep
+    XML nesting and SmartArt recursion overflow the stack; one Word
+    attribute sizes an 80 GB allocation; one formula broadcasts two ranges
+    into 393 GB.
+  - Hangs: a self-referencing PDF form XObject renders for minutes, ODP
+    ellipse commands and NaN page margins loop forever, object streams and
+    damaged-file recovery are quadratic.
+  - Memory: a 31 KB DOCX becomes 738 MB, a 1.8 KB XLSX makes 20 million
+    cells, and PDF text extraction of one hostile page peaks at 5.6 GB.
+  - Saves are written atomically but not reopened to check them, and keep
+    no backup; editors keep no draft for crash recovery.
+  - Release: the version code is still 3, the privacy policy and the
+    All-files-access declaration describe the old PDF-only app, there is
+    no device run of phases 3-9, and grey secondary text (2.65:1) and
+    small tap targets fail accessibility checks.
+  - Also this session: the corpus script now fetches the English sample
+    the PDF sweep expects; with the corpus present, the sweep's only
+    failures were files Wikimedia would not serve (429).
+
+## State at hand-off (2026-10-15)
+
+- **Code.** Everything is committed and pushed: the app (`main`) and the
+  six engine repositories (`flutter_pdf_core`, `flutter_text_core`,
+  `flutter_sheet_core`, `flutter_word_core`, `flutter_slide_core`,
+  `flutter_archive_core`), each a submodule on `main`. `doc_common` still
+  lives in the app's tree.
+- **Checks at the last commit.** About 700 app tests pass with every engine
+  loaded; the only failures are corpus-sweep cases whose files could not
+  be downloaded. The engines' Rust tests pass and clippy is clean. A debug
+  APK builds on Linux with all six engines (16 KB pages verified by
+  `scripts/check_android_native.py`).
+- **Not yet done anywhere.** No emulator or phone run since phase 2; no
+  signed release build; the macOS and iOS PDF binaries predate phase 8.
+
 ## Next steps (for the next session)
 
-1. Try phase 9 on the emulator `pdfhelper_api36_16kb` (the debug APK builds;
-   the Kotlin resolver and the manifest changed): "Open with" for `.zip`,
-   `.tar.gz`, `.fodt` and `.html`; Tools > Open a file with a JPEG and a
-   HEIC photo; Extract all of a ZIP with nested folders
-   (public copies in `Download/DocHelper/<folder>/...`) on Android 10+ and
-   on an Android 9 image; Make a ZIP.
-2. Rebuild the PDF engine's macOS dylib and iOS XCFramework on the Mac
-   (`bash scripts/build_pdf_core.sh ios macos`); the Android binaries are
-   current.
-3. `doc_common` becomes its own repository (`koundinyalanka1/doc_common`)
-   and a submodule at the same path. Creating the repository needs the
-   owner: the GitHub app cannot create repositories.
-4. A complex-script shaper (GSUB/GPOS for Indic and Arabic) in
-   `doc_layout`, so Hindi, Telugu and Tamil text exports correctly; then
-   embedded fonts for PDF form text and text boxes.
-5. Run the office corpus sweep (`download_office_corpus.py` needs
-   `GITHUB_TOKEN`), and check saved files in real Office on the Mac.
+Phase 10, in the order of [docs/PHASE10_PLAN.md](docs/PHASE10_PLAN.md).
+Each batch names its files, items, sizes and how to verify it. A batch is
+done when its hostile inputs are bounded (time, memory, 512 KiB stack),
+ordinary files behave as before, and its checks pass; then commit the
+engine in its submodule and the gitlink in the app.
+
+1. **Wave 1** (no owner input needed):
+   - B1 shared core (`doc_xml`, `doc_zip`, `doc_opc`, `doc_odf`,
+     `doc_ffi`): zip-bomb and per-part budgets, an XML node budget,
+     stack safety (lower `MAX_DEPTH`, iterative `Element` drop/clone, a
+     16 MB-stack backstop in the FFI wrappers), `save_verified` with a
+     backup, poisoned sessions refuse edits, quadratic XML paths.
+   - B2 pictures and legacy (`doc_metafile`, `doc_image`, `doc_cfb`,
+     `doc_art`): metafile dash and point-count bombs, GIF frames, a 24M
+     pixel cap, CFB reservations.
+   - B3 PDF engine: the object-stream `/N` abort, a render work budget
+     with deadline and cancel ("page too complex" instead of an endless
+     spinner), the text extractor on the compact content form, linear
+     object streams and recovery. Then rebuild its committed Android
+     binaries.
+   - B4 app: engine error kinds in crash reports, the public copy swapped
+     instead of truncated, the storage disclosure, contrast, 200% text,
+     48 dp targets, accessibility guideline tests.
+2. **Wave 2:** B5 Word, B6 Sheet, B7 Slide, B8 Text and archive (counts
+   from files clamped, recursion capped, budgets, editor calls off the UI
+   isolate, each engine's check for `save_verified`).
+3. **Wave 3:** B9 corpus sweeps and in-tree mutation fuzzers per engine,
+   B10 draft autosave and recovery, and accessibility in every editor.
+4. **Device rounds on the Mac** (the plan's "Needs the owner's Mac, an
+   emulator or a phone" list): phase 9's checks on `pdfhelper_api36_16kb`
+   ("Open with" for `.zip`, `.tar.gz`, `.fodt` and `.html`; Tools > Open
+   a file with a JPEG and a HEIC photo; Extract all with nested folders on
+   Android 10+ and 9; Make a ZIP), then every kind of file, saving in
+   place, process death, memory and TalkBack; rebuild the PDF engine's
+   macOS dylib and iOS XCFramework (`bash scripts/build_pdf_core.sh ios
+   macos`); check saved files in real Office.
+5. **Owner decisions** (defaults proposed in the plan): the new version
+   code above the last one uploaded; the rewritten privacy policy and the
+   All-files-access declaration; Crashlytics NDK and native symbols;
+   phone budgets and backups; keeping armeabi-v7a; whether `cargo-fuzz`
+   may be used as a tool; `doc_common`'s own repository
+   (`koundinyalanka1/doc_common`, which only the owner can create).
+6. **After release:** a complex-script shaper (GSUB/GPOS) in `doc_layout`
+   for Hindi, Telugu and Tamil export, then embedded fonts for PDF form
+   text; the office corpus sweep (`download_office_corpus.py`).
