@@ -1142,6 +1142,26 @@ match:
     the PDF sweep expects; with the corpus present, the sweep's only
     failures were files Wikimedia would not serve (429).
 
+- **2026-10-17 (phase 10, wave 1, batch B1).** The shared crates refuse
+  bombs and survive hostile nesting:
+  - `doc_zip` and `doc_opc`: expansion limits (ratio and total, through
+    `ExpansionLimits` and `PackageLimits`: 64 MB per XML part). A 1 MB
+    file claiming 1000 bytes that inflates to 1 GB went from 2.6 s and
+    541 MB to an instant `TOO_LARGE`; 10,000 relationship lookups from
+    23.9 s to 6 ms; duplicate entry names save the first entry.
+  - `doc_xml`: a 2M-node budget, `MAX_DEPTH` 512 (the deepest real part
+    found was 23), iterative clone, compare and drop, linear entity and
+    namespace handling (40,000 namespaces from 3.9 s to 0.07 s), no
+    panics on non-ASCII markup (274 of 60,000 mutated files panicked
+    before), unknown entities and comments kept as written.
+  - `doc_ffi`: every engine call runs on a 16 MB-stack worker thread;
+    `save_verified` (unique temp file, fsync, read back and check, backup
+    of the previous version, rename, folder fsync); a session whose edit
+    panicked refuses further edits and saves until reopened.
+  - Left for B5-B8: each engine passes its check to `save_verified`,
+    exports `<kind>_set_backup_dir`, maps the node budget to `TOO_LARGE`,
+    and shows the duplicate-name note.
+
 ## State at hand-off (2026-10-15)
 
 - **Code.** Everything is committed and pushed: the app (`main`) and the
@@ -1166,7 +1186,8 @@ ordinary files behave as before, and its checks pass; then commit the
 engine in its submodule and the gitlink in the app.
 
 1. **Wave 1** (no owner input needed):
-   - B1 shared core (`doc_xml`, `doc_zip`, `doc_opc`, `doc_odf`,
+   - B1 shared core (done 2026-10-17; its adversarial verification is
+     still to run) (`doc_xml`, `doc_zip`, `doc_opc`, `doc_odf`,
      `doc_ffi`): zip-bomb and per-part budgets, an XML node budget,
      stack safety (lower `MAX_DEPTH`, iterative `Element` drop/clone, a
      16 MB-stack backstop in the FFI wrappers), `save_verified` with a
