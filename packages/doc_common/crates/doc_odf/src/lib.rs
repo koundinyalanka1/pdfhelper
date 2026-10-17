@@ -18,7 +18,8 @@ mod base64;
 mod flatten;
 mod unflatten;
 
-use doc_xml::{ns, Event, Ns, Reader, StartTag, XmlError};
+use doc_xml::ns::{self, Bindings, Namespaces};
+use doc_xml::{Event, Reader, StartTag, XmlError};
 use doc_zip::ZipError;
 
 pub use base64::{decode as base64_decode, encode as base64_encode};
@@ -64,7 +65,12 @@ pub fn flat_mimetype(bytes: &[u8]) -> Option<String> {
     let mut reader = Reader::new(text.trim_start_matches('\u{FEFF}').trim_start());
     loop {
         match reader.next().ok()? {
-            Event::Start(tag) => return root_mimetype(&tag),
+            Event::Start(tag) => {
+                let mut bindings = Bindings::new();
+                bindings.open();
+                declare(&tag, &mut bindings, &mut Namespaces::new());
+                return root_mimetype(&tag, &bindings);
+            }
             Event::Eof => return None,
             _ => {}
         }
@@ -81,21 +87,23 @@ fn starts_like_xml(bytes: &[u8]) -> bool {
     bytes.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'<')
 }
 
-/// The namespace bindings a start tag declares, as (prefix, namespace).
-fn declarations(tag: &StartTag) -> Vec<(String, Ns)> {
-    tag.attrs()
-        .filter_map(Result::ok)
-        .filter_map(|(name, value)| {
-            let prefix = if name == "xmlns" { "" } else { name.strip_prefix("xmlns:")? };
-            Some((prefix.to_owned(), Ns::from_uri(&value)))
-        })
-        .collect()
+/// Bind the namespaces a start tag declares, in the scope `bindings` has
+/// just opened for it; `namespaces` numbers the URIs that are not
+/// well-known.
+fn declare(tag: &StartTag, bindings: &mut Bindings, namespaces: &mut Namespaces) {
+    for (name, value) in tag.attrs().filter_map(Result::ok) {
+        if name == "xmlns" {
+            bindings.bind("", namespaces.id(&value));
+        } else if let Some(prefix) = name.strip_prefix("xmlns:") {
+            bindings.bind(prefix, namespaces.id(&value));
+        }
+    }
 }
 
-/// The mimetype of a root start tag that is `{office}document`.
-fn root_mimetype(tag: &StartTag) -> Option<String> {
-    let bindings = declarations(tag);
-    let bound = |prefix: &str| bindings.iter().rev().find(|(p, _)| p == prefix).map(|(_, n)| *n);
+/// The mimetype of a root start tag that is `{office}document`, with
+/// `bindings` holding its declarations.
+fn root_mimetype(tag: &StartTag, bindings: &Bindings) -> Option<String> {
+    let bound = |prefix: &str| bindings.resolve(prefix);
     let prefix = tag.name.rsplit_once(':').map_or("", |(p, _)| p);
     if tag.local() != "document" || bound(prefix) != Some(ns::OFFICE) {
         return None;

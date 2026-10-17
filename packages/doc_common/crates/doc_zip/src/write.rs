@@ -89,6 +89,31 @@ struct CentralRecord {
     offset: u64,
     external_attributes: u32,
     version_made_by: u16,
+    /// Extra fields carried over from a copied entry, without the ZIP64
+    /// field, which is written afresh.
+    local_extra: Vec<u8>,
+    central_extra: Vec<u8>,
+}
+
+/// The extra fields in `extra` other than the ZIP64 one (whose sizes and
+/// offset no longer hold once an entry is copied). A field that runs past
+/// the end is dropped with whatever follows it.
+fn without_zip64(extra: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut at = 0;
+    while at + 4 <= extra.len() {
+        let id = u16::from_le_bytes([extra[at], extra[at + 1]]);
+        let len = u16::from_le_bytes([extra[at + 2], extra[at + 3]]) as usize;
+        let end = at + 4 + len;
+        if end > extra.len() {
+            break;
+        }
+        if id != 0x0001 {
+            out.extend_from_slice(&extra[at..end]);
+        }
+        at = end;
+    }
+    out
 }
 
 /// Builds an archive in memory. Entries are written in the order added.
@@ -171,6 +196,8 @@ impl ZipWriter {
             offset: 0,
             external_attributes: 0,
             version_made_by: MADE_BY_DOS,
+            local_extra: Vec::new(),
+            central_extra: Vec::new(),
         }, &body);
         Ok(())
     }
@@ -192,18 +219,22 @@ impl ZipWriter {
             // MS-DOS directory attribute.
             external_attributes: 0x10,
             version_made_by: MADE_BY_DOS,
+            local_extra: Vec::new(),
+            central_extra: Vec::new(),
         }, &[]);
         Ok(())
     }
 
     /// Copy an entry from another archive without recompressing it. Its name,
-    /// timestamp, method and checksum are kept.
+    /// timestamp, method, checksum and extra fields (such as Unix times and
+    /// permissions) are kept.
     pub fn copy_from(&mut self, archive: &ZipArchive, index: usize) -> Result<(), ZipError> {
         let entry = &archive.entries()[index];
         if entry.is_encrypted() {
             return Err(ZipError::Encrypted(entry.name.clone()));
         }
         self.claim(&entry.name)?;
+        let (local_extra, central_extra) = archive.extra_fields(index);
         self.write_entry(CentralRecord {
             raw_name: entry.raw_name.clone(),
             // Sizes go in the local header, so no data descriptor follows.
@@ -219,6 +250,8 @@ impl ZipWriter {
             offset: 0,
             external_attributes: entry.external_attributes,
             version_made_by: entry.version_made_by,
+            local_extra: without_zip64(local_extra),
+            central_extra: without_zip64(central_extra),
         }, archive.raw_data(index));
         Ok(())
     }
@@ -226,6 +259,12 @@ impl ZipWriter {
     fn write_entry(&mut self, mut record: CentralRecord, body: &[u8]) {
         record.offset = self.out.len() as u64;
         let wide = self.force_zip64 || record.size >= MAX32 || record.compressed_size >= MAX32;
+        let zip64_len = if wide { 20 } else { 0 };
+        // The extra fields share a 16-bit length with the ZIP64 field; ones
+        // that no longer fit are dropped rather than the entry.
+        if zip64_len + record.local_extra.len() > u16::MAX as usize {
+            record.local_extra.clear();
+        }
         let out = &mut self.out;
         out.extend_from_slice(&SIG_LOCAL.to_le_bytes());
         out.extend_from_slice(&(if wide { ZIP64_VERSION } else { 20 }).to_le_bytes());
@@ -242,7 +281,7 @@ impl ZipWriter {
             out.extend_from_slice(&(record.size as u32).to_le_bytes());
         }
         out.extend_from_slice(&(record.raw_name.len() as u16).to_le_bytes());
-        out.extend_from_slice(&(if wide { 20u16 } else { 0 }).to_le_bytes());
+        out.extend_from_slice(&((zip64_len + record.local_extra.len()) as u16).to_le_bytes());
         out.extend_from_slice(&record.raw_name);
         if wide {
             out.extend_from_slice(&1u16.to_le_bytes());
@@ -250,6 +289,7 @@ impl ZipWriter {
             out.extend_from_slice(&record.size.to_le_bytes());
             out.extend_from_slice(&record.compressed_size.to_le_bytes());
         }
+        out.extend_from_slice(&record.local_extra);
         out.extend_from_slice(body);
         self.central.push(record);
     }
@@ -273,6 +313,12 @@ impl ZipWriter {
                 extra.extend_from_slice(&record.offset.to_le_bytes());
             }
             let wide = !extra.is_empty();
+            let zip64_len = if wide { extra.len() + 4 } else { 0 };
+            let carried: &[u8] = if zip64_len + record.central_extra.len() > u16::MAX as usize {
+                &[]
+            } else {
+                &record.central_extra
+            };
             out.extend_from_slice(&SIG_CENTRAL.to_le_bytes());
             out.extend_from_slice(&record.version_made_by.max(if wide { ZIP64_VERSION } else { 0 }).to_le_bytes());
             out.extend_from_slice(&(if wide { ZIP64_VERSION } else { 20 }).to_le_bytes());
@@ -285,7 +331,7 @@ impl ZipWriter {
             out.extend_from_slice(&narrow(record.compressed_size, compressed_wide).to_le_bytes());
             out.extend_from_slice(&narrow(record.size, size_wide).to_le_bytes());
             out.extend_from_slice(&(record.raw_name.len() as u16).to_le_bytes());
-            out.extend_from_slice(&(if wide { extra.len() as u16 + 4 } else { 0 }).to_le_bytes());
+            out.extend_from_slice(&((zip64_len + carried.len()) as u16).to_le_bytes());
             out.extend_from_slice(&0u16.to_le_bytes()); // comment
             out.extend_from_slice(&0u16.to_le_bytes()); // disk
             out.extend_from_slice(&0u16.to_le_bytes()); // internal attributes
@@ -297,6 +343,7 @@ impl ZipWriter {
                 out.extend_from_slice(&(extra.len() as u16).to_le_bytes());
                 out.extend_from_slice(&extra);
             }
+            out.extend_from_slice(carried);
         }
         let directory_size = out.len() as u64 - directory_start;
         let count = self.central.len() as u64;

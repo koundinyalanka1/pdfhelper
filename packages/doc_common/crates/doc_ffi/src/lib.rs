@@ -12,8 +12,13 @@
 //!   calls return NULL. The library's `*_last_error` then returns
 //!   `"CODE: message"`, valid until the next call on the same thread.
 //! * Panics never cross the boundary: they become a `PANIC` error.
+//! * Every call runs on a thread with a 16 MB stack, so a deeply nested
+//!   document cannot overflow the caller's small one (see [`CALL_STACK_BYTES`]).
 //! * Documents being edited live in a [`Registry`] of sessions, addressed by
-//!   positive integer handles.
+//!   positive integer handles. A session that a panic interrupted can only
+//!   be closed.
+//! * Files are saved so that the one replaced is never damaged
+//!   ([`save_verified`], [`write_file_atomically`]).
 //!
 //! This crate holds that plumbing once; each library's FFI crate only
 //! declares its exported functions.
@@ -24,6 +29,15 @@ use std::ffi::{c_char, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+
+mod files;
+mod stack;
+
+pub use files::{
+    backup_dir, read_file, remove_stale_temp_files, remove_stale_temp_files_c, save_verified, set_backup_dir,
+    set_backup_dir_c, write_file_atomically, BACKUP_CAP_BYTES,
+};
+pub use stack::CALL_STACK_BYTES;
 
 /// Stable error codes. The Dart side switches on these, so never rename one.
 pub mod codes {
@@ -171,9 +185,27 @@ fn guarded<T>(f: impl FnOnce() -> Result<T, FfiError>) -> Result<T, FfiError> {
     }
 }
 
+/// Run `f` on this thread's worker, which has a [`CALL_STACK_BYTES`]
+/// stack, with panics caught, and hand back its result; run it here when
+/// there is no worker to run it on.
+fn on_call_stack<T>(f: impl FnOnce() -> Result<T, FfiError>) -> Result<T, FfiError> {
+    let mut f = Some(f);
+    let mut result = None;
+    stack::hand_over(&mut || {
+        if let Some(f) = f.take() {
+            result = Some(guarded(f));
+        }
+    });
+    match (result, f) {
+        (Some(result), _) => result,
+        (None, Some(f)) => guarded(f),
+        (None, None) => Err(FfiError::new(codes::PANIC, "the call ended without a result")),
+    }
+}
+
 /// Run a call that returns a string: NULL and a last error on failure.
 pub fn call_str(f: impl FnOnce() -> Result<String, FfiError>) -> *mut c_char {
-    match guarded(f) {
+    match on_call_stack(f) {
         Ok(text) => into_c_string(text),
         Err(e) => {
             set_last_error(&e);
@@ -185,7 +217,7 @@ pub fn call_str(f: impl FnOnce() -> Result<String, FfiError>) -> *mut c_char {
 /// Run a call that returns a non-negative integer: -1 and a last error on
 /// failure.
 pub fn call_i64(f: impl FnOnce() -> Result<i64, FfiError>) -> i64 {
-    match guarded(f) {
+    match on_call_stack(f) {
         Ok(value) => value,
         Err(e) => {
             set_last_error(&e);
@@ -200,7 +232,7 @@ pub fn call_i64(f: impl FnOnce() -> Result<i64, FfiError>) -> i64 {
 /// # Safety
 /// `out_len` must be NULL or valid for a write.
 pub unsafe fn call_buffer(f: impl FnOnce() -> Result<Vec<u8>, FfiError>, out_len: *mut i64) -> *mut u8 {
-    match guarded(f) {
+    match on_call_stack(f) {
         Ok(bytes) => {
             let boxed = bytes.into_boxed_slice();
             if !out_len.is_null() {
@@ -232,6 +264,9 @@ pub unsafe fn free_buffer(ptr: *mut u8, len: i64) {
 ///
 /// Each session has its own lock, so different documents can be worked on
 /// from different threads at once, while calls on one document serialize.
+/// A panic while a session is locked may have left it half-changed, so from
+/// then on [`Registry::with`] refuses it, and only closing it works: a
+/// half-made edit is never saved over the user's file.
 pub struct Registry<T> {
     inner: Mutex<RegistryInner<T>>,
 }
@@ -240,6 +275,10 @@ struct RegistryInner<T> {
     next: u64,
     sessions: BTreeMap<u64, Arc<Mutex<T>>>,
 }
+
+/// Why a session a panic interrupted is refused.
+const INTERRUPTED: &str = "an error interrupted a change to this document, so it can no longer be edited or \
+                           saved (the file itself was not touched); reopen the document";
 
 impl<T> Default for Registry<T> {
     fn default() -> Self {
@@ -277,10 +316,11 @@ impl<T> Registry<T> {
             .ok_or_else(|| FfiError::new(codes::BAD_HANDLE, format!("no open document has handle {handle}")))
     }
 
-    /// Run `f` on a session while holding its lock.
+    /// Run `f` on a session while holding its lock. A session a panic
+    /// interrupted is refused with a `PANIC` error.
     pub fn with<R>(&self, handle: i64, f: impl FnOnce(&mut T) -> Result<R, FfiError>) -> Result<R, FfiError> {
         let session = self.get(handle)?;
-        let mut guard = session.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut guard = session.lock().map_err(|_| FfiError::new(codes::PANIC, INTERRUPTED))?;
         f(&mut guard)
     }
 
@@ -299,47 +339,6 @@ impl<T> Registry<T> {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
-}
-
-/// Read a whole file, with a size cap and a readable error.
-pub fn read_file(path: &str, max_bytes: u64) -> Result<Vec<u8>, FfiError> {
-    let meta = std::fs::metadata(path).map_err(|e| FfiError::io(path, &e))?;
-    if meta.len() > max_bytes {
-        return Err(FfiError::new(
-            codes::TOO_LARGE,
-            format!("the file is {} MB; the limit is {} MB", meta.len() >> 20, max_bytes >> 20),
-        ));
-    }
-    std::fs::read(path).map_err(|e| FfiError::io(path, &e))
-}
-
-/// Write `bytes` to `path` so that a crash or full disk never leaves a
-/// half-written file in its place: write a sibling temporary file, flush it
-/// to storage, then rename it over `path`.
-pub fn write_file_atomically(path: &str, bytes: &[u8]) -> Result<(), FfiError> {
-    use std::io::Write;
-    let target = Path::new(path);
-    let dir = target.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    let name = target
-        .file_name()
-        .ok_or_else(|| FfiError::invalid(format!("'{path}' is not a file path")))?;
-    let temp = dir.join(format!(
-        ".{}.{}.tmp",
-        name.to_string_lossy(),
-        std::process::id()
-    ));
-    let result = (|| {
-        let mut file = std::fs::File::create(&temp)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        drop(file);
-        std::fs::rename(&temp, target)
-    })();
-    if let Err(e) = result {
-        let _ = std::fs::remove_file(&temp);
-        return Err(FfiError::io(path, &e));
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -391,6 +390,37 @@ mod tests {
         assert!(!REG.remove(a));
         assert_eq!(REG.get(a).unwrap_err().code, codes::BAD_HANDLE);
         assert_eq!(REG.get(-5).unwrap_err().code, codes::BAD_HANDLE);
+        assert_eq!(REG.len(), 1);
+    }
+
+    #[test]
+    fn a_session_a_panic_interrupted_can_only_be_closed() {
+        static REG: Registry<Vec<u32>> = Registry::new();
+        let broken = REG.insert(vec![1]);
+        let other = REG.insert(vec![2]);
+        // An edit that panics halfway, as an engine bug might.
+        let edit = call_i64(|| {
+            REG.with(broken, |v| {
+                v.push(10);
+                panic!("index out of bounds");
+            })
+        });
+        assert_eq!(edit, -1);
+        assert_eq!(last_error(), "PANIC: index out of bounds");
+
+        // Neither another edit nor a save may touch the half-made change.
+        for _ in 0..2 {
+            let refused = REG.with(broken, |v| Ok(v.clone())).unwrap_err();
+            assert_eq!(refused.code, codes::PANIC);
+            assert!(refused.message.contains("reopen the document"), "{refused}");
+        }
+        assert_eq!(call_str(|| REG.with(broken, |_| Ok("saved".to_owned()))), std::ptr::null_mut());
+        assert!(last_error().starts_with("PANIC: ") && last_error().contains("reopen"), "{}", last_error());
+
+        // Other documents are unaffected, and closing still works.
+        assert_eq!(REG.with(other, |v| Ok(v.clone())).unwrap(), vec![2]);
+        assert!(REG.remove(broken));
+        assert_eq!(REG.with(broken, |v| Ok(v.clone())).unwrap_err().code, codes::BAD_HANDLE);
         assert_eq!(REG.len(), 1);
     }
 

@@ -20,9 +20,9 @@ fn section(doc: Option<&Document>, local: &str) -> Option<Element> {
 fn merged(content: &Document, styles: Option<&Document>, local: &str) -> Option<Element> {
     let key = |e: &Element| (e.local().to_owned(), e.attr(ns::STYLE, "name").map(str::to_owned));
     match (section(Some(content), local), section(styles, local)) {
-        (Some(mut first), Some(second)) => {
+        (Some(mut first), Some(mut second)) => {
             let seen: Vec<_> = first.elements().map(key).collect();
-            for child in second.children {
+            for child in std::mem::take(&mut second.children) {
                 if let Node::Element(e) = &child {
                     if seen.contains(&key(e)) {
                         continue;
@@ -38,23 +38,25 @@ fn merged(content: &Document, styles: Option<&Document>, local: &str) -> Option<
 
 /// Put the pictures and other files that elements link to inside them, as
 /// base64 `office:binary-data`.
-fn inline_files(e: &mut Element, zip: &ZipArchive, office: &str) -> Result<(), OdfError> {
-    let target = e
-        .attr(ns::XLINK, "href")
-        .filter(|_| INLINE.contains(&e.local()))
-        .map(|href| href.strip_prefix("./").unwrap_or(href).to_owned())
-        .and_then(|path| zip.find(&path).filter(|&i| !zip.entries()[i].is_dir()));
-    if let Some(index) = target {
-        let bytes = zip.read(index)?;
-        for local in ["href", "type", "show", "actuate"] {
-            e.remove_attr(ns::XLINK, local);
+fn inline_files(root: &mut Element, zip: &ZipArchive, office: &str) -> Result<(), OdfError> {
+    // Iterative, so deep trees cannot overflow the stack.
+    let mut stack = vec![root];
+    while let Some(e) = stack.pop() {
+        let target = e
+            .attr(ns::XLINK, "href")
+            .filter(|_| INLINE.contains(&e.local()))
+            .map(|href| href.strip_prefix("./").unwrap_or(href).to_owned())
+            .and_then(|path| zip.find(&path).filter(|&i| !zip.entries()[i].is_dir()));
+        if let Some(index) = target {
+            let bytes = zip.read(index)?;
+            for local in ["href", "type", "show", "actuate"] {
+                e.remove_attr(ns::XLINK, local);
+            }
+            let mut data = Element::new(format!("{office}binary-data"), ns::OFFICE);
+            data.set_text(base64::encode(&bytes, 76));
+            e.push(data);
         }
-        let mut data = Element::new(format!("{office}binary-data"), ns::OFFICE);
-        data.set_text(base64::encode(&bytes, 76));
-        e.push(data);
-    }
-    for child in e.elements_mut() {
-        inline_files(child, zip, office)?;
+        stack.extend(e.elements_mut());
     }
     Ok(())
 }
@@ -115,6 +117,7 @@ pub fn flatten(package: &[u8]) -> Result<Vec<u8>, OdfError> {
         prolog: vec![Node::Text("\n".to_owned())],
         root,
         epilog: Vec::new(),
+        namespaces: Default::default(),
     };
     Ok(flat.to_bytes())
 }

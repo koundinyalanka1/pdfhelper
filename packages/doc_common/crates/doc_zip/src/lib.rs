@@ -2,7 +2,10 @@
 //!
 //! Office Open XML (`.docx`, `.xlsx`, `.pptx`), OpenDocument (`.odt`, `.ods`,
 //! `.odp`) and EPUB files are ZIP packages. [`ZipArchive`] reads one from
-//! memory with bounded decompression and checksum verification. [`ZipWriter`]
+//! memory with checksum verification and bounded decompression: each entry
+//! inflates no further than its stated size, its limits ([`ReadLimits`]) and
+//! what the archive may expand to in all ([`ExpansionLimits`]), so a zip
+//! bomb is refused as too large instead of filling memory. [`ZipWriter`]
 //! writes one back, and can copy the still-compressed bytes of entries that
 //! did not change, so saving a document only recompresses what was edited.
 //!
@@ -17,7 +20,7 @@ mod read;
 mod write;
 
 pub use crc32::{crc32, Crc32};
-pub use read::{ReadLimits, ZipArchive, ZipEntry};
+pub use read::{ExpansionLimits, ReadLimits, ZipArchive, ZipEntry};
 pub use write::{Compression, DosDateTime, ZipWriter};
 
 /// Compression method numbers from the ZIP specification.

@@ -535,3 +535,174 @@ fn picture_kinds_by_their_first_bytes() {
     }
     assert_eq!(picture_kind(b"<html/>").0, "bin");
 }
+
+// --- Hostile input
+
+use std::time::{Duration, Instant};
+
+/// Run `f` on a thread with a small stack (Dart's isolates have 1 MiB, and
+/// 32-bit phones half that), failing if it runs longer than `limit`.
+fn hostile<T: Send + 'static>(stack: usize, limit: Duration, f: impl FnOnce() -> T + Send + 'static) -> T {
+    let (done, result) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .stack_size(stack)
+        .spawn(move || {
+            let _ = done.send(f());
+        })
+        .unwrap();
+    match result.recv_timeout(limit) {
+        Ok(out) => out,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => panic!("took longer than {limit:?}"),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => panic!("the thread panicked"),
+    }
+}
+
+const KIB: usize = 1024;
+
+/// Check a time measured in an optimized build (`cargo test --release`)
+/// against `release`; debug builds are held only to the bound [`hostile`]
+/// sets.
+fn within(elapsed: Duration, release: Duration) {
+    if !cfg!(debug_assertions) {
+        assert!(elapsed < release, "took {elapsed:?}, more than {release:?}");
+    }
+}
+
+/// A flat text document whose root carries `declarations` and whose text
+/// is `body`.
+fn flat_with(declarations: &str, body: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><office:document {NS}{declarations} office:version="1.3" office:mimetype="{TEXT}"><office:body><office:text>{body}</office:text></office:body></office:document>"#
+    )
+}
+
+#[test]
+fn many_namespaces_unflatten_in_linear_time() {
+    // Before, every prefix was looked for in every scope in turn, each URI
+    // in a process-wide list, and each candidate XLink prefix among all the
+    // root's attributes: 2.4 s and 4.3 s in a release build.
+    let count = 40_000;
+    let (content, styles, elapsed) = hostile(512 * KIB, Duration::from_secs(20), move || {
+        let declarations: String = (0..count).map(|i| format!(" xmlns:p{i}=\"urn:many:{i}\"")).collect();
+        let body: String = (0..count).map(|i| format!("<p{i}:b p{i}:c=\"1\"/>")).collect();
+        let flat = flat_with(&declarations, &body);
+        let started = Instant::now();
+        let package = unflatten(flat.as_bytes()).unwrap();
+        let elapsed = started.elapsed();
+        let zip = ZipArchive::new(package).unwrap();
+        (part(&zip, "content.xml"), part(&zip, "styles.xml"), elapsed)
+    });
+    within(elapsed, Duration::from_secs(1));
+    let text = content.root.descendants().find(|e| e.is(ns::OFFICE, "text")).unwrap();
+    let b: Vec<&Element> = text.elements().collect();
+    assert_eq!(b.len(), count);
+    assert_eq!(content.namespaces.uri(b[123].ns), Some("urn:many:123"));
+    assert_eq!(styles.root.attr_named("xmlns:p39999"), Some("urn:many:39999"));
+    // Neither unflattening nor reading named anything process-wide.
+    assert_eq!(doc_xml::Ns::find("urn:many:123"), None);
+
+    // Every `xlink` prefix taken by something else, and a picture that
+    // needs one.
+    let picture = format!("<text:p><draw:frame><draw:image><office:binary-data>{PNG_BASE64}</office:binary-data></draw:image></draw:frame></text:p>");
+    let (image, elapsed) = hostile(512 * KIB, Duration::from_secs(20), move || {
+        let declarations: String = std::iter::once(" xmlns:xlink=\"urn:not-xlink\"".to_owned())
+            .chain((1..count).map(|i| format!(" xmlns:xlink{i}=\"urn:not-xlink\"")))
+            .collect();
+        let flat = flat_with(&declarations, &picture);
+        let started = Instant::now();
+        let package = unflatten(flat.as_bytes()).unwrap();
+        let elapsed = started.elapsed();
+        let content = part(&ZipArchive::new(package).unwrap(), "content.xml");
+        (content.root.descendants().find(|e| e.is(ns::DRAW, "image")).cloned().unwrap(), elapsed)
+    });
+    within(elapsed, Duration::from_secs(1));
+    assert_eq!(image.attr(ns::XLINK, "href"), Some("Pictures/1.png"));
+    assert!(image.attr_named(&format!("xlink{count}:href")).is_some());
+}
+
+#[test]
+fn deep_packages_flatten_on_a_small_stack() {
+    // Stored, not deflated: in a debug build, flate2 sets up its state on
+    // a stack larger than this.
+    let depth = doc_xml::MAX_DEPTH - 8;
+    let body = "<text:section>".repeat(depth) + "<text:p>deep</text:p>" + &"</text:section>".repeat(depth);
+    let content = xml_part("document-content", &format!("<office:body><office:text>{body}</office:text></office:body>"));
+    let mut zip = ZipWriter::new();
+    zip.add("mimetype", TEXT.as_bytes(), Compression::Stored).unwrap();
+    zip.add("content.xml", &content, Compression::Stored).unwrap();
+    let package = zip.finish();
+    let flat = hostile(128 * KIB, Duration::from_secs(20), move || flatten(&package).unwrap());
+    let doc = Document::parse(&flat).unwrap();
+    assert_eq!(doc.root.text(), "deep");
+}
+
+/// A xorshift generator, so mutation runs are the same every time.
+struct XorShift(u64);
+
+impl XorShift {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n.max(1) as u64) as usize
+    }
+}
+
+/// Pieces of markup worth inserting, beyond random bytes.
+const TOKENS: [&str; 20] = [
+    "<", ">", "/>", "</", "&", ";", "\"", "=", "?", "!", "é", "日", "😀", "<!--", "-->", "<?", "?>", "<!DOCTYPE",
+    "office:", "xmlns:",
+];
+
+/// `bytes` changed in one to four places.
+fn mutate(bytes: &[u8], rng: &mut XorShift) -> Vec<u8> {
+    let mut out = bytes.to_vec();
+    for _ in 0..1 + rng.below(4) {
+        let at = rng.below(out.len() + 1);
+        match rng.below(5) {
+            0 if at < out.len() => out[at] = rng.next() as u8,
+            1 => {
+                let token = TOKENS[rng.below(TOKENS.len())].as_bytes();
+                out.splice(at..at, token.iter().copied());
+            }
+            2 if at < out.len() => {
+                let end = (at + 1 + rng.below(16)).min(out.len());
+                out.drain(at..end);
+            }
+            3 if at < out.len() => {
+                let end = (at + 1 + rng.below(32)).min(out.len());
+                let copy = out[at..end].to_vec();
+                out.splice(at..at, copy);
+            }
+            _ => out.insert(at.min(out.len()), rng.next() as u8),
+        }
+    }
+    out
+}
+
+#[test]
+fn mutated_flat_files_never_panic() {
+    // `flat_mimetype` runs on every file an engine opens. Before, text
+    // beyond ASCII in a processing instruction or markup declaration
+    // panicked the reader under it.
+    hostile(512 * KIB, Duration::from_secs(300), || {
+        let letter = flat_letter();
+        let picture = format!(
+            "<text:p><?pi é?><!-- é --><draw:frame><draw:image><office:binary-data>{PNG_BASE64}</office:binary-data></draw:image></draw:frame></text:p>"
+        );
+        let other = flat_with(" xmlns:x=\"urn:custom\"", &picture);
+        let samples = [letter.as_str(), other.as_str()];
+        let mut rng = XorShift(0x2545_F491_4F6C_DD1D);
+        for _ in 0..20_000 {
+            let bytes = mutate(samples[rng.below(samples.len())].as_bytes(), &mut rng);
+            let _ = flat_mimetype(&bytes);
+            if let Ok(package) = unflatten(&bytes) {
+                let _ = flatten(&package);
+            }
+        }
+    });
+}

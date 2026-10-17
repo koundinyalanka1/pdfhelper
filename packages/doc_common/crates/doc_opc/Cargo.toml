@@ -9,3 +9,7 @@ description = "Office Open XML and OpenDocument packages: parts, relationships, 
 doc_zip = { path = "../doc_zip" }
 doc_xml = { path = "../doc_xml" }
 thiserror = "1"
+
+[dev-dependencies]
+# Builds the hostile packages the tests open.
+flate2 = "1"

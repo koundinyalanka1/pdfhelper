@@ -1,7 +1,9 @@
 //! A round-tripping element tree.
 
-use crate::escape::{escape_attr, escape_text};
-use crate::ns::{self, Ns};
+use std::borrow::Cow;
+
+use crate::escape::{escape_attr, escape_text, unescape, unknown_entity};
+use crate::ns::{self, Bindings, Namespaces, Ns};
 use crate::reader::{decode_bytes, Event, Reader};
 use crate::XmlError;
 
@@ -33,6 +35,10 @@ pub enum Node {
     Pi(String),
     /// The inside of a DOCTYPE (kept verbatim, never interpreted).
     DocType(String),
+    /// A reference to an entity XML does not predefine, such as `&nbsp;`
+    /// in HTML-like content, kept as written: the string is its name. Its
+    /// text, for [`Element::text`], is the reference itself.
+    EntityRef(String),
 }
 
 impl Node {
@@ -61,8 +67,14 @@ impl Node {
                 out.push_str("]]>");
             }
             Node::Comment(t) => {
+                // A comment read from a file is written as it was, "--"
+                // and all; only a "-->" inside would end it early.
                 out.push_str("<!--");
-                out.push_str(&t.replace("--", "- -"));
+                if t.contains("-->") {
+                    out.push_str(&t.replace("--", "- -"));
+                } else {
+                    out.push_str(t);
+                }
                 out.push_str("-->");
             }
             Node::Pi(t) => {
@@ -75,6 +87,11 @@ impl Node {
                 out.push_str(t);
                 out.push('>');
             }
+            Node::EntityRef(name) => {
+                out.push('&');
+                out.push_str(name);
+                out.push(';');
+            }
         }
     }
 }
@@ -84,7 +101,10 @@ fn local_part(name: &str) -> &str {
 }
 
 /// An element.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Dropping, cloning and comparing elements is iterative, so a tree nested
+/// as deeply as code can build it cannot overflow the stack.
+#[derive(Debug)]
 pub struct Element {
     /// The qualified name as written (`w:p`).
     pub name: String,
@@ -206,11 +226,21 @@ impl Element {
     }
 
     fn collect_text(&self, out: &mut String) {
-        for child in &self.children {
-            match child {
-                Node::Text(t) | Node::CData(t) => out.push_str(t),
-                Node::Element(e) => e.collect_text(out),
-                _ => {}
+        // Iterative, so deep trees cannot overflow the stack.
+        let mut stack = vec![self.children.iter()];
+        while let Some(children) = stack.last_mut() {
+            match children.next() {
+                Some(Node::Text(t) | Node::CData(t)) => out.push_str(t),
+                Some(Node::EntityRef(name)) => {
+                    out.push('&');
+                    out.push_str(name);
+                    out.push(';');
+                }
+                Some(Node::Element(e)) => stack.push(e.children.iter()),
+                Some(_) => {}
+                None => {
+                    stack.pop();
+                }
             }
         }
     }
@@ -279,6 +309,83 @@ impl Element {
     }
 }
 
+impl Clone for Element {
+    fn clone(&self) -> Self {
+        // Iterative: each copy starts childless, and joins its parent's
+        // copy once its own children are done.
+        let shallow = |e: &Element| Element {
+            name: e.name.clone(),
+            ns: e.ns,
+            attrs: e.attrs.clone(),
+            children: Vec::with_capacity(e.children.len()),
+        };
+        // Elements being copied, how many of their children are done, and
+        // the copies.
+        let mut stack = vec![(self, 0, shallow(self))];
+        loop {
+            let (source, done, copy) = stack.last_mut().expect("the copy of self is open");
+            let source: &Element = source;
+            match source.children.get(*done) {
+                Some(child) => {
+                    *done += 1;
+                    match child {
+                        Node::Element(e) => stack.push((e, 0, shallow(e))),
+                        other => copy.children.push(other.clone()),
+                    }
+                }
+                None => {
+                    let (_, _, copy) = stack.pop().expect("the copy of self is open");
+                    match stack.last_mut() {
+                        Some((_, _, parent)) => parent.children.push(Node::Element(copy)),
+                        None => return copy,
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl PartialEq for Element {
+    fn eq(&self, other: &Self) -> bool {
+        // Iterative: pairs of elements still to compare.
+        let mut pairs = vec![(self, other)];
+        while let Some((a, b)) = pairs.pop() {
+            if a.name != b.name || a.ns != b.ns || a.attrs != b.attrs || a.children.len() != b.children.len() {
+                return false;
+            }
+            for pair in a.children.iter().zip(&b.children) {
+                match pair {
+                    (Node::Element(a), Node::Element(b)) => pairs.push((a, b)),
+                    (Node::Element(_), _) | (_, Node::Element(_)) => return false,
+                    (a, b) if a != b => return false,
+                    _ => {}
+                }
+            }
+        }
+        true
+    }
+}
+
+impl Eq for Element {}
+
+impl Drop for Element {
+    fn drop(&mut self) {
+        // Iterative: descendants are moved into one list and dropped there
+        // without children of their own. Elements whose children have no
+        // children (most of them) are left to the usual drop.
+        let nested = |n: &Node| matches!(n, Node::Element(e) if !e.children.is_empty());
+        if !self.children.iter().any(nested) {
+            return;
+        }
+        let mut pending = std::mem::take(&mut self.children);
+        while let Some(node) = pending.pop() {
+            if let Node::Element(mut e) = node {
+                pending.append(&mut e.children);
+            }
+        }
+    }
+}
+
 /// Iterator returned by [`Element::descendants`].
 pub struct Descendants<'a> {
     stack: Vec<std::slice::Iter<'a, Node>>,
@@ -315,6 +422,66 @@ pub struct Document {
     pub root: Element,
     /// Anything after the root.
     pub epilog: Vec<Node>,
+    /// The identities parsing gave the namespace URIs the document names;
+    /// elements and attributes in namespaces that are not well-known carry
+    /// identities from here.
+    pub namespaces: Namespaces,
+}
+
+/// How many more nodes a parse may build.
+struct Budget {
+    left: usize,
+}
+
+impl Budget {
+    /// Count `n` more nodes, found at byte `at`.
+    fn spend(&mut self, n: usize, at: usize) -> Result<(), XmlError> {
+        match self.left.checked_sub(n) {
+            Some(left) => {
+                self.left = left;
+                Ok(())
+            }
+            None => Err(XmlError::too_large(
+                at,
+                format!("the XML holds more than {} elements, attributes and other nodes", crate::MAX_NODES),
+            )),
+        }
+    }
+}
+
+/// Character data as nodes, appended to `out`: one text node or, when it
+/// holds references to entities XML does not predefine (`&nbsp;`), the
+/// text around them and the references as written. `raw` is the data as
+/// written, at byte `base`; `text` is it unescaped.
+fn push_text(out: &mut Vec<Node>, raw: &str, base: usize, text: Cow<str>, budget: &mut Budget) -> Result<(), XmlError> {
+    // Unknown references are kept literally when unescaped, so text
+    // without an ampersand has none.
+    let mut run = 0;
+    if text.contains('&') {
+        for (i, _) in raw.match_indices('&') {
+            if i < run {
+                continue;
+            }
+            let Some(name) = unknown_entity(&raw[i..]) else {
+                continue;
+            };
+            if run < i {
+                budget.spend(1, base + run)?;
+                out.push(Node::Text(unescape(&raw[run..i], base + run)?.into_owned()));
+            }
+            budget.spend(1, base + i)?;
+            out.push(Node::EntityRef(name.to_owned()));
+            run = i + name.len() + 2;
+        }
+    }
+    if run == 0 {
+        budget.spend(1, base)?;
+        out.push(Node::Text(text.into_owned()));
+    } else if run < raw.len() {
+        budget.spend(1, base + run)?;
+        out.push(Node::Text(unescape(&raw[run..], base + run)?.into_owned()));
+    }
+    Ok(())
 }
 
 /// The declaration Office writes on every part.
@@ -329,24 +496,35 @@ impl Document {
             prolog: vec![Node::Text("\r\n".to_owned())],
             root,
             epilog: Vec::new(),
+            namespaces: Namespaces::new(),
         }
     }
 
     /// Parse a part's bytes, honouring a byte-order mark or declared encoding.
+    ///
+    /// A part with more than [`crate::MAX_NODES`] nodes is refused with an
+    /// error that [`XmlError::is_too_large`] tells from a malformed part's.
     pub fn parse(bytes: &[u8]) -> Result<Self, XmlError> {
         let (text, _) = decode_bytes(bytes);
         Self::parse_str(&text)
     }
 
     pub fn parse_str(text: &str) -> Result<Self, XmlError> {
+        Self::parse_limited(text, crate::MAX_NODES)
+    }
+
+    /// [`Document::parse_str`] with a budget of `max_nodes` nodes.
+    pub(crate) fn parse_limited(text: &str, max_nodes: usize) -> Result<Self, XmlError> {
         let mut reader = Reader::new(text);
         let mut declaration = None;
         let mut prolog = Vec::new();
         let mut epilog = Vec::new();
         let mut root: Option<Element> = None;
-        // Open elements, and the namespace bindings each one introduced.
+        // Open elements, and the namespace bindings in scope.
         let mut open: Vec<Element> = Vec::new();
-        let mut scopes: Vec<Vec<(String, Ns)>> = Vec::new();
+        let mut bindings = Bindings::new();
+        let mut namespaces = Namespaces::new();
+        let mut budget = Budget { left: max_nodes };
 
         loop {
             let before = reader.offset();
@@ -358,33 +536,24 @@ impl Document {
                     continue;
                 }
                 Event::Start(tag) => {
-                    let mut bindings = Vec::new();
+                    budget.spend(1, before)?;
+                    bindings.open();
                     let mut raw = Vec::new();
                     for attr in tag.attrs() {
                         let (name, value) = attr?;
+                        budget.spend(1, before)?;
                         if name == "xmlns" {
-                            bindings.push((String::new(), Ns::from_uri(&value)));
+                            bindings.bind("", namespaces.id(&value));
                         } else if let Some(prefix) = name.strip_prefix("xmlns:") {
-                            bindings.push((prefix.to_owned(), Ns::from_uri(&value)));
+                            bindings.bind(prefix, namespaces.id(&value));
                         }
                         raw.push((name, value.into_owned()));
                     }
-                    scopes.push(bindings);
                     let resolve = |prefix: &str| -> Ns {
-                        match prefix {
-                            "xml" => return ns::XML,
-                            "xmlns" => return ns::XMLNS,
-                            _ => {}
-                        }
-                        for scope in scopes.iter().rev() {
-                            if let Some((_, ns)) = scope.iter().rev().find(|(p, _)| p == prefix) {
-                                return *ns;
-                            }
-                        }
-                        if prefix.is_empty() {
-                            ns::NONE
-                        } else {
-                            Ns::from_uri(&format!("urn:undeclared-prefix:{prefix}"))
+                        match bindings.resolve(prefix) {
+                            Some(ns) => ns,
+                            None if prefix.is_empty() => ns::NONE,
+                            None => ns::UNDECLARED,
                         }
                     };
                     let element_ns = resolve(tag.name.rsplit_once(':').map_or("", |(p, _)| p));
@@ -415,7 +584,7 @@ impl Document {
                     continue;
                 }
                 Event::End(_) => {
-                    scopes.pop();
+                    bindings.close();
                     let element = open.pop().expect("reader checks nesting");
                     match open.last_mut() {
                         Some(parent) => parent.children.push(Node::Element(element)),
@@ -426,12 +595,18 @@ impl Document {
                 // Whitespace around the root is kept byte for byte: line
                 // ends there are not character data, and cannot be escaped.
                 Event::Text(_) if open.is_empty() => Node::Text(reader.source()[before..reader.offset()].to_owned()),
-                Event::Text(t) => Node::Text(t.into_owned()),
+                Event::Text(t) => {
+                    let parent = open.last_mut().expect("text is inside an element");
+                    let raw = &reader.source()[before..reader.offset()];
+                    push_text(&mut parent.children, raw, before, t, &mut budget)?;
+                    continue;
+                }
                 Event::CData(t) => Node::CData(t.to_owned()),
                 Event::Comment(t) => Node::Comment(t.to_owned()),
                 Event::Pi(t) => Node::Pi(t.to_owned()),
                 Event::DocType(t) => Node::DocType(t.to_owned()),
             };
+            budget.spend(1, before)?;
             match open.last_mut() {
                 Some(parent) => parent.children.push(node),
                 None if root.is_none() => prolog.push(node),
@@ -444,6 +619,7 @@ impl Document {
             prolog,
             root,
             epilog,
+            namespaces,
         })
     }
 
@@ -453,8 +629,10 @@ impl Document {
         if self.root.ns == ns && !self.root.name.contains(':') {
             return Some(String::new());
         }
+        // The document's own identities, or one that code named.
+        let names = |uri: &str| self.namespaces.get(uri) == Some(ns) || Ns::find(uri) == Some(ns);
         self.root.attrs.iter().find_map(|a| {
-            if a.ns != ns::XMLNS || Ns::from_uri(&a.value) != ns {
+            if a.ns != ns::XMLNS || !names(&a.value) {
                 return None;
             }
             Some(a.name.strip_prefix("xmlns:").unwrap_or("").to_owned())

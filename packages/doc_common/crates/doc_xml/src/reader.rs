@@ -228,9 +228,9 @@ impl<'a> Reader<'a> {
                     .ok_or_else(|| self.err(start, "unterminated processing instruction"))?;
                 let inner = &src[start + 2..close];
                 self.pos = close + 2;
-                let is_decl = inner.len() >= 3
-                    && inner[..3].eq_ignore_ascii_case("xml")
-                    && inner[3..].starts_with(|c: char| c.is_ascii_whitespace());
+                // Bytes, not text: the third byte may be inside a character.
+                let is_decl = inner.as_bytes().get(..3).is_some_and(|b| b.eq_ignore_ascii_case(b"xml"))
+                    && inner.as_bytes().get(3).is_some_and(u8::is_ascii_whitespace);
                 if is_decl && start == 0 {
                     Ok(Event::Declaration(inner))
                 } else {
@@ -253,7 +253,7 @@ impl<'a> Reader<'a> {
                         .ok_or_else(|| self.err(start, "unterminated CDATA section"))?;
                     self.pos = close + 3;
                     Ok(Event::CData(&src[start + 9..close]))
-                } else if rest.len() >= 9 && rest[..9].eq_ignore_ascii_case("<!DOCTYPE") {
+                } else if rest.as_bytes().get(..9).is_some_and(|b| b.eq_ignore_ascii_case(b"<!DOCTYPE")) {
                     let close = doctype_end(bytes, start + 9).ok_or_else(|| self.err(start, "unterminated DOCTYPE"))?;
                     self.pos = close + 1;
                     Ok(Event::DocType(src[start + 9..close].trim()))

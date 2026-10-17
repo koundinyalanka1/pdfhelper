@@ -4,8 +4,15 @@
 //! binds it to. Well-known document namespaces have fixed identities (the
 //! constants below), and OOXML's *Strict* URIs share the identity of their
 //! *Transitional* counterparts, so readers handle both dialects with the
-//! same code. Other URIs are interned process-wide on first sight.
+//! same code.
+//!
+//! Other URIs are numbered by the document that names them ([`Namespaces`]),
+//! so their identities mean something only within that document and its
+//! copies, and one document's namespaces can neither fill a table the whole
+//! process shares nor outlive it. Code that names such a namespace itself
+//! uses [`Ns::from_uri`], which numbers it process-wide.
 
+use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -163,23 +170,42 @@ well_known! {
     OPS = 153 => ["http://www.idpf.org/2007/ops"],
     NCX = 154 => ["http://www.daisy.org/z3986/2005/ncx/"],
     CONTAINER = 155 => ["urn:oasis:names:tc:opendocument:xmlns:container"],
+    /// OpenDocument settings (`settings.xml`).
+    CONFIG = 156 => ["urn:oasis:names:tc:opendocument:xmlns:config:1.0"],
 }
 
-/// First identity handed to interned (not well-known) URIs.
+/// First identity handed to URIs that code names with [`Ns::from_uri`].
 const FIRST_DYNAMIC: u16 = 1024;
-/// Interned URIs beyond this share one identity, so a hostile document cannot
-/// grow the table without bound.
+/// Interned URIs beyond this share one identity, so the table cannot grow
+/// without bound.
 const MAX_DYNAMIC: usize = 4096;
-/// The identity shared once the table is full.
+/// First identity a document hands to the URIs it names ([`Namespaces`]).
+/// The two ranges never meet, so a document's numbering cannot be taken
+/// for a process-wide one.
+const FIRST_LOCAL: u16 = 0x8000;
+/// The identity of every prefix that no declaration binds. Elements and
+/// attributes with one match no namespace a document declares.
+pub const UNDECLARED: Ns = Ns(u16::MAX - 1);
+/// The identity shared once a table is full.
 pub const OVERFLOW: Ns = Ns(u16::MAX);
 
-fn table() -> &'static Mutex<Vec<&'static str>> {
-    static TABLE: OnceLock<Mutex<Vec<&'static str>>> = OnceLock::new();
-    TABLE.get_or_init(|| Mutex::new(Vec::new()))
+/// URIs that code named with [`Ns::from_uri`], and their identities.
+#[derive(Default)]
+struct Table {
+    uris: Vec<&'static str>,
+    ids: HashMap<&'static str, Ns>,
+}
+
+fn table() -> &'static Mutex<Table> {
+    static TABLE: OnceLock<Mutex<Table>> = OnceLock::new();
+    TABLE.get_or_init(|| Mutex::new(Table::default()))
 }
 
 impl Ns {
-    /// The identity of a namespace URI, interning it if it is new.
+    /// The identity of a namespace URI that code names (to build elements
+    /// in it), interning it process-wide if it is new. Documents number
+    /// the URIs they name themselves ([`Namespaces`]); identities from here
+    /// match theirs only for well-known URIs.
     pub fn from_uri(uri: &str) -> Ns {
         if uri.is_empty() {
             return NONE;
@@ -188,18 +214,35 @@ impl Ns {
             return ns;
         }
         let mut table = table().lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(i) = table.iter().position(|&known| known == uri) {
-            return Ns(FIRST_DYNAMIC + i as u16);
+        if let Some(&ns) = table.ids.get(uri) {
+            return ns;
         }
-        if table.len() >= MAX_DYNAMIC {
+        if table.uris.len() >= MAX_DYNAMIC {
             return OVERFLOW;
         }
-        table.push(Box::leak(uri.to_owned().into_boxed_str()));
-        Ns(FIRST_DYNAMIC + (table.len() - 1) as u16)
+        let ns = Ns(FIRST_DYNAMIC + table.uris.len() as u16);
+        let uri: &'static str = Box::leak(uri.to_owned().into_boxed_str());
+        table.uris.push(uri);
+        table.ids.insert(uri, ns);
+        ns
+    }
+
+    /// The identity [`Ns::from_uri`] gives a URI, without interning it:
+    /// None for one that is neither well-known nor named by code yet.
+    pub fn find(uri: &str) -> Option<Ns> {
+        if uri.is_empty() {
+            return Some(NONE);
+        }
+        if let Some(ns) = well_known(uri) {
+            return Some(ns);
+        }
+        let table = table().lock().unwrap_or_else(|e| e.into_inner());
+        table.ids.get(uri).copied()
     }
 
     /// The URI this identity stands for (the Transitional URI for OOXML
-    /// namespaces that also have a Strict one).
+    /// namespaces that also have a Strict one); `""` for identities a
+    /// document numbered, which [`Namespaces::uri`] knows.
     pub fn uri(self) -> &'static str {
         if self == NONE {
             return "";
@@ -210,7 +253,116 @@ impl Ns {
         let table = table().lock().unwrap_or_else(|e| e.into_inner());
         self.0
             .checked_sub(FIRST_DYNAMIC)
-            .and_then(|i| table.get(i as usize).copied())
+            .and_then(|i| table.uris.get(i as usize).copied())
             .unwrap_or("")
+    }
+}
+
+/// The identities one document gives the namespace URIs it names:
+/// well-known URIs keep their fixed identities, and the others are
+/// numbered in the order the document names them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Namespaces {
+    /// The numbered URIs, the first one's identity `FIRST_LOCAL`.
+    uris: Vec<String>,
+    ids: HashMap<String, Ns>,
+}
+
+impl Namespaces {
+    /// Most URIs one document numbers; the rest share [`OVERFLOW`].
+    const MAX: usize = (UNDECLARED.0 - FIRST_LOCAL) as usize;
+
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The identity of `uri` in this document, numbering it if it is new.
+    pub fn id(&mut self, uri: &str) -> Ns {
+        if let Some(ns) = self.get(uri) {
+            return ns;
+        }
+        if self.uris.len() >= Self::MAX {
+            return OVERFLOW;
+        }
+        let ns = Ns(FIRST_LOCAL + self.uris.len() as u16);
+        self.uris.push(uri.to_owned());
+        self.ids.insert(uri.to_owned(), ns);
+        ns
+    }
+
+    /// The identity of `uri` if it is well-known or this document has
+    /// numbered it.
+    pub fn get(&self, uri: &str) -> Option<Ns> {
+        if uri.is_empty() {
+            return Some(NONE);
+        }
+        well_known(uri).or_else(|| self.ids.get(uri).copied())
+    }
+
+    /// The URI behind an identity: a well-known one, or one this document
+    /// numbered.
+    pub fn uri(&self, ns: Ns) -> Option<&str> {
+        if ns == NONE {
+            return Some("");
+        }
+        if let Some(uri) = well_known_uri(ns) {
+            return Some(uri);
+        }
+        let i = ns.0.checked_sub(FIRST_LOCAL)?;
+        self.uris.get(i as usize).map(String::as_str)
+    }
+}
+
+/// The prefixes in scope while a document is read: the namespace each one
+/// is bound to, and for every open element the bindings it replaced, so
+/// that closing the element puts them back. Looking a prefix up takes the
+/// same time however many declarations are in scope.
+#[derive(Debug, Default)]
+pub struct Bindings {
+    current: HashMap<String, Ns>,
+    /// Bindings that open elements replaced, in order: the prefix, and what
+    /// it was bound to before (None when nothing).
+    replaced: Vec<(String, Option<Ns>)>,
+    /// Where each open element's entries in `replaced` start.
+    scopes: Vec<usize>,
+}
+
+impl Bindings {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Start an element's scope. Its declarations follow with
+    /// [`Bindings::bind`].
+    pub fn open(&mut self) {
+        self.scopes.push(self.replaced.len());
+    }
+
+    /// Bind `prefix` (`""` for the default namespace) in the innermost
+    /// scope.
+    pub fn bind(&mut self, prefix: &str, ns: Ns) {
+        let before = self.current.insert(prefix.to_owned(), ns);
+        self.replaced.push((prefix.to_owned(), before));
+    }
+
+    /// End the innermost scope, restoring the bindings it replaced.
+    pub fn close(&mut self) {
+        let start = self.scopes.pop().unwrap_or(0);
+        for (prefix, before) in self.replaced.drain(start..).rev() {
+            match before {
+                Some(ns) => self.current.insert(prefix, ns),
+                None => self.current.remove(&prefix),
+            };
+        }
+    }
+
+    /// The namespace `prefix` is bound to (`xml` and `xmlns` always are);
+    /// None when nothing binds it.
+    pub fn resolve(&self, prefix: &str) -> Option<Ns> {
+        match prefix {
+            "xml" => Some(XML),
+            "xmlns" => Some(XMLNS),
+            _ => self.current.get(prefix).copied(),
+        }
     }
 }

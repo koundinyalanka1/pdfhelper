@@ -4,6 +4,39 @@ use std::borrow::Cow;
 
 use crate::XmlError;
 
+/// The longest reference looked for: `&`, a name or number of up to 31
+/// bytes, and `;`.
+const MAX_REFERENCE: usize = 33;
+
+/// The entities XML predefines.
+const PREDEFINED: [&str; 5] = ["lt", "gt", "amp", "apos", "quot"];
+
+/// The length of the reference that starts with the `&` at `bytes[0]`, up
+/// to and including its `;`; None for a bare ampersand. Only the next
+/// [`MAX_REFERENCE`] bytes are looked at, so text full of ampersands is
+/// read in linear time.
+fn reference_len(bytes: &[u8]) -> Option<usize> {
+    bytes.iter().take(MAX_REFERENCE).position(|&b| b == b';').map(|n| n + 1)
+}
+
+/// Whether `name` can name an entity: letters, digits and `_ : . -` (or
+/// any character beyond ASCII), not starting with a digit, `.` or `-`.
+fn is_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    let start = |b: u8| b.is_ascii_alphabetic() || matches!(b, b'_' | b':') || b >= 0x80;
+    bytes.first().is_some_and(|&b| start(b))
+        && bytes.iter().all(|&b| start(b) || b.is_ascii_digit() || matches!(b, b'.' | b'-'))
+}
+
+/// The name of the entity reference at the start of `raw` when XML does not
+/// predefine it (`&nbsp;` gives `nbsp`), so that a tree can keep it as
+/// written.
+pub(crate) fn unknown_entity(raw: &str) -> Option<&str> {
+    let len = reference_len(raw.as_bytes())?;
+    let name = &raw[1..len - 1];
+    (is_name(name) && !PREDEFINED.contains(&name)).then_some(name)
+}
+
 /// Expand entity and character references, and normalize line ends as an
 /// XML processor must (`\r\n` and lone `\r` become `\n`). `base` is the
 /// input's offset, for error positions.
@@ -28,7 +61,7 @@ pub fn unescape(raw: &str, base: usize) -> Result<Cow<'_, str>, XmlError> {
             }
             b'&' => {
                 out.push_str(&raw[run_start..i]);
-                let Some(semi) = raw[i..].find(';').filter(|&n| n <= 32) else {
+                let Some(semi) = reference_len(&bytes[i..]).map(|len| len - 1) else {
                     // A bare ampersand: malformed, but common in hand-made
                     // files. Keep it.
                     out.push('&');

@@ -1,11 +1,12 @@
 //! A flat file turned into a package.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use doc_xml::{decode_bytes, escape_attr, ns, Event, Ns, Reader, StartTag};
+use doc_xml::ns::{self, Bindings, Namespaces, Ns};
+use doc_xml::{decode_bytes, escape_attr, Event, Reader, StartTag};
 use doc_zip::{crc32, Compression, ZipWriter};
 
-use crate::{base64, declarations, picture_kind, root_mimetype, OdfError};
+use crate::{base64, declare, picture_kind, root_mimetype, OdfError};
 
 /// The parts a package's sections are written to.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -32,32 +33,26 @@ fn parts_of(ns: Ns, local: &str) -> &'static [Part] {
     }
 }
 
-/// Namespace bindings in scope, the innermost element's last.
+/// Namespace bindings in scope, and the identities of the URIs the file
+/// names.
 #[derive(Default)]
 struct Scopes {
-    stack: Vec<Vec<(String, Ns)>>,
+    bindings: Bindings,
+    namespaces: Namespaces,
 }
 
 impl Scopes {
     fn push(&mut self, tag: &StartTag) {
-        self.stack.push(declarations(tag));
+        self.bindings.open();
+        declare(tag, &mut self.bindings, &mut self.namespaces);
     }
 
     fn pop(&mut self) {
-        self.stack.pop();
+        self.bindings.close();
     }
 
     fn resolve(&self, prefix: &str) -> Ns {
-        match prefix {
-            "xml" => return ns::XML,
-            "xmlns" => return ns::XMLNS,
-            _ => {}
-        }
-        self.stack
-            .iter()
-            .rev()
-            .find_map(|scope| scope.iter().rev().find(|(p, _)| p == prefix).map(|(_, n)| *n))
-            .unwrap_or(ns::NONE)
+        self.bindings.resolve(prefix).unwrap_or(ns::NONE)
     }
 
     /// The namespace of an element named `name` here.
@@ -82,7 +77,7 @@ struct Root {
 }
 
 fn read_root(tag: &StartTag, scopes: &mut Scopes) -> Result<Root, OdfError> {
-    let mimetype = root_mimetype(tag).ok_or(OdfError::NotFlat)?;
+    let mimetype = root_mimetype(tag, &scopes.bindings).ok_or(OdfError::NotFlat)?;
     let mut attrs = Vec::new();
     let mut version = None;
     for (name, value) in tag.attrs().filter_map(Result::ok) {
@@ -97,21 +92,19 @@ fn read_root(tag: &StartTag, scopes: &mut Scopes) -> Result<Root, OdfError> {
         }
         attrs.push((name.to_owned(), value.into_owned()));
     }
-    let bound = |prefix: &str| attrs.iter().find(|(n, _)| n.strip_prefix("xmlns:") == Some(prefix)).map(|(_, v)| v.as_str());
+    let declared: HashSet<&str> = attrs.iter().filter_map(|(n, _)| n.strip_prefix("xmlns:")).collect();
     let (xlink, declare_xlink) = match attrs.iter().find_map(|(n, v)| {
         let prefix = n.strip_prefix("xmlns:")?;
-        (Ns::from_uri(v) == ns::XLINK).then(|| prefix.to_owned())
+        (scopes.namespaces.get(v) == Some(ns::XLINK)).then(|| prefix.to_owned())
     }) {
         Some(prefix) => (prefix, false),
         None => {
             // `xlink`, unless the root uses that prefix for something else.
             let prefix = std::iter::once("xlink".to_owned())
                 .chain((1..).map(|n| format!("xlink{n}")))
-                .find(|p| bound(p).is_none())
+                .find(|p| !declared.contains(p.as_str()))
                 .expect("an unused prefix");
-            if let Some(root) = scopes.stack.last_mut() {
-                root.push((prefix.clone(), ns::XLINK));
-            }
+            scopes.bindings.bind(&prefix, ns::XLINK);
             (prefix, true)
         }
     };

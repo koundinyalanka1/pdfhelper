@@ -2,6 +2,8 @@
 
 use std::collections::HashMap;
 use std::io::Read;
+use std::ops::Range;
+use std::sync::{Mutex, PoisonError};
 
 use crate::{cp437, crc32, ZipError, METHOD_DEFLATED, METHOD_STORED};
 
@@ -33,6 +35,41 @@ impl Default for ReadLimits {
     }
 }
 
+/// Bounds on how far an archive's entries may expand when they are read, so
+/// that a small hostile file (a zip bomb) cannot fill memory or keep a phone
+/// busy for minutes. They are checked as entries are read, against the bytes
+/// the entries really inflate to, so a size field that lies cannot get
+/// around them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExpansionLimits {
+    /// Most the archive may expand to, all reads together. Each entry counts
+    /// once, however often it is read.
+    pub max_total_bytes: u64,
+    /// An archive, or an entry, that expands more than this many times its
+    /// compressed size is treated as a zip bomb...
+    pub max_ratio: u64,
+    /// ...once it expands past this many bytes.
+    pub ratio_floor: u64,
+}
+
+impl Default for ExpansionLimits {
+    fn default() -> Self {
+        Self {
+            max_total_bytes: if cfg!(target_pointer_width = "32") { 1 << 30 } else { 4 << 30 },
+            max_ratio: 100,
+            ratio_floor: 256 << 20,
+        }
+    }
+}
+
+impl ExpansionLimits {
+    /// The most `compressed` bytes may expand to before they look like a
+    /// zip bomb.
+    fn expansion_of(&self, compressed: u64) -> u64 {
+        self.max_ratio.saturating_mul(compressed).max(self.ratio_floor)
+    }
+}
+
 /// One file or directory in an archive, as its central directory describes it.
 #[derive(Clone, Debug)]
 pub struct ZipEntry {
@@ -52,6 +89,10 @@ pub struct ZipEntry {
     pub(crate) data_offset: u64,
     /// The name exactly as stored, so a copied entry keeps it.
     pub(crate) raw_name: Vec<u8>,
+    /// Where the extra fields of the local header and of the central
+    /// directory record lie in the archive, so a copied entry keeps them.
+    pub(crate) local_extra: Range<usize>,
+    pub(crate) central_extra: Range<usize>,
 }
 
 impl ZipEntry {
@@ -71,7 +112,17 @@ pub struct ZipArchive {
     exact: HashMap<String, usize>,
     folded: HashMap<String, usize>,
     limits: ReadLimits,
+    expansion: ExpansionLimits,
+    spent: Mutex<Spent>,
     comment: Vec<u8>,
+}
+
+/// What reads have inflated so far, counted against the archive's
+/// expansion budget.
+struct Spent {
+    total: u64,
+    /// Whether each entry has been counted.
+    counted: Vec<bool>,
 }
 
 impl std::fmt::Debug for ZipArchive {
@@ -232,12 +283,17 @@ fn apply_extra(extra: &[u8], raw_name: &[u8], name: &mut String, fields: Zip64Fi
 }
 
 impl ZipArchive {
-    /// Parse an archive with the default [`ReadLimits`].
+    /// Parse an archive with the default [`ReadLimits`] and
+    /// [`ExpansionLimits`].
     pub fn new(data: Vec<u8>) -> Result<Self, ZipError> {
         Self::with_limits(data, ReadLimits::default())
     }
 
     pub fn with_limits(data: Vec<u8>, limits: ReadLimits) -> Result<Self, ZipError> {
+        Self::with_all_limits(data, limits, ExpansionLimits::default())
+    }
+
+    pub fn with_all_limits(data: Vec<u8>, limits: ReadLimits, expansion: ExpansionLimits) -> Result<Self, ZipError> {
         let eocd = find_eocd(&data).ok_or(ZipError::NotZip)?;
         let comment_len = u16_at(&data, eocd + 20).unwrap_or(0) as usize;
         let comment = data[eocd + EOCD_LEN..eocd + EOCD_LEN + comment_len].to_vec();
@@ -308,8 +364,12 @@ impl ZipArchive {
                 dos_date: field16(14),
                 external_attributes: field32(38),
                 version_made_by: field16(4),
-                data_offset: header_offset + shift,
+                data_offset: header_offset
+                    .checked_add(shift)
+                    .ok_or_else(|| corrupt("entry offset overflows"))?,
                 raw_name,
+                local_extra: 0..0,
+                central_extra: extra_start..extra_start + extra_len,
             });
             at = next;
         }
@@ -326,6 +386,8 @@ impl ZipArchive {
             let name_len = u16_at(&data, local + 26).ok_or_else(|| corrupt("truncated local header"))? as u64;
             let extra_len = u16_at(&data, local + 28).ok_or_else(|| corrupt("truncated local header"))? as u64;
             entry.data_offset = local as u64 + LOCAL_LEN as u64 + name_len + extra_len;
+            let extra_start = local + LOCAL_LEN + name_len as usize;
+            entry.local_extra = extra_start..extra_start + extra_len as usize;
             let data_end = entry
                 .data_offset
                 .checked_add(entry.compressed_size)
@@ -341,12 +403,18 @@ impl ZipArchive {
             exact.entry(entry.name.clone()).or_insert(index);
             folded.entry(entry.name.to_ascii_lowercase()).or_insert(index);
         }
+        let spent = Mutex::new(Spent {
+            total: 0,
+            counted: vec![false; entries.len()],
+        });
         Ok(Self {
             data,
             entries,
             exact,
             folded,
             limits,
+            expansion,
+            spent,
             comment,
         })
     }
@@ -387,6 +455,39 @@ impl ZipArchive {
         self.find(name).is_some()
     }
 
+    /// Whether an earlier entry has the same name, so that [`find`] never
+    /// returns this one. A writer that lists a name twice is broken, and
+    /// readers disagree on which copy counts; this one reads the first.
+    ///
+    /// [`find`]: ZipArchive::find
+    pub fn is_duplicate(&self, index: usize) -> bool {
+        self.exact.get(&self.entries[index].name) != Some(&index)
+    }
+
+    /// The names listed more than once, each once, in archive order.
+    pub fn duplicate_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        for (index, entry) in self.entries.iter().enumerate() {
+            if self.is_duplicate(index) && !names.contains(&entry.name) {
+                names.push(entry.name.clone());
+            }
+        }
+        names
+    }
+
+    /// The bytes reads have inflated so far, each entry counted once.
+    pub fn inflated_bytes(&self) -> u64 {
+        self.spent.lock().unwrap_or_else(PoisonError::into_inner).total
+    }
+
+    /// An entry's extra fields as its local header and its central
+    /// directory record hold them.
+    pub(crate) fn extra_fields(&self, index: usize) -> (&[u8], &[u8]) {
+        let entry = &self.entries[index];
+        let field = |range: &Range<usize>| self.data.get(range.clone()).unwrap_or_default();
+        (field(&entry.local_extra), field(&entry.central_extra))
+    }
+
     /// The entry's compressed bytes, exactly as stored.
     pub fn raw_data(&self, index: usize) -> &[u8] {
         let entry = &self.entries[index];
@@ -396,13 +497,20 @@ impl ZipArchive {
 
     /// Decompress an entry, verifying its size and checksum.
     pub fn read(&self, index: usize) -> Result<Vec<u8>, ZipError> {
-        self.read_inner(index, true)
+        self.read_inner(index, true, u64::MAX)
+    }
+
+    /// Decompress an entry, verifying its size and checksum, and refuse it
+    /// as too large when it expands past `max_size` bytes (or past the
+    /// archive's own limits, whichever is smaller).
+    pub fn read_at_most(&self, index: usize, max_size: u64) -> Result<Vec<u8>, ZipError> {
+        self.read_inner(index, true, max_size)
     }
 
     /// Decompress an entry without verifying its size or checksum, to salvage
     /// what a damaged archive still holds.
     pub fn read_unchecked(&self, index: usize) -> Result<Vec<u8>, ZipError> {
-        self.read_inner(index, false)
+        self.read_inner(index, false, u64::MAX)
     }
 
     /// Decompress an entry by name.
@@ -411,44 +519,81 @@ impl ZipArchive {
         self.read(index)
     }
 
-    fn read_inner(&self, index: usize, verify: bool) -> Result<Vec<u8>, ZipError> {
+    /// How many more bytes reading entry `index` may inflate: what is left
+    /// of the archive's budget, or no bound when the entry was counted
+    /// before.
+    fn budget_left(&self, index: usize) -> u64 {
+        let spent = self.spent.lock().unwrap_or_else(PoisonError::into_inner);
+        if spent.counted[index] {
+            return u64::MAX;
+        }
+        let budget = self
+            .expansion
+            .expansion_of(self.data.len() as u64)
+            .min(self.expansion.max_total_bytes);
+        budget.saturating_sub(spent.total)
+    }
+
+    /// Count what reading entry `index` inflated, the first time it is read.
+    fn charge(&self, index: usize, bytes: u64) {
+        let mut spent = self.spent.lock().unwrap_or_else(PoisonError::into_inner);
+        if !spent.counted[index] {
+            spent.counted[index] = true;
+            spent.total = spent.total.saturating_add(bytes);
+        }
+    }
+
+    fn read_inner(&self, index: usize, verify: bool, max_size: u64) -> Result<Vec<u8>, ZipError> {
         let entry = &self.entries[index];
         if entry.is_encrypted() {
             return Err(ZipError::Encrypted(entry.name.clone()));
         }
-        let limit = self.limits.max_entry_size;
-        if verify && entry.size > limit {
-            return Err(ZipError::TooLarge(entry.name.clone()));
+        if !matches!(entry.method, METHOD_STORED | METHOD_DEFLATED) {
+            return Err(ZipError::UnsupportedMethod {
+                name: entry.name.clone(),
+                method: entry.method,
+            });
         }
+        let too_large = || ZipError::TooLarge(entry.name.clone());
+        // The most this read may produce: the entry limit, the caller's
+        // limit, what a real entry of this compressed size could expand
+        // to, and what is left of the archive's budget.
+        let limit = self
+            .limits
+            .max_entry_size
+            .min(max_size)
+            .min(self.expansion.expansion_of(entry.compressed_size))
+            .min(self.budget_left(index));
+        if verify && entry.size > limit {
+            return Err(too_large());
+        }
+        // A verified read stops one byte past the size the directory gives:
+        // that byte already proves the size wrong.
+        let cap = if verify { entry.size } else { limit };
         let raw = self.raw_data(index);
         let out = match entry.method {
             METHOD_STORED => {
                 if raw.len() as u64 > limit {
-                    return Err(ZipError::TooLarge(entry.name.clone()));
+                    return Err(too_large());
                 }
-                raw.to_vec()
-            }
-            METHOD_DEFLATED => {
-                let capacity = entry.size.min(limit).min(64 << 20) as usize;
-                let mut out = Vec::with_capacity(capacity);
-                let decoder = flate2::read::DeflateDecoder::new(raw);
-                match decoder.take(limit + 1).read_to_end(&mut out) {
-                    Ok(_) => {}
-                    Err(_) if !verify && !out.is_empty() => {}
-                    Err(_) => return Err(corrupt(format!("'{}' has damaged compressed data", entry.name))),
-                }
-                if out.len() as u64 > limit {
-                    return Err(ZipError::TooLarge(entry.name.clone()));
-                }
+                let mut out = Vec::new();
+                out.try_reserve_exact(raw.len()).map_err(|_| too_large())?;
+                out.extend_from_slice(raw);
                 out
             }
-            method => {
-                return Err(ZipError::UnsupportedMethod {
-                    name: entry.name.clone(),
-                    method,
-                })
-            }
+            _ => match inflate(raw, cap, entry.size.min(cap)) {
+                Ok(out) => out,
+                Err(Inflate::Overflow) if verify => {
+                    return Err(corrupt(format!("'{}' has the wrong size", entry.name)))
+                }
+                Err(Inflate::Overflow | Inflate::OutOfMemory) => return Err(too_large()),
+                Err(Inflate::Damaged(out)) if !verify && !out.is_empty() => out,
+                Err(Inflate::Damaged(_)) => {
+                    return Err(corrupt(format!("'{}' has damaged compressed data", entry.name)))
+                }
+            },
         };
+        self.charge(index, out.len() as u64);
         if verify {
             if out.len() as u64 != entry.size {
                 return Err(corrupt(format!("'{}' has the wrong size", entry.name)));
@@ -459,4 +604,42 @@ impl ZipArchive {
         }
         Ok(out)
     }
+}
+
+/// Why inflating an entry stopped short.
+enum Inflate {
+    /// The stream holds more than the cap.
+    Overflow,
+    /// There was not enough memory for the bytes inflated so far.
+    OutOfMemory,
+    /// The compressed data is damaged; what came before the damage.
+    Damaged(Vec<u8>),
+}
+
+/// Inflate a raw deflate stream into at most `cap` bytes, reserving `hint`
+/// bytes up front. Memory is reserved with `try_reserve`, so running out of
+/// it is an error rather than an abort.
+fn inflate(raw: &[u8], cap: u64, hint: u64) -> Result<Vec<u8>, Inflate> {
+    // Most entries of a document are small; the hint is capped so that a
+    // lying size field cannot reserve much before any byte inflates.
+    let hint = usize::try_from(hint.min(64 << 20)).unwrap_or(0);
+    let mut out = Vec::new();
+    out.try_reserve_exact(hint).map_err(|_| Inflate::OutOfMemory)?;
+    let mut decoder = flate2::read::DeflateDecoder::new(raw).take(cap.saturating_add(1));
+    // On the heap: the call may be on a small stack.
+    let mut chunk = vec![0u8; 64 << 10];
+    loop {
+        let n = match decoder.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return Err(Inflate::Damaged(out)),
+        };
+        if out.len() as u64 + n as u64 > cap {
+            return Err(Inflate::Overflow);
+        }
+        out.try_reserve(n).map_err(|_| Inflate::OutOfMemory)?;
+        out.extend_from_slice(&chunk[..n]);
+    }
+    Ok(out)
 }
