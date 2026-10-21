@@ -1,0 +1,18 @@
+[submodule "packages/flutter_pdf_core"]
+	path = packages/flutter_pdf_core
+	url = https://github.com/koundinyalanka1/flutter_pdf_core.git
+[submodule "packages/flutter_text_core"]
+	path = packages/flutter_text_core
+	url = https://github.com/koundinyalanka1/flutter_text_core.git
+[submodule "packages/flutter_sheet_core"]
+	path = packages/flutter_sheet_core
+	url = https://github.com/koundinyalanka1/flutter_sheet_core.git
+[submodule "packages/flutter_word_core"]
+	path = packages/flutter_word_core
+	url = https://github.com/koundinyalanka1/flutter_word_core.git
+[submodule "packages/flutter_slide_core"]
+	path = packages/flutter_slide_core
+	url = https://github.com/koundinyalanka1/flutter_slide_core.git
+[submodule "packages/flutter_archive_core"]
+	path = packages/flutter_archive_core
+	url = https://github.com/koundinyalanka1/flutter_archive_core.git

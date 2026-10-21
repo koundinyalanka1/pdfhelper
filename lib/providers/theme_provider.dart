@@ -1,0 +1,387 @@
+import 'dart:io';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:path_provider/path_provider.dart';
+import '../services/notification_service.dart';
+import '../services/public_pdf_save_service.dart';
+import '../utils/file_naming.dart';
+
+class ThemeProvider extends ChangeNotifier {
+  static const _textSelectionTheme = TextSelectionThemeData(
+    cursorColor: Color(0xFF1976D2),
+    selectionHandleColor: Color(0xFF1976D2),
+    selectionColor: Color(0x401976D2),
+  );
+
+  static const String _themeKey = 'isDarkMode';
+  static const String _autoSaveKey = 'autoSave';
+  static const String _saveLocationKey = 'saveLocation';
+  static const String _notificationsKey = 'notifications';
+  static const String _outputQualityKey = 'outputQuality';
+  static const String _skipPreviewKey = 'skipPreview';
+  static const String _searchableScansKey = 'searchableScans';
+
+  bool _isDarkMode = true;
+  bool _isInitialized = false;
+  bool _autoSave = true;
+  bool _notifications =
+      false; // Default to false, will be set based on permission
+  String _saveLocation = 'Downloads';
+  String _outputQuality = 'Maximum';
+  bool _skipPreview = false;
+  bool _searchableScans = true;
+
+  bool get isDarkMode => _isDarkMode;
+  bool get isInitialized => _isInitialized;
+  bool get autoSave => _autoSave;
+  bool get notifications => _notifications;
+  String get saveLocation => _saveLocation;
+  bool get usesPublicStorage => Platform.isAndroid;
+
+  /// Where saves go, as Settings and save messages show it. Without public
+  /// storage the files stay in this app's own folder, whose internal name
+  /// means nothing to anyone, so it is called plain "app storage".
+  String get saveLocationDescription => usesPublicStorage
+      ? '$_saveLocation/DocHelper (device storage)'
+      : 'app storage';
+  String get outputQuality => _outputQuality;
+
+  /// When true and [autoSave] is on, merge/convert skip the preview screen
+  /// and save immediately. Default: false (preview shown).
+  bool get skipPreview => _skipPreview;
+
+  /// When true, text in new scans is recognized (OCR) and added to the PDF
+  /// as an invisible layer, so the scan can be searched and copied from.
+  /// Default: true.
+  bool get searchableScans => _searchableScans;
+
+  /// JPEG quality (1-100) for scan-to-PDF image encoding
+  int get outputQualityAsImageQuality {
+    switch (_outputQuality) {
+      case 'Low':
+        return 50;
+      case 'Medium':
+        return 70;
+      case 'High':
+        return 85;
+      case 'Maximum':
+        return 100;
+      default:
+        return 85;
+    }
+  }
+
+  ThemeProvider() {
+    _loadSettings();
+  }
+
+  Future<void> _loadSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    _isDarkMode = prefs.getBool(_themeKey) ?? true;
+    _autoSave = prefs.getBool(_autoSaveKey) ?? true;
+    _saveLocation = prefs.getString(_saveLocationKey) ?? 'Downloads';
+    _outputQuality = prefs.getString(_outputQualityKey) ?? 'Maximum';
+    _skipPreview = prefs.getBool(_skipPreviewKey) ?? false;
+    _searchableScans = prefs.getBool(_searchableScansKey) ?? true;
+
+    // Check if notification permission is granted
+    // Only enable notifications setting if user has granted permission
+    final hasNotificationPermission = await NotificationService()
+        .hasPermission();
+    final savedNotificationPref = prefs.getBool(_notificationsKey) ?? true;
+    _notifications = hasNotificationPermission && savedNotificationPref;
+
+    // Sync saved preference if permission was revoked
+    if (!hasNotificationPermission && savedNotificationPref) {
+      await prefs.setBool(_notificationsKey, false);
+    }
+
+    _isInitialized = true;
+    _updateSystemUI();
+    notifyListeners();
+  }
+
+  Future<void> toggleTheme(bool isDark) async {
+    if (_isDarkMode == isDark) return;
+
+    _isDarkMode = isDark;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_themeKey, isDark);
+    _updateSystemUI();
+    notifyListeners();
+  }
+
+  Future<void> setAutoSave(bool value) async {
+    if (_autoSave == value) return;
+
+    _autoSave = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_autoSaveKey, value);
+    notifyListeners();
+  }
+
+  Future<void> setSaveLocation(String location) async {
+    if (_saveLocation == location) return;
+
+    _saveLocation = location;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_saveLocationKey, location);
+    notifyListeners();
+  }
+
+  Future<void> setOutputQuality(String quality) async {
+    if (_outputQuality == quality) return;
+
+    _outputQuality = quality;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_outputQualityKey, quality);
+    notifyListeners();
+  }
+
+  Future<void> setSkipPreview(bool value) async {
+    if (_skipPreview == value) return;
+    _skipPreview = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_skipPreviewKey, value);
+    notifyListeners();
+  }
+
+  Future<void> setSearchableScans(bool value) async {
+    if (_searchableScans == value) return;
+    _searchableScans = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_searchableScansKey, value);
+    notifyListeners();
+  }
+
+  /// Set notifications - requests permission if turning on
+  /// Returns true if setting was changed successfully
+  Future<bool> setNotifications(bool value) async {
+    if (_notifications == value) return true;
+
+    // If turning on, request permission first
+    if (value) {
+      final granted = await NotificationService().requestPermission();
+      if (!granted) {
+        // Permission denied, don't turn on
+        return false;
+      }
+    }
+
+    _notifications = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_notificationsKey, value);
+    notifyListeners();
+    return true;
+  }
+
+  /// Local working directory. Android also publishes a durable public copy
+  /// through [autoSaveFile]; this directory alone is not a public save.
+  Future<String?> getAutoSavePath() async =>
+      _autoSave ? _workingSavePath() : null;
+
+  Future<String> _workingSavePath() async {
+    final docDir = await getApplicationDocumentsDirectory();
+    final subfolder = _saveLocation == 'Documents' ? 'Documents' : 'Downloads';
+    return '${docDir.path}/PDFHelper/$subfolder';
+  }
+
+  /// Auto-save a file to the configured location.
+  ///
+  /// Android publishes to shared storage and retains the source as a working
+  /// file for viewing and sharing. Other platforms move it into the configured
+  /// app document folder. The return value is always a usable local path.
+  ///
+  /// [fileName] is the title the user typed. Without one the file keeps the
+  /// old `<prefix>_<millis>.pdf` form, which is what every tool did before
+  /// naming existed.
+  Future<String?> autoSaveFile(
+    String sourcePath,
+    String prefix, {
+    String? fileName,
+  }) async {
+    if (!_autoSave) return null;
+    return saveFile(sourcePath, prefix, fileName: fileName);
+  }
+
+  /// An explicit Save always saves, even when automatic saving is disabled.
+  Future<String> saveFile(
+    String sourcePath,
+    String prefix, {
+    String? fileName,
+  }) async {
+    if (usesPublicStorage) {
+      final name = withPdfExtension(
+        sanitizeFileName(
+          fileName?.trim().isNotEmpty == true
+              ? fileName!
+              : sourcePath.split(Platform.pathSeparator).last,
+        ),
+      );
+      // Outputs already live in the app's documents directory. Keep this
+      // working file usable by the native engine even under scoped storage;
+      // the public copy survives uninstall independently of it.
+      await PublicPdfSaveService.save(
+        sourcePath: sourcePath,
+        displayName: name,
+        location: _saveLocation,
+      );
+      return sourcePath;
+    }
+
+    try {
+      final savePath = await _workingSavePath();
+
+      // Create directory if it doesn't exist
+      final saveDir = Directory(savePath);
+      if (!await saveDir.exists()) {
+        await saveDir.create(recursive: true);
+      }
+
+      // A typed name wins over the timestamped one, de-duplicated against
+      // whatever is already in the save folder.
+      final String destPath;
+      if (fileName != null && fileName.trim().isNotEmpty) {
+        destPath = await uniqueFilePath(
+          savePath,
+          withPdfExtension(sanitizeFileName(fileName)),
+        );
+      } else {
+        final timestamp = DateTime.now().millisecondsSinceEpoch;
+        destPath = '$savePath/${prefix}_$timestamp.pdf';
+      }
+
+      // Copy file to save location, then drop the source.
+      final sourceFile = File(sourcePath);
+      await sourceFile.copy(destPath);
+      try {
+        await sourceFile.delete();
+      } catch (e) {
+        // Non-fatal: caller still has a usable saved copy.
+        debugPrint('Auto-save: could not delete source $sourcePath: $e');
+      }
+
+      return destPath;
+    } catch (e) {
+      debugPrint('Error auto-saving file: $e');
+      rethrow;
+    }
+  }
+
+  void _updateSystemUI() {
+    SystemChrome.setSystemUIOverlayStyle(
+      SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: _isDarkMode
+            ? Brightness.light
+            : Brightness.dark,
+        systemNavigationBarColor: _isDarkMode
+            ? const Color(0xFF16213E)
+            : Colors.white,
+        systemNavigationBarIconBrightness: _isDarkMode
+            ? Brightness.light
+            : Brightness.dark,
+      ),
+    );
+  }
+
+  // Dark Theme
+  ThemeData get darkTheme => ThemeData(
+    useMaterial3: true,
+    brightness: Brightness.dark,
+    textSelectionTheme: _textSelectionTheme,
+    colorScheme: ColorScheme.fromSeed(
+      seedColor: const Color(0xFFE94560),
+      brightness: Brightness.dark,
+    ),
+    scaffoldBackgroundColor: const Color(0xFF1A1A2E),
+    appBarTheme: const AppBarTheme(
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      centerTitle: true,
+      iconTheme: IconThemeData(color: Colors.white),
+      titleTextStyle: TextStyle(
+        color: Colors.white,
+        fontSize: 20,
+        fontWeight: FontWeight.w600,
+      ),
+    ),
+    cardColor: const Color(0xFF16213E),
+    dividerColor: Colors.white10,
+  );
+
+  // Light Theme
+  ThemeData get lightTheme => ThemeData(
+    useMaterial3: true,
+    brightness: Brightness.light,
+    textSelectionTheme: _textSelectionTheme,
+    colorScheme: ColorScheme.fromSeed(
+      seedColor: const Color(0xFFE94560),
+      brightness: Brightness.light,
+    ),
+    scaffoldBackgroundColor: const Color(0xFFF5F5F7),
+    appBarTheme: const AppBarTheme(
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      centerTitle: true,
+      iconTheme: IconThemeData(color: Color(0xFF1A1A2E)),
+      titleTextStyle: TextStyle(
+        color: Color(0xFF1A1A2E),
+        fontSize: 20,
+        fontWeight: FontWeight.w600,
+      ),
+    ),
+    cardColor: Colors.white,
+    dividerColor: Colors.black12,
+  );
+
+  ThemeData get currentTheme => _isDarkMode ? darkTheme : lightTheme;
+}
+
+/// The palette a screen paints with, for one brightness.
+class AppColors {
+  final bool isDark;
+
+  AppColors(this.isDark);
+
+  /// The palette for the current theme. **Call only from `build`.**
+  ///
+  /// This watches the provider, and `context.watch()` asserts unless a build
+  /// is in progress. That is why screens hold their colours in a *field*
+  /// assigned at the top of `build`, rather than behind a getter that calls
+  /// this on demand: a getter looks harmless until some gesture handler,
+  /// popup `itemBuilder` or async callback reads it outside the build phase,
+  /// and then it throws — only on that one path, only once someone taps it.
+  ///
+  /// Assigning once per build keeps the screen repainting on a theme change
+  /// while making the colours safe to read from anywhere in the class.
+  static AppColors of(BuildContext context) =>
+      AppColors(context.watch<ThemeProvider>().isDarkMode);
+
+  Color get background =>
+      isDark ? const Color(0xFF1A1A2E) : const Color(0xFFF5F5F7);
+  Color get cardBackground => isDark ? const Color(0xFF16213E) : Colors.white;
+  Color get textPrimary => isDark ? Colors.white : const Color(0xFF1A1A2E);
+
+  /// Subtitles and supporting text: 6.7:1 on the light background, 8.9:1
+  /// on the dark one.
+  Color get textSecondary => isDark ? Colors.white70 : const Color(0xA6000000);
+
+  /// Hints, footers and other quiet text. Still at least 4.5:1, the WCAG
+  /// minimum for small text, on both themes' backgrounds and cards (5.2:1
+  /// light, 5.6:1 dark), so it stays readable; it is quieter than
+  /// [textSecondary], never faint.
+  Color get textTertiary => isDark ? Colors.white54 : const Color(0x94000000);
+  Color get divider => isDark ? Colors.white10 : Colors.black12;
+
+  /// The outline of a colour swatch: strong enough that black, white and
+  /// pale swatches all show against the sheet behind them.
+  Color get swatchBorder => isDark ? Colors.white54 : Colors.black38;
+  Color get accent => const Color(0xFFE94560);
+  Color get accentSecondary => const Color(0xFF00D9FF);
+  Color get bottomNavBackground =>
+      isDark ? const Color(0xFF16213E) : Colors.white;
+  Color get shadowColor => isDark ? Colors.black26 : Colors.black12;
+}

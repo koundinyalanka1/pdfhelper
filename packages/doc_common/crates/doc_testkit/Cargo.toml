@@ -1,0 +1,9 @@
+[package]
+name = "doc_testkit"
+version = "0.1.0"
+edition = "2021"
+license = "Proprietary"
+publish = false
+
+[lib]
+path = "src/lib.rs"

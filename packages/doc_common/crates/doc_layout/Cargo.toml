@@ -1,0 +1,10 @@
+[package]
+name = "doc_layout"
+version = "0.1.0"
+edition = "2021"
+license = "Proprietary"
+description = "Paragraph layout from scratch: fonts chosen with fallback, line breaking, alignment, tabs and spacing, drawn into PDF pages."
+
+[dependencies]
+doc_font = { path = "../doc_font" }
+doc_pdf = { path = "../doc_pdf" }

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "420253549592",
+    "project_id": "pdfhelper",
+    "storage_bucket": "pdfhelper.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:420253549592:android:903e68ddb93c3d92662f6d",
+        "android_client_info": {
+          "package_name": "com.yourmateapps.pdfhelper"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCRJEkIJInMyXKsFUQRVJi0DfhYhjvUwI0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

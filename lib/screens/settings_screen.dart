@@ -1,0 +1,716 @@
+import 'dart:math' as math;
+
+import 'package:flutter/material.dart';
+import 'package:package_info_plus/package_info_plus.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
+import '../providers/theme_provider.dart';
+import '../services/permission_service.dart';
+import '../services/ads_service.dart';
+import '../widgets/settings_widgets.dart';
+import 'backups_screen.dart';
+
+class SettingsScreen extends StatefulWidget {
+  const SettingsScreen({super.key});
+
+  @override
+  State<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends State<SettingsScreen> {
+  /// The settings on display, captured at the top of [build].
+  ///
+  /// A field rather than a `context.watch()` getter — see [AppColors.of].
+  /// `late` states the rule the screen already follows: everything below is
+  /// read while building. Writes never come through here; each toggle calls
+  /// `context.read<ThemeProvider>()` at the moment it is tapped.
+  late ThemeProvider _settings;
+  AppColors _colors = AppColors(false);
+
+  bool get _isDarkMode => _settings.isDarkMode;
+  bool get _autoSave => _settings.autoSave;
+  bool get _notifications => _settings.notifications;
+  String get _saveLocation => _settings.saveLocation;
+  String get _outputQuality => _settings.outputQuality;
+  bool get _skipPreview => _settings.skipPreview;
+  bool get _searchableScans => _settings.searchableScans;
+
+  String _appVersion = '';
+
+  @override
+  void initState() {
+    super.initState();
+    // A version string is decoration; failing to read one must not take the
+    // whole Settings tab down with an unhandled async error.
+    PackageInfo.fromPlatform()
+        .then((info) {
+          if (mounted) {
+            setState(() => _appVersion = '${info.version}+${info.buildNumber}');
+          }
+        })
+        .catchError((Object e) {
+          debugPrint('[Settings] could not read package info: $e');
+        });
+  }
+
+  Future<void> _handleNotificationToggle(bool value) async {
+    final provider = context.read<ThemeProvider>();
+    if (!value) {
+      await provider.setNotifications(false);
+      return;
+    }
+
+    // Request with rationale and settings guidance when enabling
+    final granted = await PermissionService.requestWithRationale(
+      context: context,
+      permission: Permission.notification,
+      rationaleTitle: 'Notification Permission',
+      rationaleMessage:
+          'Get notified when PDF merge, split, or scan operations complete.',
+      deniedTitle: 'Notification Access Required',
+      deniedMessage:
+          'Notification permission was denied. Enable it in Settings to get completion alerts.',
+      settingsButtonText: 'Open Settings',
+      cancelButtonText: 'Not Now',
+    );
+
+    if (granted && mounted) {
+      await context.read<ThemeProvider>().setNotifications(true);
+    }
+  }
+
+  static const String _rateAppUrl =
+      'https://play.google.com/store/apps/details?id=com.yourmateapps.pdfhelper';
+  static const String _privacyPolicyUrl =
+      'https://yourmateapps.github.io/pdfhelper/privacy-policy.html';
+
+  Future<void> _launchExternalUrl(String url, String label) async {
+    final uri = Uri.parse(url);
+    try {
+      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!ok && mounted) {
+        _showSnackBar('Could not open $label');
+      }
+    } catch (e) {
+      debugPrint('Error launching $label: $e');
+      if (mounted) {
+        _showSnackBar('Could not open $label');
+      }
+    }
+  }
+
+  void _showSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: const Color(0xFFE94560),
+      ),
+    );
+  }
+
+  /// Text on the app info card. Its gradient is see-through, so it is dark
+  /// on the dark theme and pale on the light one, where white text measured
+  /// 2.5:1; the theme's own text colour reads at 5:1 or better on both.
+  Color get _infoCardText =>
+      _colors.isDark ? Colors.white : _colors.textPrimary;
+
+  @override
+  Widget build(BuildContext context) {
+    _settings = context.watch<ThemeProvider>();
+    _colors = AppColors(_settings.isDarkMode);
+    return Scaffold(
+      backgroundColor: _colors.background,
+      appBar: AppBar(
+        backgroundColor: _colors.cardBackground,
+        elevation: 0,
+        // A destination in the bottom bar, not a pushed route: there is
+        // nothing above it to go back to.
+        automaticallyImplyLeading: false,
+        title: Text(
+          'Settings',
+          style: TextStyle(
+            color: _colors.textPrimary,
+            fontSize: 20,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        centerTitle: true,
+      ),
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // App info card
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(25),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      const Color(0xFFE94560).withValues(alpha: 0.3),
+                      const Color(0xFF0F3460).withValues(alpha: 0.5),
+                    ],
+                  ),
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: [
+                    BoxShadow(
+                      color: _colors.shadowColor,
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(15),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE94560),
+                        borderRadius: BorderRadius.circular(15),
+                      ),
+                      child: const Icon(
+                        Icons.description_rounded,
+                        color: Colors.white,
+                        size: 35,
+                      ),
+                    ),
+                    const SizedBox(width: 20),
+                    // Expanded so a large text size wraps the name rather
+                    // than pushing it off the card.
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'DocHelper',
+                            style: TextStyle(
+                              color: _infoCardText,
+                              fontSize: 22,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 5),
+                          Text(
+                            _appVersion.isEmpty ? '' : 'Version $_appVersion',
+                            style: TextStyle(
+                              color: _infoCardText,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 30),
+
+              // Appearance settings
+              SettingsSectionHeader(title: 'Appearance', colors: _colors),
+              const SizedBox(height: 15),
+              SettingsCard(colors: _colors, children: [_buildThemeTile()]),
+              const SizedBox(height: 25),
+
+              // General settings
+              SettingsSectionHeader(title: 'General', colors: _colors),
+              const SizedBox(height: 15),
+              SettingsCard(
+                colors: _colors,
+                children: [
+                  _buildSwitchTile(
+                    'Auto Save',
+                    'Save to ${_settings.saveLocationDescription}',
+                    Icons.save_rounded,
+                    _autoSave,
+                    (value) => context.read<ThemeProvider>().setAutoSave(value),
+                  ),
+                  SettingsDivider(colors: _colors),
+                  _buildSwitchTile(
+                    'Notifications',
+                    _notifications
+                        ? 'Get notified when operations complete'
+                        : 'Tap to enable notifications',
+                    Icons.notifications_rounded,
+                    _notifications,
+                    (value) => _handleNotificationToggle(value),
+                  ),
+                  SettingsDivider(colors: _colors),
+                  _buildSwitchTile(
+                    'Skip Preview',
+                    _skipPreview
+                        ? 'Save merged/scanned PDFs immediately'
+                        : 'Preview before saving',
+                    Icons.flash_on_rounded,
+                    _skipPreview,
+                    (value) =>
+                        context.read<ThemeProvider>().setSkipPreview(value),
+                  ),
+                  SettingsDivider(colors: _colors),
+                  _buildActionTile(
+                    'Backups',
+                    'Earlier versions of documents you saved',
+                    Icons.history_rounded,
+                    () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const BackupsScreen(),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 25),
+
+              // Output settings
+              SettingsSectionHeader(title: 'Output', colors: _colors),
+              const SizedBox(height: 15),
+              SettingsCard(
+                colors: _colors,
+                children: [
+                  _buildDropdownTile(
+                    'Output Quality',
+                    'Select PDF quality',
+                    Icons.high_quality_rounded,
+                    _outputQuality,
+                    ['Low', 'Medium', 'High', 'Maximum'],
+                    (value) =>
+                        context.read<ThemeProvider>().setOutputQuality(value!),
+                  ),
+                  SettingsDivider(colors: _colors),
+                  _buildSwitchTile(
+                    'Searchable Scans',
+                    _searchableScans
+                        ? 'Recognize the text in new scans (OCR)'
+                        : 'Save scans as images only',
+                    Icons.document_scanner_rounded,
+                    _searchableScans,
+                    (value) =>
+                        context.read<ThemeProvider>().setSearchableScans(value),
+                  ),
+                  SettingsDivider(colors: _colors),
+                  _buildDropdownTile(
+                    'Save Location',
+                    'Auto-save destination',
+                    Icons.folder_rounded,
+                    _saveLocation,
+                    ['Downloads', 'Documents'],
+                    (value) =>
+                        context.read<ThemeProvider>().setSaveLocation(value!),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 25),
+
+              // About section
+              SettingsSectionHeader(title: 'About', colors: _colors),
+              const SizedBox(height: 15),
+              SettingsCard(
+                colors: _colors,
+                children: [
+                  _buildActionTile(
+                    'Rate App',
+                    'Love the app? Rate us!',
+                    Icons.star_rounded,
+                    () => _launchExternalUrl(_rateAppUrl, 'Rate App'),
+                  ),
+                  SettingsDivider(colors: _colors),
+                  ValueListenableBuilder<bool>(
+                    valueListenable: AdsService.instance.privacyOptionsRequired,
+                    builder: (context, required, _) => !required
+                        ? const SizedBox.shrink()
+                        : Column(
+                            children: [
+                              _buildActionTile(
+                                'Ad privacy choices',
+                                'Review your advertising consent',
+                                Icons.tune_rounded,
+                                () async {
+                                  try {
+                                    await AdsService.instance
+                                        .showPrivacyOptions();
+                                  } catch (_) {
+                                    if (mounted) {
+                                      _showSnackBar(
+                                        'Could not open privacy choices. Try again.',
+                                      );
+                                    }
+                                  }
+                                },
+                              ),
+                              SettingsDivider(colors: _colors),
+                            ],
+                          ),
+                  ),
+                  _buildActionTile(
+                    'Privacy Policy',
+                    'Read our privacy policy',
+                    Icons.privacy_tip_rounded,
+                    () =>
+                        _launchExternalUrl(_privacyPolicyUrl, 'Privacy Policy'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 30),
+
+              // Footer
+              Center(
+                child: Text(
+                  'Made with ❤️ for PDF lovers',
+                  style: TextStyle(color: _colors.textTertiary, fontSize: 13),
+                ),
+              ),
+              const SizedBox(height: 20),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildThemeTile() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: const Color(0xFFE94560).withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(
+              _isDarkMode ? Icons.dark_mode_rounded : Icons.light_mode_rounded,
+              color: const Color(0xFFE94560),
+              size: 22,
+            ),
+          ),
+          const SizedBox(width: 15),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Theme',
+                  style: TextStyle(
+                    color: _colors.textPrimary,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  _isDarkMode ? 'Dark mode enabled' : 'Light mode enabled',
+                  style: TextStyle(color: _colors.textSecondary, fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+          // Theme toggle buttons
+          Container(
+            decoration: BoxDecoration(
+              color: _colors.divider,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _buildThemeButton(
+                  label: 'Light theme',
+                  icon: Icons.light_mode_rounded,
+                  isSelected: !_isDarkMode,
+                  onTap: () => context.read<ThemeProvider>().toggleTheme(false),
+                ),
+                _buildThemeButton(
+                  label: 'Dark theme',
+                  icon: Icons.dark_mode_rounded,
+                  isSelected: _isDarkMode,
+                  onTap: () => context.read<ThemeProvider>().toggleTheme(true),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// One half of the light/dark toggle: 48 dp square, the smallest target
+  /// Android's accessibility guidelines allow, and named for screen readers,
+  /// which otherwise announce an unlabelled button.
+  Widget _buildThemeButton({
+    required String label,
+    required IconData icon,
+    required bool isSelected,
+    required VoidCallback onTap,
+  }) {
+    return Semantics(
+      label: label,
+      button: true,
+      selected: isSelected,
+      inMutuallyExclusiveGroup: true,
+      child: GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: isSelected ? const Color(0xFFE94560) : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(
+            icon,
+            size: 20,
+            color: isSelected ? Colors.white : _colors.textSecondary,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSwitchTile(
+    String title,
+    String subtitle,
+    IconData icon,
+    bool value,
+    Function(bool) onChanged,
+  ) {
+    // One node for screen readers, as a SwitchListTile is: the switch is
+    // announced with its title and subtitle rather than as "switch, off".
+    return MergeSemantics(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFE94560).withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(icon, color: const Color(0xFFE94560), size: 22),
+            ),
+            const SizedBox(width: 15),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      color: _colors.textPrimary,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      color: _colors.textSecondary,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Switch(
+              value: value,
+              onChanged: onChanged,
+              activeThumbColor: const Color(0xFFE94560),
+              activeTrackColor: const Color(0xFFE94560).withValues(alpha: 0.4),
+              inactiveThumbColor: _colors.textSecondary,
+              inactiveTrackColor: _colors.divider,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// The style of a dropdown's choices.
+  TextStyle get _dropdownStyle =>
+      TextStyle(color: _colors.textPrimary, fontSize: 13);
+
+  /// How wide a dropdown of [options] is: the widest option at the current
+  /// text size, plus the arrow and the padding around it.
+  double _dropdownWidth(BuildContext context, List<String> options) {
+    final style = DefaultTextStyle.of(context).style.merge(_dropdownStyle);
+    var widest = 0.0;
+    for (final option in options) {
+      final painter = TextPainter(
+        text: TextSpan(text: option, style: style),
+        textScaler: MediaQuery.textScalerOf(context),
+        textDirection: Directionality.of(context),
+        maxLines: 1,
+      )..layout();
+      widest = math.max(widest, painter.width);
+      painter.dispose();
+    }
+    // The arrow is 20 wide; the box pads 12 on each side; 4 spare.
+    return widest + 20 + 24 + 4;
+  }
+
+  /// The narrowest the title and subtitle may get beside a dropdown before
+  /// the dropdown moves under them instead.
+  static const double _minTitleWidth = 96;
+
+  Widget _buildDropdownTile(
+    String title,
+    String subtitle,
+    IconData icon,
+    String value,
+    List<String> options,
+    Function(String?) onChanged,
+  ) {
+    final titles = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: TextStyle(
+            color: _colors.textPrimary,
+            fontSize: 15,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          subtitle,
+          style: TextStyle(color: _colors.textSecondary, fontSize: 12),
+        ),
+      ],
+    );
+    Widget dropdown(double width) => Container(
+      width: width,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: _colors.divider,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: DropdownButton<String>(
+        value: value,
+        onChanged: onChanged,
+        underline: const SizedBox(),
+        isDense: true,
+        // Fills the width it is given, so a choice too long for a narrow
+        // phone at a large text size is cut short instead of overflowing.
+        isExpanded: true,
+        dropdownColor: _colors.cardBackground,
+        style: _dropdownStyle,
+        icon: Icon(
+          Icons.keyboard_arrow_down_rounded,
+          color: _colors.textSecondary,
+          size: 20,
+        ),
+        items: options.map((option) {
+          return DropdownMenuItem(
+            value: option,
+            child: Text(option, maxLines: 1, overflow: TextOverflow.ellipsis),
+          );
+        }).toList(),
+      ),
+    );
+    // One node for screen readers: the title is read with the choice.
+    return MergeSemantics(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF00D9FF).withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(icon, color: const Color(0xFF00D9FF), size: 22),
+            ),
+            const SizedBox(width: 15),
+            Expanded(
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final room = constraints.maxWidth;
+                  final width = _dropdownWidth(context, options);
+                  if (room - width - 12 >= _minTitleWidth) {
+                    return Row(
+                      children: [
+                        Expanded(child: titles),
+                        const SizedBox(width: 12),
+                        dropdown(width),
+                      ],
+                    );
+                  }
+                  // With large text or a narrow phone, side by side would
+                  // squeeze the title to a letter a line, or overflow.
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      titles,
+                      const SizedBox(height: 8),
+                      dropdown(math.min(width, room)),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildActionTile(
+    String title,
+    String subtitle,
+    IconData icon,
+    VoidCallback onTap,
+  ) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(20),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFC107).withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(icon, color: const Color(0xFFFFC107), size: 22),
+            ),
+            const SizedBox(width: 15),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      color: _colors.textPrimary,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      color: _colors.textSecondary,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(Icons.chevron_right_rounded, color: _colors.textTertiary),
+          ],
+        ),
+      ),
+    );
+  }
+}

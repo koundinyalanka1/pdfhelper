@@ -1,0 +1,606 @@
+import 'dart:async';
+import 'dart:collection';
+import 'dart:isolate';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
+
+import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:flutter_pdf_core/flutter_pdf_core.dart';
+
+import '../utils/async_limiter.dart';
+import '../utils/error_logger.dart';
+
+/// Page rasterization, backed entirely by `flutter_pdf_core`'s Rust renderer.
+///
+/// This is the app's only source of page pixels. It exists as a separate
+/// service (rather than calls scattered through the screens) so that the
+/// renderer stays swappable and so every caller shares one bounded cache —
+/// page bitmaps are by far the largest thing this app holds in memory.
+///
+/// Pages come back as PNG bytes: the native side encodes them, Flutter decodes
+/// them off the UI isolate, and the result is a plain `Uint8List` the garbage
+/// collector reclaims on its own and a cache can hold compactly. A zoomed-in
+/// region is the exception ([renderRegion]): it is never cached and is shown
+/// the moment it arrives, so it comes as raw pixels made straight into a
+/// `ui.Image`, which its one holder disposes.
+class PdfRaster {
+  PdfRaster._();
+
+  /// Bound both count and encoded bytes: photo-heavy pages can be several
+  /// megabytes each even when there are only a few entries.
+  static const int _maxCacheEntries = 40;
+  static const int _maxCacheBytes = 24 * 1024 * 1024;
+  static final LinkedHashMap<_RenderKey, Uint8List> _cache = LinkedHashMap();
+
+  /// Thumbnail long edge, in pixels. Sized for grid cells, which are never
+  /// shown above ~180 logical px.
+  static const int thumbnailSize = 420;
+
+  /// Fallback long edge for a library cover when the caller cannot measure
+  /// its tile. Real callers pass the tile's size in *device* pixels — see
+  /// [libraryCover] — because a cover rendered at logical-pixel size looks
+  /// soft on every phone made in the last decade.
+  static const int libraryThumbnailSize = 240;
+
+  /// Cover requests are rounded up to a multiple of this before rendering, so
+  /// every tile in a grid shares one cache entry instead of each asking for
+  /// its own slightly different size.
+  static const int _coverSizeStep = 96;
+
+  /// Covers are larger now that they are rendered at device resolution, so
+  /// fewer are held.
+  static const int _maxLibraryCacheEntries = 70;
+  static const int _maxLibraryCacheBytes = 16 * 1024 * 1024;
+  static final LinkedHashMap<
+    ({String path, int modifiedMs, int size, String password}),
+    Uint8List?
+  >
+  _libraryCache = LinkedHashMap();
+
+  /// Renders are serialized to three at a time.
+  ///
+  /// Every render hands off to `Isolate.run`, so an unthrottled grid would
+  /// spawn one isolate per visible tile — dozens at once during a fling, each
+  /// holding a decoded page. Three keeps the queue saturated without the
+  /// memory spike.
+  static final AsyncLimiter _renders = AsyncLimiter(3);
+
+  /// How long one render may take before it is cancelled and given up on.
+  ///
+  /// The engine stops drawing a page after about twenty seconds and returns
+  /// what it drew, with a "page too complex" warning the viewer shows. This
+  /// is for what it cannot stop by then. Either way the render ends: a page
+  /// past it comes back null, so the viewer shows its "Could not display
+  /// page" placeholder with Retry instead of a spinner that never stops, and
+  /// the render's turn passes to the next page rather than holding one of
+  /// the three for good.
+  @visibleForTesting
+  static Duration renderTimeout = PdfCore.defaultRenderTimeout;
+
+  /// Render page [pageIndex] (0-based) to PNG, fitted inside a
+  /// [longEdge]-pixel box.
+  ///
+  /// Returns null rather than throwing when the page cannot be rendered, so a
+  /// single bad page never takes down a grid — unless [throwOnError] is set,
+  /// which a foreground viewer wants so it can explain itself (and, for an
+  /// encrypted file, ask for the password). A page that takes longer than
+  /// [renderTimeout] is one that cannot be rendered (`TIMEOUT`).
+  static Future<Uint8List?> renderPage(
+    String path,
+    int pageIndex, {
+    int longEdge = thumbnailSize,
+    String password = '',
+    bool useCache = true,
+    bool throwOnError = false,
+  }) async => (await renderPageWithWarnings(
+    path,
+    pageIndex,
+    longEdge: longEdge,
+    password: password,
+    useCache: useCache,
+    throwOnError: throwOnError,
+  ))?.bytes;
+
+  /// Warnings travel with each result even when its bitmap is not cached.
+  ///
+  /// The page is fitted inside a [width] x [height] pixel box when both are
+  /// given, otherwise inside a [longEdge]-pixel square. A viewer passes the
+  /// page's size on screen in device pixels (see `pageRenderSize`): fitting
+  /// a portrait page into a square of its *width* rendered it at 70% of the
+  /// screen's resolution and stretched it, which is most of why pages looked
+  /// soft next to Drive.
+  ///
+  /// [isWanted] is asked when the render's turn comes: a page that has
+  /// scrolled away by then is skipped (null), so a fling does not leave the
+  /// pages now on screen waiting behind every page it passed.
+  static Future<PdfRenderedPng?> renderPageWithWarnings(
+    String path,
+    int pageIndex, {
+    int longEdge = thumbnailSize,
+    int? width,
+    int? height,
+    String password = '',
+    bool useCache = true,
+    bool throwOnError = false,
+    bool Function()? isWanted,
+  }) async {
+    final boxWidth = width ?? longEdge;
+    final boxHeight = height ?? longEdge;
+    final key = (
+      path: path,
+      page: pageIndex,
+      width: boxWidth,
+      height: boxHeight,
+      password: password,
+    );
+    if (useCache) {
+      final hit = _cache.remove(key);
+      if (hit != null) {
+        _cache[key] = hit; // refresh LRU position
+        return PdfRenderedPng(hit, _warnings[key] ?? const []);
+      }
+    }
+    try {
+      final rendered = await _renders.run(() async {
+        if (isWanted != null && !isWanted()) return null;
+        return PdfCore.renderPagePngWithWarningsAsync(
+          path,
+          pageIndex,
+          width: boxWidth,
+          height: boxHeight,
+          password: password,
+          timeout: renderTimeout,
+        );
+      });
+      if (rendered == null) return null;
+      // Warnings are held only for cached renders, so that they are evicted
+      // with the bitmap they describe. Uncached renders — every library cover,
+      // and one-off zoom renders — would otherwise accumulate forever.
+      if (useCache) {
+        if (rendered.warnings.isEmpty) {
+          _warnings.remove(key);
+        } else {
+          _warnings[key] = rendered.warnings;
+        }
+        _store(key, rendered.bytes);
+      }
+      return rendered;
+    } on PdfException catch (e) {
+      logError('PdfRaster.renderPage', '${e.code}: ${e.message}');
+      if (throwOnError) rethrow;
+      return null;
+    } catch (e) {
+      logError('PdfRaster.renderPage', e);
+      if (throwOnError) rethrow;
+      return null;
+    }
+  }
+
+  /// Notes from the most recent render of a page, keyed the same way the
+  /// bitmap cache is.
+  ///
+  /// A page can render and still not be exactly what the document says — a
+  /// substituted font, an image in a codec this build cannot read. The viewer
+  /// uses this to tell the reader so, instead of passing off an approximation
+  /// as the real thing.
+  static final Map<_RenderKey, List<String>> _warnings = {};
+
+  /// Warnings recorded for a page already rendered, empty when there are none.
+  static List<String> warningsFor(
+    String path,
+    int pageIndex, {
+    int longEdge = thumbnailSize,
+    int? width,
+    int? height,
+    String password = '',
+  }) =>
+      _warnings[(
+        path: path,
+        page: pageIndex,
+        width: width ?? longEdge,
+        height: height ?? longEdge,
+        password: password,
+      )] ??
+      const [];
+
+  /// Whether the engine can render just part of a page ([renderRegion]).
+  static bool get canRenderRegions {
+    try {
+      return PdfCore.canRenderRegions;
+    } catch (_) {
+      // No native library at all (widget tests): nothing renders anyway.
+      return false;
+    }
+  }
+
+  /// Render only part of page [pageIndex] (0-based): the page laid out to fit
+  /// a [pageWidth] x [pageHeight] pixel box, and of that only the [width] x
+  /// [height] pixels at ([x], [y]), clipped to the page.
+  ///
+  /// This is what keeps a zoomed page sharp: the part on screen at the
+  /// screen's resolution, rather than the whole page at a size that runs to
+  /// hundreds of megabytes. Never cached — the next pan or zoom wants a
+  /// different region. Null when it cannot be rendered, or when [isWanted]
+  /// says the region is stale by the time its turn comes.
+  ///
+  /// The caller owns the image and must dispose it. Raw pixels skip a PNG
+  /// encode and decode that on a phone took longer than drawing a scanned
+  /// page's region; an engine without them falls back to PNG.
+  static Future<PdfRegionImage?> renderRegion(
+    String path,
+    int pageIndex, {
+    required int pageWidth,
+    required int pageHeight,
+    required int x,
+    required int y,
+    required int width,
+    required int height,
+    String password = '',
+    bool Function()? isWanted,
+  }) async {
+    try {
+      final Object? rendered = await _renders.run(() async {
+        if (isWanted != null && !isWanted()) return null;
+        if (PdfCore.canRenderRegionPixels) {
+          return PdfCore.renderPageRegionRgbaWithWarningsAsync(
+            path,
+            pageIndex,
+            pageWidth: pageWidth,
+            pageHeight: pageHeight,
+            x: x,
+            y: y,
+            width: width,
+            height: height,
+            password: password,
+            timeout: renderTimeout,
+          );
+        }
+        return PdfCore.renderPageRegionPngWithWarningsAsync(
+          path,
+          pageIndex,
+          pageWidth: pageWidth,
+          pageHeight: pageHeight,
+          x: x,
+          y: y,
+          width: width,
+          height: height,
+          password: password,
+          timeout: renderTimeout,
+        );
+      });
+      // Made into an image after the render has given up its turn.
+      return switch (rendered) {
+        PdfRenderedPage() => PdfRegionImage(
+          await _imageFromPixels(rendered),
+          rendered.warnings,
+        ),
+        PdfRenderedPng() => PdfRegionImage(
+          await _imageFromPng(rendered.bytes),
+          rendered.warnings,
+        ),
+        _ => null,
+      };
+    } catch (e) {
+      logError('PdfRaster.renderRegion', e);
+      return null;
+    }
+  }
+
+  static Future<ui.Image> _imageFromPixels(PdfRenderedPage page) async {
+    final buffer = await ui.ImmutableBuffer.fromUint8List(page.pixels);
+    final descriptor = ui.ImageDescriptor.raw(
+      buffer,
+      width: page.width,
+      height: page.height,
+      pixelFormat: ui.PixelFormat.rgba8888,
+    );
+    try {
+      return await _firstFrame(await descriptor.instantiateCodec());
+    } finally {
+      descriptor.dispose();
+      buffer.dispose();
+    }
+  }
+
+  static Future<ui.Image> _imageFromPng(Uint8List png) async =>
+      _firstFrame(await ui.instantiateImageCodec(png));
+
+  static Future<ui.Image> _firstFrame(ui.Codec codec) async {
+    try {
+      return (await codec.getNextFrame()).image;
+    } finally {
+      codec.dispose();
+    }
+  }
+
+  /// First-page thumbnail — the one every file card shows.
+  static Future<Uint8List?> thumbnail(String path, {String password = ''}) =>
+      renderPage(path, 0, password: password);
+
+  /// Cover image for the Files library.
+  ///
+  /// Unlike [thumbnail] this caches failures too. The library lists whatever
+  /// is on the device, including PDFs that are encrypted, truncated or not
+  /// really PDFs at all; without a negative cache every one of those would be
+  /// re-attempted on each scroll past its tile.
+  ///
+  /// [modifiedMs] is part of the cache key so an edited file re-renders.
+  ///
+  /// [longEdge] must be in *device* pixels (logical size x devicePixelRatio).
+  /// It is rounded up to [_coverSizeStep] so tiles of the same size share a
+  /// cache entry.
+  static Future<Uint8List?> libraryCover(
+    String path, {
+    int modifiedMs = 0,
+    int longEdge = libraryThumbnailSize,
+    String password = '',
+  }) async {
+    final target = coverSizeFor(longEdge);
+    final key = _coverKey(path, modifiedMs, target, password: password);
+    if (_libraryCache.containsKey(key)) {
+      final hit = _libraryCache.remove(key);
+      _libraryCache[key] = hit; // refresh LRU position
+      return hit;
+    }
+    final bytes = await renderPage(
+      path,
+      0,
+      longEdge: target,
+      password: password,
+      useCache: false,
+    );
+    _libraryCache.remove(key);
+    _libraryCache[key] = bytes;
+    var cachedBytes = _libraryCache.values.fold(
+      0,
+      (total, value) => total + (value?.length ?? 0),
+    );
+    while (_libraryCache.length > _maxLibraryCacheEntries ||
+        cachedBytes > _maxLibraryCacheBytes) {
+      cachedBytes -=
+          _libraryCache.remove(_libraryCache.keys.first)?.length ?? 0;
+    }
+    return bytes;
+  }
+
+  /// Whether [libraryCover] would answer without rendering.
+  ///
+  /// Lets a grid tile paint a cached cover in its very first frame instead of
+  /// flashing a placeholder while an already-finished render is looked up
+  /// asynchronously.
+  static bool isCoverCached(
+    String path, {
+    int modifiedMs = 0,
+    int longEdge = libraryThumbnailSize,
+    String password = '',
+  }) => _libraryCache.containsKey(
+    _coverKey(path, modifiedMs, coverSizeFor(longEdge), password: password),
+  );
+
+  /// The cached cover, or null when absent *or* known to be unrenderable.
+  /// Pair with [isCoverCached] to tell those two apart.
+  static Uint8List? cachedCover(
+    String path, {
+    int modifiedMs = 0,
+    int longEdge = libraryThumbnailSize,
+    String password = '',
+  }) =>
+      _libraryCache[_coverKey(
+        path,
+        modifiedMs,
+        coverSizeFor(longEdge),
+        password: password,
+      )];
+
+  /// Round a requested cover size up to the shared step, clamped to something
+  /// a phone can afford.
+  static int coverSizeFor(int longEdge) {
+    final clamped = longEdge.clamp(_coverSizeStep, 768);
+    return ((clamped + _coverSizeStep - 1) ~/ _coverSizeStep) * _coverSizeStep;
+  }
+
+  static ({String path, int modifiedMs, int size, String password}) _coverKey(
+    String path,
+    int modifiedMs,
+    int longEdge, {
+    String password = '',
+  }) =>
+      (path: path, modifiedMs: modifiedMs, size: longEdge, password: password);
+
+  /// Render every page, reporting progress as it goes.
+  ///
+  /// Pages are rendered one at a time on a background isolate rather than
+  /// with `Future.wait`: a 200-page document would otherwise try to hold 200
+  /// decoded bitmaps at once.
+  ///
+  /// The document stays parsed for the whole loop (see [openDocument]);
+  /// otherwise every page would read and parse the entire file again.
+  static Future<List<Uint8List?>> renderAllPages(
+    String path, {
+    int longEdge = thumbnailSize,
+    String password = '',
+    int? pageCount,
+    void Function(int done, int total)? onProgress,
+    bool Function()? isCancelled,
+  }) async {
+    int? openedCount;
+    try {
+      openedCount = await openDocument(path, password: password);
+    } catch (e) {
+      // Each page reports its own failure below.
+      logError('PdfRaster.renderAllPages', e);
+    }
+    try {
+      final total = pageCount ?? openedCount ?? 0;
+      final pages = <Uint8List?>[];
+      for (int i = 0; i < total; i++) {
+        if (isCancelled?.call() ?? false) break;
+        pages.add(
+          await renderPage(path, i, longEdge: longEdge, password: password),
+        );
+        onProgress?.call(i + 1, total);
+      }
+      return pages;
+    } finally {
+      if (openedCount != null) {
+        unawaited(closeDocument(path, password: password));
+      }
+    }
+  }
+
+  /// Keep [path] parsed in the engine while a screen reads it page by page,
+  /// so renders, page sizes and text share one parse instead of each reading
+  /// the whole file again. That repetition is what let a large scan use
+  /// enough memory for Android to kill the app. Returns the page count, and
+  /// throws [PdfException] (for example `ENCRYPTED`) like [pageCountOf].
+  ///
+  /// Pair every successful call with [closeDocument].
+  static Future<int> openDocument(String path, {String password = ''}) async {
+    final count = await PdfCore.openDocument(path, password: password);
+    final key = (path: path, password: password);
+    _openDocuments[key] = (_openDocuments[key] ?? 0) + 1;
+    return count;
+  }
+
+  /// Release one [openDocument]. Never throws: a failure only means the
+  /// engine frees the parse later than it could have.
+  static Future<void> closeDocument(String path, {String password = ''}) async {
+    final key = (path: path, password: password);
+    final open = _openDocuments[key] ?? 0;
+    if (open <= 1) {
+      _openDocuments.remove(key);
+    } else {
+      _openDocuments[key] = open - 1;
+    }
+    try {
+      await PdfCore.closeDocument(path, password: password);
+    } catch (e) {
+      logError('PdfRaster.closeDocument', e);
+    }
+  }
+
+  static final Map<({String path, String password}), int> _openDocuments = {};
+
+  /// Outstanding [openDocument] calls for [path], so tests can prove every
+  /// screen releases the documents it opens.
+  @visibleForTesting
+  static int openDocumentCount(String path, {String password = ''}) =>
+      _openDocuments[(path: path, password: password)] ?? 0;
+
+  /// Page count straight from the xref — no rendering involved.
+  ///
+  /// Throws [PdfException] rather than reporting zero pages. Swallowing it
+  /// here is what made an encrypted document indistinguishable from an empty
+  /// one: the caller never saw the `ENCRYPTED` code, so it never knew to ask
+  /// for a password. Callers that genuinely do not care use [pageCountOrZero].
+  static Future<int> pageCountOf(String path, {String password = ''}) =>
+      PdfCore.pageCountAsync(path, password: password);
+
+  /// [pageCountOf] for callers with no way to act on a failure.
+  static Future<int> pageCountOrZero(
+    String path, {
+    String password = '',
+  }) async {
+    try {
+      return await pageCountOf(path, password: password);
+    } catch (e) {
+      logError('PdfRaster.pageCountOrZero', e);
+      return 0;
+    }
+  }
+
+  /// First page's width/height ratio, used to size thumbnail boxes before the
+  /// image itself has rendered.
+  static Future<double?> aspectRatio(
+    String path, {
+    int pageIndex = 0,
+    String password = '',
+  }) async {
+    try {
+      final size = await PdfCore.pageSizeAsync(
+        path,
+        pageIndex,
+        password: password,
+      );
+      return size.aspectRatio;
+    } on PdfException {
+      // A locked or damaged document is the caller's problem to report; here
+      // it only means the thumbnail box has to guess its shape.
+      rethrow;
+    } catch (e) {
+      logError('PdfRaster.aspectRatio', e);
+      return null;
+    }
+  }
+
+  /// Width/height of pages [start] up to [end] (exclusive), null for any page
+  /// whose size cannot be read.
+  ///
+  /// One isolate for the whole batch: reading a page size takes milliseconds,
+  /// far less than spawning an isolate per page would.
+  static Future<List<double?>> aspectRatios(
+    String path,
+    int start,
+    int end, {
+    String password = '',
+  }) => Isolate.run(
+    () => [
+      for (int page = start; page < end; page++)
+        _aspectRatioOrNull(path, page, password),
+    ],
+  );
+
+  /// Drop cached bitmaps for one document (after it has been rewritten) or,
+  /// with no argument, everything.
+  static void invalidate([String? path]) {
+    if (path == null) {
+      _cache.clear();
+      _libraryCache.clear();
+      _warnings.clear();
+      return;
+    }
+    _cache.removeWhere((key, _) => key.path == path);
+    _libraryCache.removeWhere((key, _) => key.path == path);
+    _warnings.removeWhere((key, _) => key.path == path);
+  }
+
+  static void _store(_RenderKey key, Uint8List bytes) {
+    _cache.remove(key);
+    _cache[key] = bytes;
+    var cachedBytes = _cache.values.fold(
+      0,
+      (total, value) => total + value.length,
+    );
+    while (_cache.length > _maxCacheEntries || cachedBytes > _maxCacheBytes) {
+      final oldest = _cache.keys.first;
+      _warnings.remove(oldest);
+      cachedBytes -= _cache.remove(oldest)!.length;
+    }
+  }
+}
+
+/// A cached render: the page and the pixel box it was fitted into.
+typedef _RenderKey = ({
+  String path,
+  int page,
+  int width,
+  int height,
+  String password,
+});
+
+double? _aspectRatioOrNull(String path, int page, String password) {
+  try {
+    return PdfCore.pageSize(path, page, password: password).aspectRatio;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// A zoomed-in region of a page, ready to draw, and what the renderer had to
+/// skip in it. Whoever holds it disposes [image].
+class PdfRegionImage {
+  PdfRegionImage(this.image, this.warnings);
+
+  final ui.Image image;
+  final List<String> warnings;
+}

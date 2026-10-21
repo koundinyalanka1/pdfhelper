@@ -1,0 +1,10 @@
+[package]
+name = "doc_xml"
+version = "0.1.0"
+edition = "2021"
+license = "Proprietary"
+description = "An XML reader, round-tripping tree and writer, written from scratch."
+
+[dependencies]
+doc_encoding = { path = "../doc_encoding" }
+thiserror = "1"

@@ -1,0 +1,12 @@
+[package]
+name = "doc_cfb"
+version = "0.1.0"
+edition = "2021"
+license = "Proprietary"
+description = "OLE2 compound files (the container of .doc, .xls and .ppt), read from scratch."
+
+[dependencies]
+thiserror = "1"
+
+[dev-dependencies]
+doc_testkit = { path = "../doc_testkit" }

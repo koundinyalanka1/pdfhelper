@@ -1,0 +1,585 @@
+import 'dart:async';
+import 'dart:io';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
+import '../services/pdf_service.dart';
+import '../services/notification_service.dart';
+import '../providers/theme_provider.dart';
+import '../utils/file_naming.dart';
+import '../widgets/pdf_name_dialog.dart';
+import 'pdf_viewer_screen.dart';
+
+/// Preview screen for merged or converted PDFs before saving.
+/// Shows page thumbnails with Save and Back actions.
+class PdfPreviewScreen extends StatefulWidget {
+  const PdfPreviewScreen({
+    super.key,
+    required this.filePaths,
+    required this.sourceType,
+    this.onSaved,
+    this.pageCount,
+    this.fileName,
+  });
+
+  final List<String> filePaths;
+  final PdfPreviewSourceType sourceType;
+  final VoidCallback? onSaved;
+  final int? pageCount;
+
+  /// Title the user chose when starting the operation, without the extension.
+  /// Shown here so it can still be changed before the file is filed away.
+  final String? fileName;
+
+  @override
+  State<PdfPreviewScreen> createState() => _PdfPreviewScreenState();
+}
+
+enum PdfPreviewSourceType { merge, convert }
+
+/// Auto-save the produced PDFs and (optionally) post a completion notification.
+/// Used both by [PdfPreviewScreen._onSave] and by the "Skip Preview" fast path.
+/// Returns the list of saved paths (may be empty if auto-save is off).
+/// [completedFiles] retains successful saves if a later output fails, so a
+/// retry only publishes the remaining outputs. Explicit Save ignores Auto Save.
+Future<List<String>> autoSavePdfs({
+  required ThemeProvider themeProvider,
+  required List<String> filePaths,
+  required PdfPreviewSourceType sourceType,
+  required int pageCount,
+  String? fileName,
+  bool explicitlySave = false,
+  Map<String, String>? completedFiles,
+}) async {
+  final List<String> autoSavedPaths = [];
+  if (themeProvider.autoSave || explicitlySave) {
+    for (int i = 0; i < filePaths.length; i++) {
+      final previous = completedFiles?[filePaths[i]];
+      if (previous != null) {
+        autoSavedPaths.add(previous);
+        continue;
+      }
+      final prefix = sourceType == PdfPreviewSourceType.merge
+          ? 'merged_${i + 1}'
+          : 'scanned';
+      // One title, several outputs: number them rather than letting the
+      // de-duplicator pick "(2)", which reads like an accident.
+      final name = fileName == null
+          ? null
+          : filePaths.length > 1
+          ? '$fileName ${i + 1}'
+          : fileName;
+      final saved = await themeProvider.saveFile(
+        filePaths[i],
+        prefix,
+        fileName: name,
+      );
+      autoSavedPaths.add(saved);
+      completedFiles?[filePaths[i]] = saved;
+    }
+  }
+  if (themeProvider.notifications) {
+    if (sourceType == PdfPreviewSourceType.merge) {
+      NotificationService().showMergeComplete(pageCount);
+    } else {
+      NotificationService().showScanComplete(pageCount);
+    }
+  }
+  return autoSavedPaths;
+}
+
+class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
+  List<Uint8List?> _previews = [];
+  double _previewAspectRatio = 0.7;
+  bool _isLoading = true;
+  bool _isSaving = false;
+  int _previewRequest = 0;
+  int _currentFileIndex = 0;
+  List<String>? _savedPaths;
+  final Map<String, String> _completedSaves = {};
+  bool _saveAttempted = false;
+
+  List<String> get _availablePaths => _savedPaths?.isNotEmpty == true
+      ? _savedPaths!
+      : [for (final path in widget.filePaths) _completedSaves[path] ?? path];
+
+  /// Title used when the file is saved. Seeded from the name the user gave
+  /// when they started the operation, and editable right up to Save.
+  String? _fileName;
+
+  /// Theme colours, assigned at the top of [build] rather than read
+  /// through a `context.watch()` getter — see [AppColors.of].
+  AppColors _colors = AppColors(false);
+
+  @override
+  void initState() {
+    super.initState();
+    _fileName =
+        widget.fileName ??
+        stripPdfExtension(
+          widget.filePaths.isEmpty
+              ? ''
+              : widget.filePaths.first.split(RegExp(r'[/\\]')).last,
+        );
+    _loadPreviews();
+  }
+
+  Future<void> _renameOutput() async {
+    final name = await askPdfName(
+      context: context,
+      initialName: _fileName ?? '',
+      title: 'Rename PDF',
+      confirmLabel: 'Rename',
+      accent: const Color(0xFFE94560),
+    );
+    if (name != null && mounted) setState(() => _fileName = name);
+  }
+
+  Future<void> _loadPreviews([int? fileIndex]) async {
+    if (widget.filePaths.isEmpty) {
+      setState(() => _isLoading = false);
+      return;
+    }
+    final request = ++_previewRequest;
+    final idx = fileIndex ?? _currentFileIndex;
+    setState(() {
+      _isLoading = true;
+      _currentFileIndex = idx;
+    });
+    try {
+      final path = _availablePaths[idx];
+      final aspectRatio = await PdfService.getFirstPageAspectRatio(path);
+      final previews = await PdfService.loadPagePreviews(path);
+      if (mounted && request == _previewRequest) {
+        setState(() {
+          _previews = previews;
+          _previewAspectRatio = aspectRatio?.clamp(0.5, 1.5) ?? 0.7;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading previews: $e');
+      if (mounted && request == _previewRequest) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not load PDF preview: $e'),
+            backgroundColor: const Color(0xFFE94560),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _onSave() async {
+    if (_isSaving) return;
+    final themeProvider = context.read<ThemeProvider>();
+    setState(() {
+      _isSaving = true;
+      _saveAttempted = true;
+    });
+
+    try {
+      final alreadySaved = _savedPaths != null;
+      final autoSavedPaths = _savedPaths ??= await autoSavePdfs(
+        themeProvider: themeProvider,
+        filePaths: widget.filePaths,
+        sourceType: widget.sourceType,
+        pageCount: widget.pageCount ?? _previews.length,
+        fileName: _fileName,
+        explicitlySave: true,
+        completedFiles: _completedSaves,
+      );
+
+      if (!alreadySaved) widget.onSaved?.call();
+
+      if (mounted) {
+        await _showSuccessDialog(
+          autoSavedPaths.isEmpty ? null : autoSavedPaths,
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isSaving = false);
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error saving: $e')));
+      }
+    }
+  }
+
+  Future<void> _showSuccessDialog(List<String>? autoSavedPaths) {
+    final themeProvider = context.read<ThemeProvider>();
+    final hasAutoSaved = autoSavedPaths != null && autoSavedPaths.isNotEmpty;
+    final shareFiles = hasAutoSaved ? autoSavedPaths : widget.filePaths;
+    final nav = Navigator.of(context);
+
+    return showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        scrollable: true,
+        backgroundColor: _colors.cardBackground,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            const Icon(Icons.check_circle, color: Color(0xFF4CAF50), size: 28),
+            const SizedBox(width: 10),
+            Text('Success!', style: TextStyle(color: _colors.textPrimary)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              widget.sourceType == PdfPreviewSourceType.merge
+                  ? '${widget.filePaths.length} PDF${widget.filePaths.length > 1 ? 's' : ''} merged successfully!'
+                  : '${widget.pageCount ?? _previews.length} page(s) converted to PDF!',
+              style: TextStyle(color: _colors.textSecondary),
+            ),
+            if (hasAutoSaved) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF4CAF50).withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.folder_rounded,
+                      color: Color(0xFF4CAF50),
+                      size: 18,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Saved to ${themeProvider.saveLocationDescription}',
+                        style: const TextStyle(
+                          color: Color(0xFF4CAF50),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              nav.pop(true);
+            },
+            child: Text(
+              'Close',
+              style: TextStyle(color: _colors.textSecondary),
+            ),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              nav.pop(true);
+              SharePlus.instance.share(
+                ShareParams(
+                  files: shareFiles.map((p) => XFile(p)).toList(),
+                  text: widget.sourceType == PdfPreviewSourceType.merge
+                      ? 'Merged PDFs'
+                      : 'Scanned PDF',
+                ),
+              );
+            },
+            child: const Text(
+              'Share',
+              style: TextStyle(color: Color(0xFF00D9FF)),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              final path = shareFiles.first;
+              final name = path.split(RegExp(r'[/\\]')).last;
+              nav.pushReplacement(
+                MaterialPageRoute(
+                  builder: (_) => PdfViewerScreen(pdfPath: path, title: name),
+                ),
+              );
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFE94560),
+            ),
+            child: Text(
+              shareFiles.length == 1 ? 'Open' : 'View first PDF',
+              style: const TextStyle(color: Colors.white),
+            ),
+          ),
+        ],
+      ),
+    ).whenComplete(() {
+      if (mounted) setState(() => _isSaving = false);
+    });
+  }
+
+  void _onBack() {
+    HapticFeedback.lightImpact();
+    // Dismissing the success dialog must not turn Back into "discard" or
+    // cause the next Save tap to publish the same PDF again.
+    if (!_saveAttempted) {
+      for (final path in widget.filePaths) {
+        unawaited(File(path).delete().catchError((_) => File(path)));
+      }
+    }
+    Navigator.pop(context, _savedPaths != null);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    _colors = AppColors.of(context);
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop && !_isSaving) _onBack();
+      },
+      child: Scaffold(
+        backgroundColor: _colors.background,
+        appBar: AppBar(
+          title: Text(
+            widget.filePaths.length > 1
+                ? 'Preview PDF (${_currentFileIndex + 1}/${widget.filePaths.length})'
+                : widget.sourceType == PdfPreviewSourceType.merge
+                ? 'Preview merged PDF'
+                : 'Preview PDF',
+            style: TextStyle(color: _colors.textPrimary),
+          ),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.visibility_rounded),
+              onPressed: _isLoading || _isSaving
+                  ? null
+                  : () {
+                      final path = _availablePaths[_currentFileIndex];
+                      final name = path.split(RegExp(r'[/\\]')).last;
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) =>
+                              PdfViewerScreen(pdfPath: path, title: name),
+                        ),
+                      );
+                    },
+              color: _colors.textPrimary,
+              tooltip: 'View PDF',
+            ),
+            if (widget.filePaths.length > 1) ...[
+              if (_currentFileIndex > 0)
+                IconButton(
+                  icon: const Icon(Icons.chevron_left),
+                  onPressed: _isLoading || _isSaving
+                      ? null
+                      : () => _loadPreviews(_currentFileIndex - 1),
+                  color: _colors.textPrimary,
+                ),
+              if (_currentFileIndex < widget.filePaths.length - 1)
+                IconButton(
+                  icon: const Icon(Icons.chevron_right),
+                  onPressed: _isLoading || _isSaving
+                      ? null
+                      : () => _loadPreviews(_currentFileIndex + 1),
+                  color: _colors.textPrimary,
+                ),
+            ],
+          ],
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: _isSaving ? null : _onBack,
+            color: _colors.textPrimary,
+          ),
+        ),
+        body: Column(
+          children: [
+            Expanded(
+              child: _isLoading
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const CircularProgressIndicator(
+                            color: Color(0xFFE94560),
+                          ),
+                          const SizedBox(height: 16),
+                          Text(
+                            'Loading preview...',
+                            style: TextStyle(color: _colors.textSecondary),
+                          ),
+                        ],
+                      ),
+                    )
+                  : _previews.isEmpty
+                  ? Center(
+                      child: Text(
+                        'No pages to preview',
+                        style: TextStyle(color: _colors.textSecondary),
+                      ),
+                    )
+                  : _buildPreviewsGrid(),
+            ),
+            _buildBottomBar(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPreviewsGrid() {
+    return GridView.builder(
+      padding: const EdgeInsets.all(16),
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2,
+        crossAxisSpacing: 12,
+        mainAxisSpacing: 12,
+        childAspectRatio: _previewAspectRatio,
+      ),
+      itemCount: _previews.length,
+      itemBuilder: (context, index) {
+        final bytes = _previews[index];
+        return Container(
+          decoration: BoxDecoration(
+            color: _colors.cardBackground,
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: [
+              BoxShadow(
+                color: _colors.shadowColor,
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: bytes != null
+                ? Image.memory(bytes, fit: BoxFit.contain)
+                : Center(
+                    child: Icon(
+                      Icons.picture_as_pdf,
+                      size: 48,
+                      color: _colors.textTertiary,
+                    ),
+                  ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildBottomBar() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _colors.cardBackground,
+        boxShadow: [
+          BoxShadow(
+            color: _colors.shadowColor,
+            blurRadius: 8,
+            offset: const Offset(0, -2),
+          ),
+        ],
+      ),
+      child: SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (_fileName != null) ...[
+              InkWell(
+                onTap: _isSaving || _completedSaves.isNotEmpty
+                    ? null
+                    : _renameOutput,
+                borderRadius: BorderRadius.circular(12),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 10,
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.picture_as_pdf_rounded,
+                        size: 18,
+                        color: _colors.textTertiary,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          widget.filePaths.length > 1
+                              ? '$_fileName 1…${widget.filePaths.length}.pdf'
+                              : '$_fileName.pdf',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: _colors.textPrimary,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      const Icon(
+                        Icons.edit_rounded,
+                        size: 18,
+                        color: Color(0xFFE94560),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 4),
+            ],
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _isSaving ? null : _onBack,
+                    icon: const Icon(Icons.arrow_back, size: 20),
+                    label: const Text('Back'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: _colors.textSecondary,
+                      side: BorderSide(color: _colors.divider),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  flex: 2,
+                  child: ElevatedButton.icon(
+                    onPressed: _isSaving ? null : _onSave,
+                    icon: _isSaving
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Icon(Icons.save, size: 20),
+                    label: Text(_isSaving ? 'Saving...' : 'Save'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFE94560),
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

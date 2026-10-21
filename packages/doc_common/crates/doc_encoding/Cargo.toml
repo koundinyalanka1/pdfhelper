@@ -1,0 +1,8 @@
+[package]
+name = "doc_encoding"
+version = "0.1.0"
+edition = "2021"
+license = "Proprietary"
+description = "Text encodings: detection, decoding and encoding, written from scratch."
+
+[dependencies]

@@ -1,0 +1,13 @@
+[package]
+name = "doc_art"
+version = "0.1.0"
+edition = "2021"
+license = "Proprietary"
+description = "OfficeArt drawing records (the shapes and pictures of .doc, .xls and .ppt files), read from scratch."
+
+[dependencies]
+# Compressed metafile pictures (zlib).
+flate2 = "1"
+
+[dev-dependencies]
+doc_testkit = { path = "../doc_testkit" }
