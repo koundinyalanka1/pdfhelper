@@ -10,6 +10,7 @@ import 'package:pdfhelper/screens/pdf_viewer_screen.dart';
 import 'package:pdfhelper/screens/sheet_editor_screen.dart';
 import 'package:pdfhelper/screens/slide_editor_screen.dart';
 import 'package:pdfhelper/screens/text_editor_screen.dart';
+import 'package:pdfhelper/services/ads_service.dart';
 import 'package:pdfhelper/services/document_router.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -182,6 +183,14 @@ void main() {
       }
       expect(find.byType(ArchiveScreen), findsOneWidget);
       expect(find.textContaining('DocHelper cannot open this'), findsNothing);
+    });
+
+    testWidgets('opening a document counts toward ad operations', (
+      tester,
+    ) async {
+      final before = AdsService.instance.completedOperationCount;
+      await pumpOpener(tester, '${root.path}/notes.txt');
+      expect(AdsService.instance.completedOperationCount, before + 1);
     });
   });
 }

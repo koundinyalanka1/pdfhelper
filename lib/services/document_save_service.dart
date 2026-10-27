@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -6,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import '../models/doc_kind.dart';
 import '../utils/file_naming.dart';
 import '../utils/format_utils.dart';
+import 'analytics_service.dart';
 import 'library_service.dart';
 import 'public_pdf_save_service.dart';
 
@@ -79,6 +81,18 @@ class DocumentSaveService {
     required String workingPath,
     required String location,
   }) async {
+    final kind = DocKind.ofPath(workingPath);
+    final ext = DocKind.extensionOf(workingPath);
+    unawaited(
+      AnalyticsService.instance.logDocAction(
+        action: 'save',
+        kind: kind,
+        parameters: {
+          'doc_extension': ext.isEmpty ? 'unknown' : ext.toLowerCase(),
+        },
+      ),
+    );
+
     if (!await needsPublicCopy(workingPath)) return 'Saved';
     final existing = await PublicPdfSaveService.latestCopy(workingPath);
     if (existing != null) {

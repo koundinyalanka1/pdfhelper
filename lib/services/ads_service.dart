@@ -13,8 +13,8 @@ export 'operation_ad_policy.dart' show PdfOperation;
 ///
 /// Uses test units in development and requests ads only when UMP permits it.
 ///
-/// A ready interstitial may appear after every fourth successful document
-/// operation. Viewing never counts, and navigation waits for ad dismissal.
+/// A ready interstitial may appear after every third successful document
+/// operation (including viewing a document). Navigation waits for ad dismissal.
 class AdsService {
   AdsService._();
   static final AdsService instance = AdsService._();

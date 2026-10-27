@@ -8,6 +8,7 @@ import '../services/pdf_service.dart';
 import '../services/notification_service.dart';
 import '../providers/theme_provider.dart';
 import '../utils/file_naming.dart';
+import '../services/document_router.dart';
 import '../widgets/pdf_name_dialog.dart';
 import 'pdf_viewer_screen.dart';
 
@@ -364,13 +365,7 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
                   : () {
                       final path = _availablePaths[_currentFileIndex];
                       final name = path.split(RegExp(r'[/\\]')).last;
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) =>
-                              PdfViewerScreen(pdfPath: path, title: name),
-                        ),
-                      );
+                      DocumentRouter.open(context, path, title: name);
                     },
               color: _colors.textPrimary,
               tooltip: 'View PDF',

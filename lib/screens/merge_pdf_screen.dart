@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../models/selected_pdf_file.dart';
 import '../services/ads_service.dart';
 import '../services/pdf_core_service.dart';
+import '../services/document_router.dart';
 import '../services/pdf_service.dart';
 import '../providers/theme_provider.dart';
 import '../utils/file_naming.dart';
@@ -14,7 +15,6 @@ import '../widgets/password_prompt.dart';
 import '../widgets/pdf_name_dialog.dart';
 import '../widgets/recent_pdfs_strip.dart';
 import 'pdf_preview_screen.dart';
-import 'pdf_viewer_screen.dart';
 
 class MergePdfScreen extends StatefulWidget {
   const MergePdfScreen({super.key, this.initialPdfPath});
@@ -570,15 +570,11 @@ class _MergePdfScreenState extends State<MergePdfScreen>
                       );
                       return;
                     }
-                    Navigator.push(
+                    DocumentRouter.open(
                       context,
-                      MaterialPageRoute(
-                        builder: (_) => PdfViewerScreen(
-                          pdfPath: file.path,
-                          title: file.name,
-                          password: file.password,
-                        ),
-                      ),
+                      file.path,
+                      title: file.name,
+                      password: file.password,
                     );
                   },
                   icon: Icon(

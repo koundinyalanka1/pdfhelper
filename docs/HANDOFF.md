@@ -307,7 +307,10 @@ inside each engine on `main` first (one plain sentence each, see
   reported as non-fatal events (`MainActivity` channel
   `com.yourmateapps.pdfhelper/diagnostics`, `FirebaseService`); a privacy
   policy draft in [privacy-policy-draft.md](privacy-policy-draft.md).
-  The version stays `3.0.0+3`.
+  Firebase Analytics (`firebase_analytics`, `AnalyticsService`) tracks
+  document types and user actions offline without personal data.
+  The version is bumped to `5.0.0+5`. The Tools tab and header are renamed
+  to "PDF Tools".
 - **Owner's phone feedback (2026-10-20):** an Enter button in the Word,
   text and slide toolbars and Enter (not Next) on the sheet formula
   bar's keyboard; complex-script shaping for exports and page view
@@ -424,7 +427,7 @@ items 1 and 2 are now done in the working tree.
    TalkBack; saved files in real Office.
 5. **Owner decisions** ("Owner decisions" in
    [PHASE10_PLAN.md](PHASE10_PLAN.md), each with a proposed default): the
-   version (`pubspec.yaml` is still `3.0.0+3`), the privacy policy and
+   version (`pubspec.yaml` is bumped to `5.0.0+5`), the privacy policy and
    the All-files-access declaration, Crashlytics NDK, phone budgets and
    backups, armeabi-v7a, `cargo-fuzz`, the git-ignored binaries,
    `doc_common`'s repository, and whether untouched XML must stay

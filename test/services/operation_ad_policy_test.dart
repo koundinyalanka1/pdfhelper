@@ -4,7 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pdfhelper/services/operation_ad_policy.dart';
 
 void main() {
-  test('mixed successful operations show ads on 4, 8 and 12 only', () async {
+  test('mixed successful operations show ads on 3, 6, 9 and 12 only', () async {
     final shownAt = <int>[];
     var count = 0;
     final policy = OperationAdPolicy(
@@ -16,7 +16,7 @@ void main() {
         PdfOperation.values[i % PdfOperation.values.length],
       );
     }
-    expect(shownAt, [4, 8, 12]);
+    expect(shownAt, [3, 6, 9, 12]);
   });
 
   test(
@@ -24,11 +24,11 @@ void main() {
     () async {
       var ads = 0;
       final policy = OperationAdPolicy(showInterstitial: (_) async => ads++);
-      for (var i = 0; i < 4; i++) {
+      for (var i = 0; i < 3; i++) {
         await policy.completed(PdfOperation.create, allowPresentation: false);
       }
       expect(ads, 0);
-      for (var i = 0; i < 3; i++) {
+      for (var i = 0; i < 2; i++) {
         await policy.completed(PdfOperation.merge);
       }
       expect(ads, 0);
@@ -48,7 +48,7 @@ void main() {
           return dismissed.future;
         },
       );
-      for (var i = 0; i < 3; i++) {
+      for (var i = 0; i < 2; i++) {
         await policy.completed(PdfOperation.merge);
       }
       var firstFinished = false;
@@ -56,7 +56,7 @@ void main() {
       final first = policy
           .completed(PdfOperation.split)
           .then((_) => firstFinished = true);
-      for (var i = 0; i < 3; i++) {
+      for (var i = 0; i < 2; i++) {
         await policy.completed(PdfOperation.create);
       }
       final second = policy
@@ -69,7 +69,7 @@ void main() {
       await Future.wait([first, second]);
       expect(firstFinished, true);
       expect(secondFinished, true);
-      for (var i = 0; i < 4; i++) {
+      for (var i = 0; i < 3; i++) {
         await policy.completed(PdfOperation.merge);
       }
       expect(ads, 2);
@@ -86,11 +86,11 @@ void main() {
           if (available) ads++;
         },
       );
-      for (var i = 0; i < 4; i++) {
+      for (var i = 0; i < 3; i++) {
         await policy.completed(PdfOperation.create);
       }
       available = true;
-      for (var i = 0; i < 3; i++) {
+      for (var i = 0; i < 2; i++) {
         await policy.completed(PdfOperation.create);
       }
       expect(ads, 0);
@@ -98,4 +98,18 @@ void main() {
       expect(ads, 1);
     },
   );
+
+  test('viewing a document counts toward interstitial ads', () async {
+    var ads = 0;
+    final policy = OperationAdPolicy(showInterstitial: (_) async => ads++);
+    await policy.completed(PdfOperation.view);
+    expect(ads, 0);
+    expect(policy.completedOperations, 1);
+    await policy.completed(PdfOperation.view);
+    expect(ads, 0);
+    expect(policy.completedOperations, 2);
+    await policy.completed(PdfOperation.view);
+    expect(ads, 1);
+    expect(policy.completedOperations, 3);
+  });
 }

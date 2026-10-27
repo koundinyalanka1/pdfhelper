@@ -168,15 +168,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 child: Row(
                   children: [
                     Container(
-                      padding: const EdgeInsets.all(15),
+                      width: 65,
+                      height: 65,
                       decoration: BoxDecoration(
-                        color: const Color(0xFFE94560),
-                        borderRadius: BorderRadius.circular(15),
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.2),
+                            blurRadius: 8,
+                            offset: const Offset(0, 3),
+                          ),
+                        ],
                       ),
-                      child: const Icon(
-                        Icons.description_rounded,
-                        color: Colors.white,
-                        size: 35,
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(16),
+                        child: Image.asset(
+                          'assets/icons/app_icon.png',
+                          width: 65,
+                          height: 65,
+                          fit: BoxFit.cover,
+                        ),
                       ),
                     ),
                     const SizedBox(width: 20),

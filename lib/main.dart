@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import 'screens/home_screen.dart';
 import 'screens/splash_screen.dart';
 import 'providers/theme_provider.dart';
+import 'services/analytics_service.dart';
 import 'services/document_router.dart';
 import 'services/engine_backups.dart';
 import 'services/firebase_service.dart';
@@ -67,7 +68,10 @@ class DocHelperApp extends StatelessWidget {
             navigatorKey: navigatorKey,
             child: MaterialApp(
               navigatorKey: navigatorKey,
-              navigatorObservers: [scanRouteObserver],
+              navigatorObservers: [
+                scanRouteObserver,
+                ?AnalyticsService.instance.observer,
+              ],
               title: 'DocHelper',
               debugShowCheckedModeBanner: false,
               theme: themeProvider.lightTheme,

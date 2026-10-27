@@ -56,7 +56,7 @@ void main() {
     // One tab per place in the app. Settings is one of them now — it used to
     // be an icon buried in the Files app bar.
     expect(find.text('Files'), findsWidgets);
-    expect(find.text('Tools'), findsOneWidget);
+    expect(find.text('PDF Tools'), findsOneWidget);
     expect(find.text('Scan'), findsOneWidget);
     expect(find.text('Settings'), findsOneWidget);
   });
@@ -76,7 +76,7 @@ void main() {
     await tester.pumpWidget(app());
     await flush(tester, rounds: 20);
 
-    await tester.tap(find.text('Tools'));
+    await tester.tap(find.text('PDF Tools'));
     await tester.pump();
 
     expect(find.byType(ToolsScreen), findsOneWidget);
@@ -101,7 +101,7 @@ void main() {
     await tester.pumpWidget(app());
     await flush(tester, rounds: 20);
 
-    await tester.tap(find.text('Tools'));
+    await tester.tap(find.text('PDF Tools'));
     await tester.pump();
     await tester.tap(find.text('Files'));
     await flush(tester);

@@ -22,7 +22,6 @@ import 'organize_pages_screen.dart';
 import 'page_images_screen.dart';
 import 'pdf_edit_screen.dart';
 import 'pdf_stamp_screen.dart';
-import 'pdf_viewer_screen.dart';
 import 'protect_screen.dart';
 import 'split_pdf_screen.dart';
 
@@ -260,7 +259,7 @@ class _ToolsScreenState extends State<ToolsScreen>
         centerTitle: true,
         automaticallyImplyLeading: false,
         title: Text(
-          'Tools',
+          'PDF Tools',
           style: TextStyle(
             color: _colors.textPrimary,
             fontSize: 20,
@@ -409,9 +408,17 @@ class _ToolsScreenState extends State<ToolsScreen>
           'Read, zoom and jump to any page',
           Icons.menu_book_rounded,
           const Color(0xFFE94560),
-          () => _runOnDocument(
-            (p, pw) => PdfViewerScreen(pdfPath: p, title: _name, password: pw),
-          ),
+          () async {
+            if (_path == null && !await _pick()) return;
+            final path = _path;
+            if (path == null || !mounted) return;
+            await DocumentRouter.open(
+              context,
+              path,
+              title: _name,
+              password: _password,
+            );
+          },
           needsDocument: true,
         ),
         _Tool(

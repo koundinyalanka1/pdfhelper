@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:open_file/open_file.dart';
 import 'package:share_plus/share_plus.dart';
@@ -12,6 +13,8 @@ import '../screens/sheet_editor_screen.dart';
 import '../screens/slide_editor_screen.dart';
 import '../screens/text_editor_screen.dart';
 import '../utils/format_utils.dart';
+import 'ads_service.dart';
+import 'analytics_service.dart';
 
 /// Picks the screen for a document by its kind, so every way into a file
 /// (Files, "Open with", recent lists) opens it the same way.
@@ -45,12 +48,28 @@ class DocumentRouter {
     BuildContext context,
     String path, {
     String? title,
+    String password = '',
   }) async {
-    final screen = screenFor(path, title: title);
+    final kind = DocKind.ofPath(path);
+    final ext = DocKind.extensionOf(path);
+    unawaited(
+      AnalyticsService.instance.logDocOpened(
+        kind: kind,
+        extension: ext,
+      ),
+    );
+
+    final screen = screenFor(path, title: title, password: password);
     if (screen == null) {
       await showUnsupportedFileSheet(context, path);
       return;
     }
+    await AdsService.instance.operationCompleted(
+      PdfOperation.view,
+      canPresent: () =>
+          context.mounted && (ModalRoute.of(context)?.isCurrent ?? false),
+    );
+    if (!context.mounted) return;
     await Navigator.of(
       context,
     ).push(MaterialPageRoute<void>(builder: (_) => screen));
@@ -236,5 +255,15 @@ class UnsupportedDocumentScreen extends StatelessWidget {
 }
 
 /// The screen for a document handed over by another app.
-Widget externalDocumentScreen(String path) =>
-    DocumentRouter.screenFor(path) ?? UnsupportedDocumentScreen(path: path);
+Widget externalDocumentScreen(String path) {
+  final kind = DocKind.ofPath(path);
+  final ext = DocKind.extensionOf(path);
+  unawaited(
+    AnalyticsService.instance.logDocOpened(
+      kind: kind,
+      extension: ext,
+    ),
+  );
+  return DocumentRouter.screenFor(path) ??
+      UnsupportedDocumentScreen(path: path);
+}

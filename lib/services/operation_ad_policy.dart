@@ -1,5 +1,10 @@
-/// Only completed document-producing actions count toward fullscreen ads.
-/// Opening, reading, sharing, and saving a preview are intentionally absent.
+import 'dart:async';
+
+import '../models/doc_kind.dart';
+import 'analytics_service.dart';
+
+/// Completed document operations that count toward fullscreen ads.
+/// Sharing and saving a preview are intentionally absent.
 enum PdfOperation {
   merge,
   split,
@@ -11,6 +16,7 @@ enum PdfOperation {
   ocr,
   compress,
   images,
+  view,
 }
 
 /// Counts successful actions independently of which result button is used.
@@ -27,7 +33,15 @@ class OperationAdPolicy {
     bool allowPresentation = true,
   }) async {
     _completedOperations++;
-    if (_completedOperations % 4 != 0 || !allowPresentation) return;
+    if (operation != PdfOperation.view) {
+      unawaited(
+        AnalyticsService.instance.logDocAction(
+          action: operation.name,
+          kind: DocKind.pdf,
+        ),
+      );
+    }
+    if (_completedOperations % 3 != 0 || !allowPresentation) return;
 
     // A second completion must never stack fullscreen presentations.
     final presenting = _presenting;

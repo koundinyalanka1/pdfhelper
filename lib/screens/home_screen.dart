@@ -160,7 +160,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           HomeTabs.tools,
                           Icons.handyman_rounded,
                           Icons.handyman_outlined,
-                          'Tools',
+                          'PDF Tools',
                         ),
                         _buildNavItem(
                           HomeTabs.scan,

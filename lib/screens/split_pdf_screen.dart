@@ -6,6 +6,7 @@ import '../services/ads_service.dart';
 import '../services/pdf_core_service.dart';
 import '../services/pdf_raster.dart';
 import '../services/pdf_service.dart';
+import '../services/document_router.dart';
 import '../services/notification_service.dart';
 import '../providers/theme_provider.dart';
 import '../utils/file_naming.dart';
@@ -13,7 +14,6 @@ import '../widgets/password_prompt.dart';
 import '../widgets/pdf_name_dialog.dart';
 import '../widgets/pdf_result_dialog.dart';
 import '../widgets/recent_pdfs_strip.dart';
-import 'pdf_viewer_screen.dart';
 
 class SplitPdfScreen extends StatefulWidget {
   const SplitPdfScreen({super.key, this.initialPdfPath});
@@ -450,15 +450,11 @@ class _SplitPdfScreenState extends State<SplitPdfScreen>
         actions: [
           if (_selectedFilePath != null)
             IconButton(
-              onPressed: () => Navigator.push(
+              onPressed: () => DocumentRouter.open(
                 context,
-                MaterialPageRoute(
-                  builder: (_) => PdfViewerScreen(
-                    pdfPath: _selectedFilePath!,
-                    title: _selectedFileName,
-                    password: _password,
-                  ),
-                ),
+                _selectedFilePath!,
+                title: _selectedFileName,
+                password: _password,
               ),
               icon: const Icon(Icons.visibility_rounded),
               tooltip: 'View PDF',
